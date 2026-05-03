@@ -1,0 +1,14 @@
+[Unit]
+Description=GameTunnel Server
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/gtunnel-server -addr :4700 -subnet 10.10.0.0/24 -max 10
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

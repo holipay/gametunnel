@@ -1,0 +1,6 @@
+# GameTunnel — Server Config
+# Place on your public VPS
+
+listen: ":4700"
+subnet: "10.10.0.0/24"
+max_players: 10
