@@ -1,10 +1,10 @@
-// GameTunnel Server — runs on a public VPS.
+// GameTunnel Server — 公网中转服务器
 //
-// Responsibilities:
-//   1. Accept client registrations, assign virtual IPs
-//   2. Relay packets between clients (when P2P fails)
-//   3. Provide peer discovery for NAT hole punching
-//   4. Keepalive management
+// 职责：
+//   1. 接受客户端注册，分配虚拟IP
+//   2. 中转游戏流量
+//   3. 转发广播包（星际争霸1局域网发现的关键）
+//   4. 提供对等节点发现（NAT打洞）
 //
 // Usage:
 //   server -addr :4700 -subnet 10.10.0.0/24 -max 10
@@ -12,7 +12,6 @@ package main
 
 import (
 	"flag"
-	"fmt"
 	"log"
 	"net"
 	"sync"
@@ -21,7 +20,7 @@ import (
 	"github.com/gametunnel/internal/protocol"
 )
 
-// ── Client State ───────────────────────────────────────────────
+// ── 客户端状态 ──────────────────────────────────────────────────
 
 type Client struct {
 	Username   string
@@ -30,42 +29,42 @@ type Client struct {
 	LastSeen   time.Time
 }
 
-// ── Server ─────────────────────────────────────────────────────
+// ── 服务器 ─────────────────────────────────────────────────────
 
 type Server struct {
 	conn       *net.UDPConn
 	clients    map[string]*Client // virtualIP string → Client
 	mu         sync.RWMutex
 	subnet     *net.IPNet
-	nextOctet  byte // next IP to assign (starts at .2, .1 is server)
+	nextOctet  byte
 	maxPlayers int
 	serverIP   net.IP
 }
 
 func main() {
-	addr := flag.String("addr", ":4700", "listen address (UDP)")
-	subnetStr := flag.String("subnet", "10.10.0.0/24", "virtual subnet (CIDR)")
-	maxPlayers := flag.Int("max", 10, "max players per room")
+	addr := flag.String("addr", ":4700", "监听地址 (UDP)")
+	subnetStr := flag.String("subnet", "10.10.0.0/24", "虚拟子网 (CIDR)")
+	maxPlayers := flag.Int("max", 10, "最大玩家数")
 	flag.Parse()
 
 	_, subnet, err := net.ParseCIDR(*subnetStr)
 	if err != nil {
-		log.Fatalf("invalid subnet %q: %v", *subnetStr, err)
+		log.Fatalf("子网无效 %q: %v", *subnetStr, err)
 	}
 
-	// Server gets .1 in the subnet
+	// 服务器在子网中占 .1
 	serverIP := make(net.IP, 4)
 	copy(serverIP, subnet.IP.To4())
 	serverIP[3] = 1
 
 	udpAddr, err := net.ResolveUDPAddr("udp4", *addr)
 	if err != nil {
-		log.Fatalf("resolve addr: %v", err)
+		log.Fatalf("解析地址失败: %v", err)
 	}
 
 	conn, err := net.ListenUDP("udp4", udpAddr)
 	if err != nil {
-		log.Fatalf("listen: %v", err)
+		log.Fatalf("监听失败: %v", err)
 	}
 	defer conn.Close()
 
@@ -73,47 +72,42 @@ func main() {
 		conn:       conn,
 		clients:    make(map[string]*Client),
 		subnet:     subnet,
-		nextOctet:  2, // .1 is server, .2 is first client
+		nextOctet:  2,
 		maxPlayers: *maxPlayers,
 		serverIP:   serverIP,
 	}
 
-	log.Printf("╔═══════════════════════════════════════════╗")
-	log.Printf("║       GameTunnel Server Started           ║")
-	log.Printf("╠═══════════════════════════════════════════╣")
-	log.Printf("║  Listen:  %-31s ║", *addr)
-	log.Printf("║  Subnet:  %-31s ║", subnet.String())
-	log.Printf("║  Server:  %-31s ║", serverIP)
-	log.Printf("║  Max:     %-31d ║", *maxPlayers)
-	log.Printf("╚═══════════════════════════════════════════╝")
+	log.Println("╔═══════════════════════════════════════════╗")
+	log.Println("║       GameTunnel Server 已启动            ║")
+	log.Println("╠═══════════════════════════════════════════╣")
+	log.Printf("║  监听:    %-31s ║", *addr)
+	log.Printf("║  子网:    %-31s ║", subnet.String())
+	log.Printf("║  服务器:  %-31s ║", serverIP)
+	log.Printf("║  上限:    %-31d ║", *maxPlayers)
+	log.Println("╚═══════════════════════════════════════════╝")
 
-	// Start keepalive checker
 	go s.keepaliveLoop()
 
-	// Main receive loop
 	buf := make([]byte, 65535)
 	for {
 		n, remoteAddr, err := conn.ReadFromUDP(buf)
 		if err != nil {
-			log.Printf("[server] read error: %v", err)
 			continue
 		}
 		if n < 1 {
 			continue
 		}
-		// Copy packet data to avoid buffer reuse
 		pkt := make([]byte, n)
 		copy(pkt, buf[:n])
 		go s.handlePacket(pkt, remoteAddr)
 	}
 }
 
-// ── Packet Handler ─────────────────────────────────────────────
+// ── 包处理 ─────────────────────────────────────────────────────
 
 func (s *Server) handlePacket(data []byte, from *net.UDPAddr) {
 	msg, err := protocol.Decode(data)
 	if err != nil {
-		log.Printf("[server] decode error from %s: %v", from, err)
 		return
 	}
 
@@ -128,69 +122,61 @@ func (s *Server) handlePacket(data []byte, from *net.UDPAddr) {
 		s.handleRelay(msg.Payload, from)
 	case protocol.TypeHolePunch:
 		s.handleHolePunch(msg.Payload, from)
-	default:
-		log.Printf("[server] unknown type 0x%02x from %s", msg.Type, from)
 	}
 }
 
-// ── Register ───────────────────────────────────────────────────
+// ── 注册 ───────────────────────────────────────────────────────
 
 func (s *Server) handleRegister(payload []byte, from *net.UDPAddr) {
 	reg, err := protocol.UnmarshalRegister(payload)
 	if err != nil {
-		log.Printf("[server] bad register from %s: %v", from, err)
 		return
 	}
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	// Check if already registered (reconnect)
+	// 重连检测
 	for _, c := range s.clients {
 		if c.PublicAddr.String() == from.String() {
-			// Update last seen
 			c.LastSeen = time.Now()
-			log.Printf("[server] reconnect from %s (%s)", reg.Username, from)
-			// Re-send IP assignment
 			assign := &protocol.AssignIPPayload{
 				VirtualIP:  c.VirtualIP,
 				SubnetMask: s.subnet.Mask,
 				ServerIP:   s.serverIP,
 			}
 			s.send(protocol.Encode(protocol.TypeAssignIP, assign.Marshal()), from)
-			// Send peer info
 			s.sendPeerInfo(from, c.VirtualIP)
 			return
 		}
 	}
 
-	// Check capacity
+	// 容量检查
 	if len(s.clients) >= s.maxPlayers {
-		kick := &protocol.KickPayload{Reason: "room is full"}
+		kick := &protocol.KickPayload{Reason: "房间已满"}
 		s.send(protocol.Encode(protocol.TypeKick, kick.Marshal()), from)
 		return
 	}
 
-	// Assign next available IP
+	// 分配IP
 	vip := s.nextVirtualIP()
 	if vip == nil {
-		kick := &protocol.KickPayload{Reason: "no IPs available"}
+		kick := &protocol.KickPayload{Reason: "IP已耗尽"}
 		s.send(protocol.Encode(protocol.TypeKick, kick.Marshal()), from)
 		return
 	}
 
-	client := &Client{
+	s.clients[vip.String()] = &Client{
 		Username:   reg.Username,
 		VirtualIP:  vip,
 		PublicAddr: from,
 		LastSeen:   time.Now(),
 	}
-	s.clients[vip.String()] = client
 
-	log.Printf("[server] + %s (%s) → %s  [total: %d]",
+	log.Printf("[+] %s (%s) → %s  [在线: %d]",
 		reg.Username, from, vip, len(s.clients))
 
-	// Send IP assignment
+	// 发送IP分配
 	assign := &protocol.AssignIPPayload{
 		VirtualIP:  vip,
 		SubnetMask: s.subnet.Mask,
@@ -198,19 +184,11 @@ func (s *Server) handleRegister(payload []byte, from *net.UDPAddr) {
 	}
 	s.send(protocol.Encode(protocol.TypeAssignIP, assign.Marshal()), from)
 
-	// Broadcast updated peer info to ALL clients
+	// 广播对等节点信息给所有人
 	s.broadcastPeerInfo()
-
-	// Send room info
-	room := &protocol.RoomInfoPayload{
-		PlayerCount: byte(len(s.clients)),
-		MaxPlayers:  byte(s.maxPlayers),
-		RoomID:      "default",
-	}
-	s.send(protocol.Encode(protocol.TypeRoomInfo, room.Marshal()), from)
 }
 
-// ── Keepalive ──────────────────────────────────────────────────
+// ── 心跳 ───────────────────────────────────────────────────────
 
 func (s *Server) handleKeepAlive(from *net.UDPAddr) {
 	s.mu.Lock()
@@ -233,7 +211,7 @@ func (s *Server) keepaliveLoop() {
 		var dead []string
 		for ip, c := range s.clients {
 			if now.Sub(c.LastSeen) > 45*time.Second {
-				log.Printf("[server] - %s (%s) timed out", c.Username, c.VirtualIP)
+				log.Printf("[-] %s (%s) 超时断开", c.Username, c.VirtualIP)
 				dead = append(dead, ip)
 			}
 		}
@@ -249,26 +227,21 @@ func (s *Server) keepaliveLoop() {
 	}
 }
 
-// ── Peer Request ───────────────────────────────────────────────
+// ── 对等节点请求 ────────────────────────────────────────────────
 
 func (s *Server) handlePeerRequest(from *net.UDPAddr) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	var selfIP net.IP
 	for _, c := range s.clients {
 		if c.PublicAddr.String() == from.String() {
-			selfIP = c.VirtualIP
-			break
+			s.sendPeerInfo(from, c.VirtualIP)
+			return
 		}
 	}
-	if selfIP == nil {
-		return
-	}
-	s.sendPeerInfo(from, selfIP)
 }
 
-// ── Relay ──────────────────────────────────────────────────────
+// ── 中转（核心）────────────────────────────────────────────────
 
 func (s *Server) handleRelay(payload []byte, from *net.UDPAddr) {
 	dp, err := protocol.UnmarshalData(payload)
@@ -277,15 +250,34 @@ func (s *Server) handleRelay(payload []byte, from *net.UDPAddr) {
 	}
 
 	dstKey := dp.DstIP.String()
+
+	// 广播包：转发给所有客户端（星际争霸1局域网发现依赖这个）
+	if dstKey == "255.255.255.255" || s.isBroadcast(dp.DstIP) {
+		s.mu.RLock()
+		relayPayload := &protocol.DataPayload{
+			SrcIP: dp.SrcIP,
+			DstIP: dp.DstIP,
+			Data:  dp.Data,
+		}
+		encoded := protocol.Encode(protocol.TypeData, relayPayload.Marshal())
+		for _, c := range s.clients {
+			if c.PublicAddr.String() != from.String() {
+				s.send(encoded, c.PublicAddr)
+			}
+		}
+		s.mu.RUnlock()
+		return
+	}
+
+	// 单播：转发给目标客户端
 	s.mu.RLock()
 	dst, ok := s.clients[dstKey]
 	s.mu.RUnlock()
 
 	if !ok {
-		return // destination not found
+		return
 	}
 
-	// Relay: wrap in Data message and forward
 	relayPayload := &protocol.DataPayload{
 		SrcIP: dp.SrcIP,
 		DstIP: dp.DstIP,
@@ -294,11 +286,9 @@ func (s *Server) handleRelay(payload []byte, from *net.UDPAddr) {
 	s.send(protocol.Encode(protocol.TypeData, relayPayload.Marshal()), dst.PublicAddr)
 }
 
-// ── Hole Punch ─────────────────────────────────────────────────
+// ── NAT 打洞 ───────────────────────────────────────────────────
 
 func (s *Server) handleHolePunch(payload []byte, from *net.UDPAddr) {
-	// Hole punch packet: forward to the destination so both sides
-	// create NAT mappings for each other
 	if len(payload) < 4 {
 		return
 	}
@@ -312,19 +302,16 @@ func (s *Server) handleHolePunch(payload []byte, from *net.UDPAddr) {
 		return
 	}
 
-	// Forward hole punch with source info
+	// 转发打洞包，附带源地址
 	punchData := make([]byte, 4+len(from.String()))
 	copy(punchData[:4], from.IP.To4())
-	copy(punchData[4:], from.String())
+	copy(punchData[4:], []byte(from.String()))
 	s.send(protocol.Encode(protocol.TypeHolePunch, punchData), dst.PublicAddr)
 }
 
-// ── Broadcast Peer Info ────────────────────────────────────────
+// ── 广播对等节点信息 ────────────────────────────────────────────
 
 func (s *Server) broadcastPeerInfo() {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
 	for _, client := range s.clients {
 		s.sendPeerInfo(client.PublicAddr, client.VirtualIP)
 	}
@@ -334,7 +321,7 @@ func (s *Server) sendPeerInfo(to *net.UDPAddr, selfIP net.IP) {
 	peers := &protocol.PeerInfoPayload{}
 	for _, c := range s.clients {
 		if c.VirtualIP.Equal(selfIP) {
-			continue // skip self
+			continue
 		}
 		peers.Peers = append(peers.Peers, protocol.PeerInfoEntry{
 			VirtualIP:  c.VirtualIP,
@@ -345,18 +332,16 @@ func (s *Server) sendPeerInfo(to *net.UDPAddr, selfIP net.IP) {
 	s.send(protocol.Encode(protocol.TypePeerInfo, peers.Marshal()), to)
 }
 
-// ── IP Allocation ──────────────────────────────────────────────
+// ── IP 分配 ────────────────────────────────────────────────────
 
 func (s *Server) nextVirtualIP() net.IP {
 	base := s.subnet.IP.To4()
 	for s.nextOctet < 255 {
 		candidate := net.IPv4(base[0], base[1], base[2], s.nextOctet)
 		s.nextOctet++
-		// Skip server IP (.1)
 		if candidate.Equal(s.serverIP) {
 			continue
 		}
-		// Check not already assigned
 		if _, taken := s.clients[candidate.String()]; !taken {
 			return candidate
 		}
@@ -364,11 +349,26 @@ func (s *Server) nextVirtualIP() net.IP {
 	return nil
 }
 
-// ── Send Helper ────────────────────────────────────────────────
+// ── 广播地址判断 ────────────────────────────────────────────────
+
+func (s *Server) isBroadcast(ip net.IP) bool {
+	ip4 := ip.To4()
+	if ip4 == nil {
+		return false
+	}
+	if ip4.Equal(net.IPv4bcast) {
+		return true
+	}
+	// 子网广播
+	bcast := make(net.IP, 4)
+	for i := 0; i < 4; i++ {
+		bcast[i] = ip4[i] | ^s.subnet.Mask[i]
+	}
+	return ip4.Equal(bcast)
+}
+
+// ── 发送 ───────────────────────────────────────────────────────
 
 func (s *Server) send(data []byte, to *net.UDPAddr) {
-	_, err := s.conn.WriteToUDP(data, to)
-	if err != nil {
-		log.Printf("[server] send to %s failed: %v", to, err)
-	}
+	s.conn.WriteToUDP(data, to)
 }
