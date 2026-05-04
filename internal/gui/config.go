@@ -14,6 +14,7 @@ const configFile = "config.json"
 type Config struct {
 	ServerAddr string `json:"server_addr"` // e.g. "1.2.3.4:4700"
 	PlayerName string `json:"player_name"` // display name
+	RoomID     string `json:"room_id"`     // game room identifier
 	AutoConnect bool  `json:"auto_connect"` // connect on startup
 }
 
@@ -23,6 +24,7 @@ func DefaultConfig() *Config {
 	return &Config{
 		ServerAddr: "127.0.0.1:4700",
 		PlayerName: hostname,
+		RoomID:     "default",
 		AutoConnect: false,
 	}
 }

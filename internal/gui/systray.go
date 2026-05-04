@@ -3,10 +3,10 @@ package gui
 import (
 	"fmt"
 	"log"
-	"os/exec"
 	"sync"
 
 	"github.com/getlantern/systray"
+	"github.com/holipay/gametunnel/internal/util"
 )
 
 // State represents the tunnel connection state.
@@ -29,6 +29,7 @@ type GUI struct {
 	mStatus   *systray.MenuItem
 	mIP       *systray.MenuItem
 	mPlayers  *systray.MenuItem
+	mNotice   *systray.MenuItem
 	mConnect  *systray.MenuItem
 	mSettings *systray.MenuItem
 
@@ -71,6 +72,7 @@ func (g *GUI) UpdateState(state State) {
 		systray.SetIcon(iconRed)
 		systray.SetTooltip("GameTunnel - 连接中...")
 		g.mStatus.SetTitle("状态: 连接中...")
+		g.mNotice.Hide() // clear first-run notice
 		g.mConnect.SetTitle("取消")
 	case StateConnected:
 		systray.SetIcon(iconGreen)
@@ -79,6 +81,7 @@ func (g *GUI) UpdateState(state State) {
 		g.mIP.SetTitle(fmt.Sprintf("虚拟IP: %s", g.ip))
 		g.mIP.Show()
 		g.mPlayers.Show()
+		g.mNotice.Hide()
 		g.mConnect.SetTitle("断开")
 	}
 }
@@ -95,10 +98,20 @@ func (g *GUI) SetPlayers(count int) {
 	g.mPlayers.SetTitle(fmt.Sprintf("在线玩家: %d", count+1)) // +1 for self
 }
 
+// SetNotice shows a one-time notice in the menu bar (e.g. first-run hint).
+func (g *GUI) SetNotice(text string) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.mNotice != nil {
+		g.mNotice.SetTitle(text)
+		g.mNotice.Show()
+	}
+}
+
 func (g *GUI) onReady() {
 	systray.SetIcon(iconRed)
 	systray.SetTitle("GameTunnel")
-	systray.SetTooltip("GameTunnel - 星际争霸1 局域网对战")
+	systray.SetTooltip("GameTunnel - 局域网游戏隧道")
 
 	// Status section (non-clickable, just display)
 	g.mStatus = systray.AddMenuItem("状态: 未连接", "连接状态")
@@ -109,6 +122,9 @@ func (g *GUI) onReady() {
 	g.mPlayers = systray.AddMenuItem("", "在线玩家数")
 	g.mPlayers.Disable()
 	g.mPlayers.Hide()
+	g.mNotice = systray.AddMenuItem("", "通知")
+	g.mNotice.Disable()
+	g.mNotice.Hide()
 
 	systray.AddSeparator()
 
@@ -168,14 +184,12 @@ func (g *GUI) openSettings() {
 	// Ensure file exists
 	SaveConfig(g.cfg)
 
-	cmd := exec.Command("notepad.exe", path)
-	if err := cmd.Start(); err != nil {
-		log.Printf("[gui] 打开设置失败: %v", err)
-	}
-
-	// Watch for changes in background (reload after notepad closes)
+	// Non-blocking: launch notepad, reload config when it closes
 	go func() {
-		cmd.Wait()
+		if err := util.RunCmd("notepad.exe", path); err != nil {
+			log.Printf("[gui] 打开设置失败: %v", err)
+			return
+		}
 		newCfg := LoadConfig()
 		g.mu.Lock()
 		g.cfg = newCfg

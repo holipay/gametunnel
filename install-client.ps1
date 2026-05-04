@@ -50,7 +50,7 @@ $Shortcut = $WshShell.CreateShortcut("$env:USERPROFILE\Desktop\GameTunnel.lnk")
 $Shortcut.TargetPath = "cmd.exe"
 $Shortcut.Arguments = "/k `"$ExePath`" -server ${Server}:4700"
 $Shortcut.WorkingDirectory = $InstallDir
-$Shortcut.Description = "GameTunnel - 星际争霸1 局域网对战"
+$Shortcut.Description = "GameTunnel - 局域网游戏隧道"
 $Shortcut.Save()
 
 Write-Host ""
@@ -61,7 +61,7 @@ Write-Host "    1. 双击桌面的 GameTunnel 快捷方式" -ForegroundColor Whi
 Write-Host "    2. 在 CMD/PowerShell 中运行:" -ForegroundColor White
 Write-Host "       gtunnel-client.exe -server ${Server}:4700" -ForegroundColor Cyan
 Write-Host ""
-Write-Host "  连接成功后打开星际争霸1 → Multiplayer → Local Area Network" -ForegroundColor White
+Write-Host "  连接成功后打开游戏，进入局域网模式即可" -ForegroundColor White
 Write-Host ""
 Write-Host "  ⚠️ 首次运行需要管理员权限（创建虚拟网卡）" -ForegroundColor Yellow
 Write-Host ""

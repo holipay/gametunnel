@@ -1,4 +1,4 @@
-// GameTunnel Client — 星际争霸1 局域网对战专用 (Windows)
+// GameTunnel Client — 通用局域网游戏隧道 (Windows)
 //
 // GUI 模式：系统托盘图标，右键菜单操作。
 //
@@ -28,6 +28,7 @@ import (
 type Peer struct {
 	VirtualIP  net.IP
 	PublicAddr *net.UDPAddr
+	Username   string
 }
 
 // ── Tunnel ─────────────────────────────────────────────────────
@@ -38,12 +39,13 @@ type Tunnel struct {
 	tunDev     *tun.Device
 	virtualIP  net.IP
 	serverIP   net.IP
-	subnet     *net.IPNet
+	subnetMask net.IPMask
 	peers      map[string]*Peer
 	mu         sync.RWMutex
 	done       chan struct{}
 	stopped    chan struct{}
 	username   string
+	roomID     string
 	gui        *gui.GUI
 }
 
@@ -51,6 +53,7 @@ func main() {
 	// CLI flags (override config)
 	serverFlag := flag.String("server", "", "服务器地址 (host:port)")
 	nameFlag := flag.String("name", "", "玩家名称")
+	roomFlag := flag.String("room", "", "房间ID")
 	flag.Parse()
 
 	// Load config
@@ -63,11 +66,17 @@ func main() {
 	if *nameFlag != "" {
 		cfg.PlayerName = *nameFlag
 	}
+	if *roomFlag != "" {
+		cfg.RoomID = *roomFlag
+	}
 
 	// If no server configured, save default
+	firstRun := false
 	if cfg.ServerAddr == "" {
 		cfg.ServerAddr = "127.0.0.1:4700"
 		gui.SaveConfig(cfg)
+		log.Printf("[tunnel] 首次运行，已写入默认配置: %s", gui.ConfigPath())
+		firstRun = true
 	}
 
 	// Set up logging to file (since we're a GUI app)
@@ -77,10 +86,18 @@ func main() {
 	// Create GUI
 	g := gui.New(cfg)
 
+	// Show first-run notice in GUI (user may never see log file)
+	if firstRun {
+		go func() {
+			time.Sleep(500 * time.Millisecond)
+			g.SetNotice(fmt.Sprintf("首次运行，请在设置中配置服务器地址 (默认: %s)", cfg.ServerAddr))
+		}()
+	}
+
 	// Create tunnel
 	t := &Tunnel{
 		username: cfg.PlayerName,
-		subnet:   mustParseCIDR("10.10.0.0/24"),
+		roomID:   cfg.RoomID,
 		peers:    make(map[string]*Peer),
 		done:     make(chan struct{}),
 		stopped:  make(chan struct{}),
@@ -144,7 +161,7 @@ func (t *Tunnel) Connect(serverAddr string) {
 	// Create TUN
 	cfg := tun.Config{
 		VirtualIP:  t.virtualIP,
-		SubnetMask: net.CIDRMask(24, 24),
+		SubnetMask: t.subnetMask,
 		ServerIP:   t.serverIP,
 		MTU:        1400,
 	}
@@ -191,7 +208,7 @@ func (t *Tunnel) Disconnect() {
 
 func (t *Tunnel) register() error {
 	reg := &protocol.RegisterPayload{
-		RoomID:   "starcraft",
+		RoomID:   t.roomID,
 		Username: t.username,
 	}
 	packet := protocol.Encode(protocol.TypeRegister, reg.Marshal())
@@ -228,6 +245,7 @@ func (t *Tunnel) register() error {
 			}
 			t.virtualIP = assign.VirtualIP
 			t.serverIP = assign.ServerIP
+			t.subnetMask = net.IPMask(assign.SubnetMask)
 			return nil
 		case protocol.TypeKick:
 			kick, _ := protocol.UnmarshalKick(msg.Payload)
@@ -290,11 +308,13 @@ func (t *Tunnel) handlePeerInfo(payload []byte) {
 		key := entry.VirtualIP.String()
 		if existing, ok := t.peers[key]; ok {
 			existing.PublicAddr = entry.PublicAddr
+			existing.Username = entry.Username
 			newPeers[key] = existing
 		} else {
 			newPeers[key] = &Peer{
 				VirtualIP:  entry.VirtualIP,
 				PublicAddr: entry.PublicAddr,
+				Username:   entry.Username,
 			}
 			log.Printf("[tunnel] 新玩家: %s (%s)", entry.Username, entry.VirtualIP)
 			go t.startHolePunch(entry.VirtualIP)
@@ -425,10 +445,10 @@ func (t *Tunnel) isBroadcast(ip net.IP) bool {
 	if ip4.Equal(net.IPv4bcast) {
 		return true
 	}
-	if t.subnet != nil {
+	if t.subnetMask != nil {
 		bcast := make(net.IP, 4)
 		for i := 0; i < 4; i++ {
-			bcast[i] = ip4[i] | ^t.subnet.Mask[i]
+			bcast[i] = ip4[i] | ^t.subnetMask[i]
 		}
 		return ip4.Equal(bcast)
 	}
@@ -473,11 +493,6 @@ func (t *Tunnel) peerDiscoveryLoop() {
 }
 
 // ── Helpers ────────────────────────────────────────────────────
-
-func mustParseCIDR(s string) *net.IPNet {
-	_, n, _ := net.ParseCIDR(s)
-	return n
-}
 
 func setupLog() *os.File {
 	appData := os.Getenv("APPDATA")

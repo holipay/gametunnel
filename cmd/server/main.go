@@ -3,7 +3,7 @@
 // 职责：
 //  1. 接受客户端注册，分配虚拟IP
 //  2. 中转游戏流量
-//  3. 转发广播包（星际争霸1局域网发现的关键）
+//  3. 转发广播包（局域网游戏发现的关键）
 //  4. 提供对等节点发现（NAT打洞）
 //
 // Usage:
@@ -146,7 +146,6 @@ func (s *Server) handleRegister(payload []byte, from *net.UDPAddr) {
 	}
 
 	s.mu.Lock()
-	defer s.mu.Unlock()
 
 	// 重连检测
 	for _, c := range s.clients {
@@ -157,14 +156,19 @@ func (s *Server) handleRegister(payload []byte, from *net.UDPAddr) {
 				SubnetMask: s.subnet.Mask,
 				ServerIP:   s.serverIP,
 			}
+			selfIP := c.VirtualIP
 			s.send(protocol.Encode(protocol.TypeAssignIP, assign.Marshal()), from)
-			s.sendPeerInfoLocked(from, c.VirtualIP)
+			// snapshot + release before sending
+			targets := s.buildPeerInfoTargetsLocked()
+			s.mu.Unlock()
+			s.sendPeerInfo(from, selfIP, targets)
 			return
 		}
 	}
 
 	// 容量检查
 	if len(s.clients) >= s.maxPlayers {
+		s.mu.Unlock()
 		kick := &protocol.KickPayload{Reason: "房间已满"}
 		s.send(protocol.Encode(protocol.TypeKick, kick.Marshal()), from)
 		return
@@ -173,6 +177,7 @@ func (s *Server) handleRegister(payload []byte, from *net.UDPAddr) {
 	// 分配IP
 	vip := s.nextVirtualIP()
 	if vip == nil {
+		s.mu.Unlock()
 		kick := &protocol.KickPayload{Reason: "IP已耗尽"}
 		s.send(protocol.Encode(protocol.TypeKick, kick.Marshal()), from)
 		return
@@ -196,8 +201,10 @@ func (s *Server) handleRegister(payload []byte, from *net.UDPAddr) {
 	}
 	s.send(protocol.Encode(protocol.TypeAssignIP, assign.Marshal()), from)
 
-	// 广播对等节点信息给所有人
-	s.broadcastPeerInfoLocked()
+	// snapshot clients, then release lock before network I/O
+	targets := s.buildPeerInfoTargetsLocked()
+	s.mu.Unlock()
+	s.broadcastPeerInfo(targets)
 }
 
 // ── 心跳 ───────────────────────────────────────────────────────
@@ -234,14 +241,15 @@ func (s *Server) keepaliveLoop() {
 			continue
 		}
 
-		// 写锁只用于删除
+		// 写锁: 删除 + snapshot
 		s.mu.Lock()
 		for _, ip := range dead {
 			delete(s.clients, ip)
 		}
+		targets := s.buildPeerInfoTargetsLocked()
 		s.mu.Unlock()
 
-		s.broadcastPeerInfo()
+		s.broadcastPeerInfo(targets)
 	}
 }
 
@@ -249,14 +257,20 @@ func (s *Server) keepaliveLoop() {
 
 func (s *Server) handlePeerRequest(from *net.UDPAddr) {
 	s.mu.RLock()
-	defer s.mu.RUnlock()
-
+	var selfIP net.IP
 	for _, c := range s.clients {
 		if c.PublicAddr.String() == from.String() {
-			s.sendPeerInfoLocked(from, c.VirtualIP)
-			return
+			selfIP = c.VirtualIP
+			break
 		}
 	}
+	s.mu.RUnlock()
+
+	if selfIP == nil {
+		return
+	}
+
+	s.sendPeerInfo(from, selfIP, nil)
 }
 
 // ── 中转（核心）────────────────────────────────────────────────
@@ -268,22 +282,27 @@ func (s *Server) handleRelay(payload []byte, from *net.UDPAddr) {
 	}
 
 	dstKey := dp.DstIP.String()
+	relayPayload := &protocol.DataPayload{
+		SrcIP: dp.SrcIP,
+		DstIP: dp.DstIP,
+		Data:  dp.Data,
+	}
+	encoded := protocol.Encode(protocol.TypeData, relayPayload.Marshal())
 
-	// 广播包：转发给所有客户端（星际争霸1局域网发现依赖这个）
+	// 广播包：转发给所有客户端（局域网游戏发现依赖这个）
 	if dstKey == "255.255.255.255" || s.isBroadcast(dp.DstIP) {
 		s.mu.RLock()
-		relayPayload := &protocol.DataPayload{
-			SrcIP: dp.SrcIP,
-			DstIP: dp.DstIP,
-			Data:  dp.Data,
-		}
-		encoded := protocol.Encode(protocol.TypeData, relayPayload.Marshal())
+		targets := make([]*net.UDPAddr, 0, len(s.clients))
 		for _, c := range s.clients {
 			if c.PublicAddr.String() != from.String() {
-				s.send(encoded, c.PublicAddr)
+				targets = append(targets, c.PublicAddr)
 			}
 		}
 		s.mu.RUnlock()
+
+		for _, addr := range targets {
+			s.send(encoded, addr)
+		}
 		return
 	}
 
@@ -296,12 +315,7 @@ func (s *Server) handleRelay(payload []byte, from *net.UDPAddr) {
 		return
 	}
 
-	relayPayload := &protocol.DataPayload{
-		SrcIP: dp.SrcIP,
-		DstIP: dp.DstIP,
-		Data:  dp.Data,
-	}
-	s.send(protocol.Encode(protocol.TypeData, relayPayload.Marshal()), dst.PublicAddr)
+	s.send(encoded, dst.PublicAddr)
 }
 
 // ── NAT 打洞 ───────────────────────────────────────────────────
@@ -336,30 +350,79 @@ func (s *Server) handleHolePunch(payload []byte, from *net.UDPAddr) {
 
 // ── 广播对等节点信息 ────────────────────────────────────────────
 
-func (s *Server) broadcastPeerInfo() {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	s.broadcastPeerInfoLocked()
+// peerInfoTarget holds the data needed to send peer info to one client.
+type peerInfoTarget struct {
+	addr     *net.UDPAddr
+	selfIP   net.IP
 }
 
-func (s *Server) broadcastPeerInfoLocked() {
-	for _, client := range s.clients {
-		s.sendPeerInfoLocked(client.PublicAddr, client.VirtualIP)
-	}
-}
-
-func (s *Server) sendPeerInfoLocked(to *net.UDPAddr, selfIP net.IP) {
-	peers := &protocol.PeerInfoPayload{}
+// buildPeerInfoTargetsLocked snapshots client data while lock is held.
+// Callers release the lock before calling broadcastPeerInfo / sendPeerInfo.
+func (s *Server) buildPeerInfoTargetsLocked() []peerInfoTarget {
+	targets := make([]peerInfoTarget, 0, len(s.clients))
 	for _, c := range s.clients {
-		if c.VirtualIP.Equal(selfIP) {
+		targets = append(targets, peerInfoTarget{addr: c.PublicAddr, selfIP: c.VirtualIP})
+	}
+	return targets
+}
+
+// peerSnapshot holds a peer's public info for building PeerInfoPayload.
+type peerSnapshot struct {
+	virtualIP  net.IP
+	publicAddr *net.UDPAddr
+	username   string
+}
+
+// buildPeerList builds the peer list for a given selfIP from the snapshot.
+func buildPeerList(snapshot []peerSnapshot, selfIP net.IP) *protocol.PeerInfoPayload {
+	peers := &protocol.PeerInfoPayload{}
+	for _, s := range snapshot {
+		if s.virtualIP.Equal(selfIP) {
 			continue
 		}
 		peers.Peers = append(peers.Peers, protocol.PeerInfoEntry{
-			VirtualIP:  c.VirtualIP,
-			PublicAddr: c.PublicAddr,
-			Username:   c.Username,
+			VirtualIP:  s.virtualIP,
+			PublicAddr: s.publicAddr,
+			Username:   s.username,
 		})
 	}
+	return peers
+}
+
+// broadcastPeerInfo sends peer info to all targets (call AFTER releasing lock).
+func (s *Server) broadcastPeerInfo(targets []peerInfoTarget) {
+	// Build peer list snapshot once
+	s.mu.RLock()
+	snapshot := make([]peerSnapshot, 0, len(s.clients))
+	for _, c := range s.clients {
+		snapshot = append(snapshot, peerSnapshot{
+			virtualIP:  c.VirtualIP,
+			publicAddr: c.PublicAddr,
+			username:   c.Username,
+		})
+	}
+	s.mu.RUnlock()
+
+	for _, t := range targets {
+		peers := buildPeerList(snapshot, t.selfIP)
+		s.send(protocol.Encode(protocol.TypePeerInfo, peers.Marshal()), t.addr)
+	}
+}
+
+// sendPeerInfo sends peer info to a single target (call AFTER releasing lock).
+func (s *Server) sendPeerInfo(to *net.UDPAddr, selfIP net.IP, targets []peerInfoTarget) {
+	s.mu.RLock()
+	snapshot := make([]peerSnapshot, 0, len(s.clients))
+	for _, c := range s.clients {
+		snapshot = append(snapshot, peerSnapshot{
+			virtualIP:  c.VirtualIP,
+			publicAddr: c.PublicAddr,
+			username:   c.Username,
+		})
+	}
+	s.mu.RUnlock()
+
+	peers := buildPeerList(snapshot, selfIP)
 	s.send(protocol.Encode(protocol.TypePeerInfo, peers.Marshal()), to)
 }
 

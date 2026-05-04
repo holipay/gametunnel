@@ -8,8 +8,8 @@ import (
 	"fmt"
 	"log"
 	"net"
-	"os/exec"
 
+	"github.com/holipay/gametunnel/internal/util"
 	"golang.zx2c4.com/wireguard/tun"
 )
 
@@ -23,6 +23,7 @@ type Device struct {
 	name       string
 	virtualIP  net.IP
 	subnetMask net.IPMask
+	mtu        int
 }
 
 // Config holds parameters for creating a TUN device.
@@ -52,6 +53,7 @@ func New(cfg Config) (*Device, error) {
 		name:       name,
 		virtualIP:  cfg.VirtualIP.To4(),
 		subnetMask: cfg.SubnetMask,
+		mtu:        cfg.MTU,
 	}
 
 	if err := dev.configure(); err != nil {
@@ -68,7 +70,7 @@ func (d *Device) configure() error {
 	ip := d.virtualIP.String()
 
 	// netsh interface ip set address "GameTunnel" static 10.10.0.2 255.255.255.0
-	if err := runCmd("netsh", "interface", "ip", "set", "address",
+	if err := util.RunCmd("netsh", "interface", "ip", "set", "address",
 		fmt.Sprintf("name=%s", d.name),
 		"static", ip, mask); err != nil {
 		return fmt.Errorf("assign IP: %w", err)
@@ -80,7 +82,7 @@ func (d *Device) configure() error {
 	subnetStr := fmt.Sprintf("%s/%d", subnet, maskBits)
 
 	// route add 10.10.0.0 mask 255.255.255.0 10.10.0.2
-	if err := runCmd("route", "add", subnetStr, "mask", mask, ip, "metric", "1"); err != nil {
+	if err := util.RunCmd("route", "add", subnetStr, "mask", mask, ip, "metric", "1"); err != nil {
 		// Not fatal — route may already exist
 		log.Printf("[tun] route add warning: %v", err)
 	}
@@ -129,12 +131,7 @@ func (d *Device) VirtualIP() net.IP {
 	return d.virtualIP
 }
 
-// runCmd executes a system command.
-func runCmd(name string, args ...string) error {
-	cmd := exec.Command(name, args...)
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("%s %v: %s", name, args, string(out))
-	}
-	return nil
+// MTU returns the configured MTU.
+func (d *Device) MTU() int {
+	return d.mtu
 }
