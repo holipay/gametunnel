@@ -31,13 +31,13 @@ install-server: server
 
 client:
 	@mkdir -p $(BINARY_DIR)
-	GOOS=windows GOARCH=amd64 go build -o $(CLIENT) ./cmd/client
+	GOOS=windows GOARCH=amd64 go build -ldflags -H=windowsgui -o $(CLIENT) ./cmd/client
 
 client-all: client client-arm64
 
 client-arm64:
 	@mkdir -p $(BINARY_DIR)
-	GOOS=windows GOARCH=arm64 go build -o $(BINARY_DIR)/gtunnel-client-arm64.exe ./cmd/client
+	GOOS=windows GOARCH=arm64 go build -ldflags -H=windowsgui -o $(BINARY_DIR)/gtunnel-client-arm64.exe ./cmd/client
 
 # ── Dev / Test ─────────────────────────────────────────────────
 

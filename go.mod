@@ -3,6 +3,7 @@ module github.com/holipay/gametunnel
 go 1.23
 
 require (
+	github.com/getlantern/systray v1.2.2
 	golang.org/x/sync v0.12.0
 	golang.zx2c4.com/wireguard v0.0.0-20231211153847-12269c276173
 )
