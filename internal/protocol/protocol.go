@@ -9,7 +9,6 @@ package protocol
 import (
 	"encoding/binary"
 	"errors"
-	"fmt"
 	"net"
 )
 
@@ -23,7 +22,6 @@ const (
 	TypeHolePunch   byte = 0x05 // client ↔ client: NAT hole punch
 	TypeData        byte = 0x06 // client ↔ server: relayed payload
 	TypeKeepAlive   byte = 0x07 // client → server: keep connection alive
-	TypeRoomInfo    byte = 0x08 // server → client: room status update
 	TypeKick        byte = 0x09 // server → client: kicked / error
 )
 
@@ -31,7 +29,6 @@ const (
 
 var (
 	ErrPacketTooShort = errors.New("packet too short")
-	ErrUnknownType    = errors.New("unknown message type")
 )
 
 // ── Base Message ───────────────────────────────────────────────
@@ -242,39 +239,6 @@ func UnmarshalData(data []byte) (*DataPayload, error) {
 	}, nil
 }
 
-// ── Room Info ──────────────────────────────────────────────────
-
-type RoomInfoPayload struct {
-	PlayerCount byte
-	MaxPlayers  byte
-	RoomID      string
-}
-
-func (r *RoomInfoPayload) Marshal() []byte {
-	roomBytes := []byte(r.RoomID)
-	buf := make([]byte, 3+len(roomBytes))
-	buf[0] = r.PlayerCount
-	buf[1] = r.MaxPlayers
-	buf[2] = byte(len(roomBytes))
-	copy(buf[3:], roomBytes)
-	return buf
-}
-
-func UnmarshalRoomInfo(data []byte) (*RoomInfoPayload, error) {
-	if len(data) < 3 {
-		return nil, ErrPacketTooShort
-	}
-	roomLen := int(data[2])
-	if len(data) < 3+roomLen {
-		return nil, ErrPacketTooShort
-	}
-	return &RoomInfoPayload{
-		PlayerCount: data[0],
-		MaxPlayers:  data[1],
-		RoomID:      string(data[3 : 3+roomLen]),
-	}, nil
-}
-
 // ── Kick ───────────────────────────────────────────────────────
 
 type KickPayload struct {
@@ -298,32 +262,4 @@ func UnmarshalKick(data []byte) (*KickPayload, error) {
 		return nil, ErrPacketTooShort
 	}
 	return &KickPayload{Reason: string(data[2 : 2+reasonLen])}, nil
-}
-
-// ── Helpers ────────────────────────────────────────────────────
-
-// TypeName returns a human-readable name for a message type.
-func TypeName(t byte) string {
-	switch t {
-	case TypeRegister:
-		return "Register"
-	case TypeAssignIP:
-		return "AssignIP"
-	case TypePeerInfo:
-		return "PeerInfo"
-	case TypePeerRequest:
-		return "PeerRequest"
-	case TypeHolePunch:
-		return "HolePunch"
-	case TypeData:
-		return "Data"
-	case TypeKeepAlive:
-		return "KeepAlive"
-	case TypeRoomInfo:
-		return "RoomInfo"
-	case TypeKick:
-		return "Kick"
-	default:
-		return fmt.Sprintf("Unknown(0x%02x)", t)
-	}
 }

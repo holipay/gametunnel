@@ -6,10 +6,9 @@ package tun
 
 import (
 	"fmt"
+	"log"
 	"net"
-	"os"
 	"os/exec"
-	"strings"
 
 	"golang.zx2c4.com/wireguard/tun"
 )
@@ -24,7 +23,6 @@ type Device struct {
 	name       string
 	virtualIP  net.IP
 	subnetMask net.IPMask
-	mtu        int
 }
 
 // Config holds parameters for creating a TUN device.
@@ -54,7 +52,6 @@ func New(cfg Config) (*Device, error) {
 		name:       name,
 		virtualIP:  cfg.VirtualIP.To4(),
 		subnetMask: cfg.SubnetMask,
-		mtu:        cfg.MTU,
 	}
 
 	if err := dev.configure(); err != nil {
@@ -71,7 +68,7 @@ func (d *Device) configure() error {
 	ip := d.virtualIP.String()
 
 	// netsh interface ip set address "GameTunnel" static 10.10.0.2 255.255.255.0
-	if err := runNetsh("interface", "ip", "set", "address",
+	if err := runCmd("netsh", "interface", "ip", "set", "address",
 		fmt.Sprintf("name=%s", d.name),
 		"static", ip, mask); err != nil {
 		return fmt.Errorf("assign IP: %w", err)
@@ -85,7 +82,7 @@ func (d *Device) configure() error {
 	// route add 10.10.0.0 mask 255.255.255.0 10.10.0.2
 	if err := runCmd("route", "add", subnetStr, "mask", mask, ip, "metric", "1"); err != nil {
 		// Not fatal — route may already exist
-		fmt.Fprintf(os.Stderr, "[tun] route add warning: %v\n", err)
+		log.Printf("[tun] route add warning: %v", err)
 	}
 
 	return nil
@@ -130,16 +127,6 @@ func (d *Device) Name() string {
 // VirtualIP returns the assigned virtual IP.
 func (d *Device) VirtualIP() net.IP {
 	return d.virtualIP
-}
-
-// runNetsh executes a netsh command.
-func runNetsh(args ...string) error {
-	cmd := exec.Command("netsh", args...)
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("netsh %s: %s", strings.Join(args, " "), string(out))
-	}
-	return nil
 }
 
 // runCmd executes a system command.

@@ -338,19 +338,8 @@ func (s *Server) handleHolePunch(payload []byte, from *net.UDPAddr) {
 
 func (s *Server) broadcastPeerInfo() {
 	s.mu.RLock()
-	peers := s.buildPeerList()
-	s.mu.RUnlock()
-
-	for _, client := range s.clients {
-		selfIP := client.VirtualIP
-		filtered := &protocol.PeerInfoPayload{}
-		for _, p := range peers.Peers {
-			if !p.VirtualIP.Equal(selfIP) {
-				filtered.Peers = append(filtered.Peers, p)
-			}
-		}
-		s.send(protocol.Encode(protocol.TypePeerInfo, filtered.Marshal()), client.PublicAddr)
-	}
+	defer s.mu.RUnlock()
+	s.broadcastPeerInfoLocked()
 }
 
 func (s *Server) broadcastPeerInfoLocked() {
@@ -372,18 +361,6 @@ func (s *Server) sendPeerInfoLocked(to *net.UDPAddr, selfIP net.IP) {
 		})
 	}
 	s.send(protocol.Encode(protocol.TypePeerInfo, peers.Marshal()), to)
-}
-
-func (s *Server) buildPeerList() *protocol.PeerInfoPayload {
-	peers := &protocol.PeerInfoPayload{}
-	for _, c := range s.clients {
-		peers.Peers = append(peers.Peers, protocol.PeerInfoEntry{
-			VirtualIP:  c.VirtualIP,
-			PublicAddr: c.PublicAddr,
-			Username:   c.Username,
-		})
-	}
-	return peers
 }
 
 // ── IP 分配 ────────────────────────────────────────────────────

@@ -28,7 +28,6 @@ import (
 type Peer struct {
 	VirtualIP  net.IP
 	PublicAddr *net.UDPAddr
-	LastSeen   time.Time
 }
 
 // ── Tunnel ─────────────────────────────────────────────────────
@@ -65,12 +64,8 @@ func main() {
 		cfg.PlayerName = *nameFlag
 	}
 
-	// If no server configured and no flag, show usage
+	// If no server configured, save default
 	if cfg.ServerAddr == "" {
-		fmt.Println("首次使用请设置服务器地址:")
-		fmt.Println("  gtunnel-client.exe -server 1.2.3.4:4700")
-		fmt.Println()
-		fmt.Println("或编辑配置文件:", gui.ConfigPath())
 		cfg.ServerAddr = "127.0.0.1:4700"
 		gui.SaveConfig(cfg)
 	}
@@ -295,13 +290,11 @@ func (t *Tunnel) handlePeerInfo(payload []byte) {
 		key := entry.VirtualIP.String()
 		if existing, ok := t.peers[key]; ok {
 			existing.PublicAddr = entry.PublicAddr
-			existing.LastSeen = time.Now()
 			newPeers[key] = existing
 		} else {
 			newPeers[key] = &Peer{
 				VirtualIP:  entry.VirtualIP,
 				PublicAddr: entry.PublicAddr,
-				LastSeen:   time.Now(),
 			}
 			log.Printf("[tunnel] 新玩家: %s (%s)", entry.Username, entry.VirtualIP)
 			go t.startHolePunch(entry.VirtualIP)

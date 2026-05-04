@@ -23,7 +23,6 @@ type GUI struct {
 	cfg    *Config
 	state  State
 	ip     string // assigned virtual IP
-	peers  int    // online player count
 	mu     sync.Mutex
 
 	// Menu items
@@ -93,9 +92,6 @@ func (g *GUI) SetIP(ip string) {
 
 // SetPlayers updates the online player count.
 func (g *GUI) SetPlayers(count int) {
-	g.mu.Lock()
-	g.peers = count
-	g.mu.Unlock()
 	g.mPlayers.SetTitle(fmt.Sprintf("在线玩家: %d", count+1)) // +1 for self
 }
 
