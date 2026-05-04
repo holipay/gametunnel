@@ -8,7 +8,8 @@ param(
     [Parameter(Mandatory=$true)]
     [string]$Server,
     [string]$Name = $env:COMPUTERNAME,
-    [string]$Room = "default"
+    [string]$Room = "default",
+    [string]$Password = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -46,37 +47,74 @@ if ($currentPath -notlike "*$InstallDir*") {
     Write-Host "  ✅ 已添加到 PATH" -ForegroundColor Green
 }
 
-# 创建桌面快捷方式（CLI 模式：cmd.exe 窗口保持打开）
-$WshShell = New-Object -ComObject WScript.Shell
-$Shortcut = $WshShell.CreateShortcut("$env:USERPROFILE\Desktop\GameTunnel.lnk")
-$Shortcut.TargetPath = "cmd.exe"
-$Shortcut.Arguments = "/k `"$ExePath`" -server ${Server}:4700 -name `"$Name`" -room `"$Room`""
-$Shortcut.WorkingDirectory = $InstallDir
-$Shortcut.Description = "GameTunnel - 局域网游戏隧道"
-$Shortcut.Save()
-
-# 写入配置文件（这样不带参数也能用）
+# 写入配置文件
 $ConfigDir = "$env:APPDATA\GameTunnel"
 if (!(Test-Path $ConfigDir)) {
     New-Item -ItemType Directory -Path $ConfigDir -Force | Out-Null
 }
 $Config = @{
-    server_addr = "${Server}:4700"
-    player_name = $Name
-    room_id     = $Room
+    server_addr   = "${Server}:4700"
+    player_name   = $Name
+    room_id       = $Room
+    room_password = $Password
 } | ConvertTo-Json
 Set-Content -Path "$ConfigDir\config.json" -Value $Config -Encoding UTF8
 Write-Host "  ✅ 已写入配置 $ConfigDir\config.json" -ForegroundColor Green
 
+# 生成 start.bat 到安装目录
+$BatContent = @"
+@echo off
+chcp 65001 >nul 2>&1
+title GameTunnel
+net session >nul 2>&1
+if %errorlevel% neq 0 (
+    echo 请求管理员权限...
+    powershell -Command "Start-Process '%~f0' -Verb RunAs"
+    exit /b
+)
+set SERVER=${Server}:4700
+set NAME=
+set ROOM=${Room}
+set PASSWORD=${Password}
+set EXE=$ExePath
+echo.
+echo  ========================================
+echo   GameTunnel - 局域网游戏隧道
+echo  ========================================
+echo   服务器: %SERVER%
+echo   房间:   %ROOM%
+if defined PASSWORD (echo   认证:   HMAC) else (echo   认证:   无)
+echo  ========================================
+echo.
+set ARGS=-server %SERVER%
+if defined NAME set ARGS=%ARGS% -name "%NAME%"
+if not "%ROOM%"=="default" set ARGS=%ARGS% -room %ROOM%
+if defined PASSWORD set ARGS=%ARGS% -password "%PASSWORD%"
+%EXE% %ARGS%
+echo.
+echo GameTunnel 已退出。
+pause
+"@
+Set-Content -Path "$InstallDir\start.bat" -Value $BatContent -Encoding ASCII
+Write-Host "  ✅ 已生成启动器 $InstallDir\start.bat" -ForegroundColor Green
+
+# 创建桌面快捷方式 → start.bat
+$WshShell = New-Object -ComObject WScript.Shell
+$Shortcut = $WshShell.CreateShortcut("$env:USERPROFILE\Desktop\GameTunnel.lnk")
+$Shortcut.TargetPath = "$InstallDir\start.bat"
+$Shortcut.WorkingDirectory = $InstallDir
+$Shortcut.Description = "GameTunnel - 局域网游戏隧道"
+$Shortcut.Save()
+Write-Host "  ✅ 已创建桌面快捷方式" -ForegroundColor Green
+
 Write-Host ""
 Write-Host "  ✅ 安装完成！" -ForegroundColor Green
 Write-Host ""
-Write-Host "  连接方式（三选一）:" -ForegroundColor White
+Write-Host "  启动方式:" -ForegroundColor White
 Write-Host "    1. 双击桌面的 GameTunnel 快捷方式" -ForegroundColor White
-Write-Host "    2. 在 CMD/PowerShell 中运行:" -ForegroundColor White
+Write-Host "    2. 运行 $InstallDir\start.bat" -ForegroundColor White
+Write-Host "    3. 命令行直接运行:" -ForegroundColor White
 Write-Host "       gtunnel-client.exe -server ${Server}:4700" -ForegroundColor Cyan
-Write-Host "    3. 直接运行（使用已保存的配置）:" -ForegroundColor White
-Write-Host "       gtunnel-client.exe" -ForegroundColor Cyan
 Write-Host ""
 Write-Host "  连接成功后打开游戏，进入局域网模式即可" -ForegroundColor White
 Write-Host ""
