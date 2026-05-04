@@ -457,15 +457,12 @@ func (t *Tunnel) relayBroadcast(pkt []byte, srcIP net.IP) {
 		Data:  pkt,
 	}
 	encoded := protocol.EncodeChecked(protocol.TypeData, dp.Marshal())
-	t.sendUDP(encoded, t.serverAddr)
 
-	t.mu.RLock()
-	defer t.mu.RUnlock()
-	for _, peer := range t.peers {
-		if peer.PublicAddr != nil {
-			t.sendUDP(encoded, peer.PublicAddr)
-		}
-	}
+	// Send to server only — server will forward to all peers in the room.
+	// Do NOT also send directly to P2P peers, as that causes duplicate
+	// broadcast delivery (peers would receive the same packet twice:
+	// once from P2P direct, once from server relay).
+	t.sendUDP(encoded, t.serverAddr)
 }
 
 func (t *Tunnel) sendToServer(pkt []byte, srcIP, dstIP net.IP) {
@@ -612,7 +609,14 @@ func newTeeWriter(a, b *os.File) *teeWriter {
 }
 
 func (t *teeWriter) Write(p []byte) (n int, err error) {
-	t.a.Write(p)
-	t.b.Write(p)
+	// Write to file first; if it fails, still write to stderr but return the error.
+	n1, err1 := t.a.Write(p)
+	n2, err2 := t.b.Write(p)
+	if err1 != nil {
+		return n1, err1
+	}
+	if err2 != nil {
+		return n2, err2
+	}
 	return len(p), nil
 }

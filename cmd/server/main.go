@@ -53,7 +53,6 @@ type Client struct {
 	auth         authState
 	challenge    []byte    // 16-byte nonce
 	challengeAt  time.Time // for expiry
-	authKey      []byte    // HKDF-derived key (cached per client)
 }
 
 // ── Server ─────────────────────────────────────────────────────
@@ -63,7 +62,7 @@ type Server struct {
 	connMu     sync.Mutex // protects WriteToUDP
 	clients    map[string]*Client // virtualIP string → Client
 	addrMap    map[string]*Client // "ip:port" string → Client (O(1) lookup)
-	mu         sync.RWMutex
+	mu         sync.RWMutex       // protects clients + addrMap
 	subnet     *net.IPNet
 	maxPlayers int
 	serverIP   net.IP
@@ -75,6 +74,10 @@ type Server struct {
 	rateMu    sync.Mutex
 	rateCount map[string]int // addr string → count
 	rateTick  *time.Ticker
+
+	// Auth flood protection: limit pending (unauthenticated) connections
+	pendingAuth int // count of entries in addrMap with auth == authChallengeSent
+	maxPending  int // max allowed pending auth entries (0 = unlimited when no password)
 }
 
 func main() {
@@ -123,6 +126,7 @@ func main() {
 		roomPass:   *roomPass,
 		authKey:    authKey,
 		rateCount:  make(map[string]int),
+		maxPending: *maxPlayers * 3, // allow 3x max players for pending auth
 	}
 
 	// ── 优雅退出 ────────────────────────────────────────────
@@ -277,17 +281,24 @@ func (s *Server) handleRegister(payload []byte, from *net.UDPAddr) {
 
 	// If no password required, register immediately.
 	if s.authKey == nil {
-		s.registerClient(reg, from)
+		s.registerClientLocked(reg, from)
 		return
 	}
 
-	// Password required: send challenge.
-	s.mu.Unlock()
-	s.sendAuthChallenge(reg, from)
+	// Password required: check pending auth flood limit.
+	if s.pendingAuth >= s.maxPending {
+		s.mu.Unlock()
+		s.sendKick(from, "服务器繁忙，请稍后重试")
+		return
+	}
+
+	// Send challenge (lock released inside).
+	s.sendAuthChallengeLocked(reg, from)
 }
 
-func (s *Server) registerClient(reg *protocol.RegisterPayload, from *net.UDPAddr) {
-	// Must be called with s.mu held.
+// registerClientLocked completes registration. MUST be called with s.mu held.
+// Releases s.mu before returning.
+func (s *Server) registerClientLocked(reg *protocol.RegisterPayload, from *net.UDPAddr) {
 	vip := s.nextAvailableIP()
 	if vip == nil {
 		s.mu.Unlock()
@@ -314,16 +325,18 @@ func (s *Server) registerClient(reg *protocol.RegisterPayload, from *net.UDPAddr
 	s.sendPeerInfoTo(nil, nil, selfIP)
 }
 
-func (s *Server) sendAuthChallenge(reg *protocol.RegisterPayload, from *net.UDPAddr) {
+// sendAuthChallengeLocked sends auth challenge. MUST be called with s.mu held.
+// Releases s.mu before returning.
+func (s *Server) sendAuthChallengeLocked(reg *protocol.RegisterPayload, from *net.UDPAddr) {
 	challenge, err := protocol.GenerateChallenge()
 	if err != nil {
+		s.mu.Unlock()
 		log.Printf("[auth] 生成 challenge 失败: %v", err)
 		s.sendKick(from, "服务器内部错误")
 		return
 	}
 
 	// Store pending auth state
-	s.mu.Lock()
 	c := &Client{
 		Username:    reg.Username,
 		PublicAddr:  from,
@@ -331,9 +344,9 @@ func (s *Server) sendAuthChallenge(reg *protocol.RegisterPayload, from *net.UDPA
 		auth:        authChallengeSent,
 		challenge:   challenge,
 		challengeAt: time.Now(),
-		authKey:     s.authKey,
 	}
 	s.addrMap[from.String()] = c
+	s.pendingAuth++
 	s.mu.Unlock()
 
 	// Send challenge (with a random salt reserved for future use)
@@ -353,28 +366,29 @@ func (s *Server) handleAuthResponse(payload []byte, from *net.UDPAddr) {
 		return
 	}
 
-	s.mu.RLock()
+	// Use full Lock (not RLock+RUnlock then Lock) to avoid race window.
+	s.mu.Lock()
 	c := s.addrMap[from.String()]
-	s.mu.RUnlock()
 
 	if c == nil || c.auth != authChallengeSent {
+		s.mu.Unlock()
 		s.sendKick(from, "未请求认证")
 		return
 	}
 
 	// Check challenge expiry (30 seconds)
 	if time.Since(c.challengeAt) > 30*time.Second {
-		s.mu.Lock()
 		delete(s.addrMap, from.String())
+		s.pendingAuth--
 		s.mu.Unlock()
 		s.sendKick(from, "认证超时")
 		return
 	}
 
-	// Verify HMAC
-	if !protocol.VerifyAuthHMAC(c.authKey, resp.HMAC, c.challenge, resp.RoomID, resp.Username, from) {
-		s.mu.Lock()
+	// Use server-level authKey (not per-client, which was removed).
+	if !protocol.VerifyAuthHMAC(s.authKey, resp.HMAC, c.challenge, resp.RoomID, resp.Username, from) {
 		delete(s.addrMap, from.String())
+		s.pendingAuth--
 		s.mu.Unlock()
 		log.Printf("[auth] 认证失败: %s (%s)", resp.Username, from)
 		s.sendKick(from, "密码错误")
@@ -384,15 +398,9 @@ func (s *Server) handleAuthResponse(payload []byte, from *net.UDPAddr) {
 	// Auth passed — complete registration
 	log.Printf("[auth] 认证成功: %s (%s)", resp.Username, from)
 
-	// Update the pending client with registration info and register properly.
-	reg := &protocol.RegisterPayload{
-		RoomID:   resp.RoomID,
-		Username: resp.Username,
-	}
-
-	s.mu.Lock()
 	// Remove pending entry from addrMap
 	delete(s.addrMap, from.String())
+	s.pendingAuth--
 
 	// Capacity check (might have changed)
 	if len(s.clients) >= s.maxPlayers {
@@ -400,7 +408,12 @@ func (s *Server) handleAuthResponse(payload []byte, from *net.UDPAddr) {
 		s.sendKick(from, "房间已满")
 		return
 	}
-	s.registerClient(reg, from)
+
+	reg := &protocol.RegisterPayload{
+		RoomID:   resp.RoomID,
+		Username: resp.Username,
+	}
+	s.registerClientLocked(reg, from) // releases s.mu
 }
 
 // ── Keepalive ──────────────────────────────────────────────────
@@ -438,6 +451,7 @@ func (s *Server) keepaliveLoop(ctx context.Context) {
 		for addrStr, c := range s.addrMap {
 			if c.auth == authChallengeSent && now.Sub(c.challengeAt) > 60*time.Second {
 				delete(s.addrMap, addrStr)
+				s.pendingAuth--
 			}
 		}
 		s.mu.Unlock()
