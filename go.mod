@@ -12,5 +12,5 @@ require (
 	golang.org/x/net v0.53.0 // indirect
 	golang.org/x/sys v0.43.0 // indirect
 	golang.zx2c4.com/wintun v0.0.0-20260318174930-ec0a6b98456f // indirect
-	gvisor.dev/gvisor v0.0.0-20260427000000-81fa2013f157 // indirect
+	gvisor.dev/gvisor v0.0.0-20250503011706-39ed1f5ac29c // indirect
 )
