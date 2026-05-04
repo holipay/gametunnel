@@ -9,6 +9,7 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"log"
@@ -23,6 +24,16 @@ import (
 	"github.com/holipay/gametunnel/internal/protocol"
 	"github.com/holipay/gametunnel/internal/tun"
 )
+
+// ── UI 接口（解耦网络与 GUI 关注点）────────────────────────────
+
+// UI abstracts the display layer so Tunnel doesn't depend on a concrete GUI.
+type UI interface {
+	UpdateState(state gui.State)
+	SetIP(ip string)
+	SetPlayers(count int)
+	SetNotice(text string)
+}
 
 // ── Peer State ─────────────────────────────────────────────────
 
@@ -43,11 +54,10 @@ type Tunnel struct {
 	subnetMask net.IPMask
 	peers      map[string]*Peer
 	mu         sync.RWMutex
-	done       chan struct{}
-	stopped    chan struct{}
+	cancel     context.CancelFunc // 取消当前连接
 	username   string
 	roomID     string
-	gui        *gui.GUI
+	ui         UI
 }
 
 func main() {
@@ -87,7 +97,7 @@ func main() {
 	// Create GUI
 	g := gui.New(cfg)
 
-	// Show first-run notice in GUI (user may never see log file)
+	// Show first-run notice in GUI
 	if firstRun {
 		go func() {
 			time.Sleep(500 * time.Millisecond)
@@ -95,14 +105,12 @@ func main() {
 		}()
 	}
 
-	// Create tunnel
+	// Create tunnel (GUI satisfies UI interface)
 	t := &Tunnel{
 		username: cfg.PlayerName,
 		roomID:   cfg.RoomID,
 		peers:    make(map[string]*Peer),
-		done:     make(chan struct{}),
-		stopped:  make(chan struct{}),
-		gui:      g,
+		ui:       g,
 	}
 
 	// Wire up callbacks
@@ -115,29 +123,25 @@ func main() {
 	g.Run()
 }
 
-// ── Connect / Disconnect ───────────────────────────────────────
+// ── Connect / Disconnect（单 context 模式，无竞态）─────────────
 
 func (t *Tunnel) Connect(serverAddr string) {
-	// Clean up previous connection if any
-	select {
-	case <-t.done:
-		// already stopped
-	default:
-		close(t.done)
-		<-t.stopped
+	// 取消上一次连接（安全幂等）
+	if t.cancel != nil {
+		t.cancel()
 	}
 
-	t.done = make(chan struct{})
-	t.stopped = make(chan struct{})
-	defer close(t.stopped)
+	ctx, cancel := context.WithCancel(context.Background())
+	t.cancel = cancel
+	defer cancel()
 
-	t.gui.UpdateState(gui.StateConnecting)
+	t.ui.UpdateState(gui.StateConnecting)
 
 	// Parse server address
 	sAddr, err := net.ResolveUDPAddr("udp4", serverAddr)
 	if err != nil {
 		log.Printf("[tunnel] 服务器地址无效: %v", err)
-		t.gui.UpdateState(gui.StateDisconnected)
+		t.ui.UpdateState(gui.StateDisconnected)
 		return
 	}
 
@@ -145,60 +149,57 @@ func (t *Tunnel) Connect(serverAddr string) {
 	conn, err := net.ListenUDP("udp4", &net.UDPAddr{})
 	if err != nil {
 		log.Printf("[tunnel] 绑定 UDP 失败: %v", err)
-		t.gui.UpdateState(gui.StateDisconnected)
+		t.ui.UpdateState(gui.StateDisconnected)
 		return
 	}
 	t.conn = conn
 	t.serverAddr = sAddr
 
 	// Register
-	if err := t.register(); err != nil {
+	if err := t.register(ctx); err != nil {
 		log.Printf("[tunnel] 注册失败: %v", err)
 		conn.Close()
-		t.gui.UpdateState(gui.StateDisconnected)
+		t.ui.UpdateState(gui.StateDisconnected)
 		return
 	}
 
 	// Create TUN
-	cfg := tun.Config{
+	tunCfg := tun.Config{
 		VirtualIP:  t.virtualIP,
 		SubnetMask: t.subnetMask,
 		ServerIP:   t.serverIP,
 		MTU:        1400,
 	}
-	tunDev, err := tun.New(cfg)
+	tunDev, err := tun.New(tunCfg)
 	if err != nil {
 		log.Printf("[tunnel] 创建 TUN 失败: %v", err)
 		conn.Close()
-		t.gui.UpdateState(gui.StateDisconnected)
+		t.ui.UpdateState(gui.StateDisconnected)
 		return
 	}
 	t.tunDev = tunDev
 	defer tunDev.Close()
 
 	// Update GUI
-	t.gui.SetIP(t.virtualIP.String())
-	t.gui.UpdateState(gui.StateConnected)
+	t.ui.SetIP(t.virtualIP.String())
+	t.ui.UpdateState(gui.StateConnected)
 	log.Printf("[tunnel] 已连接: %s → %s", t.virtualIP, serverAddr)
 
 	// Run tunnel loops
-	go t.receiveFromServer()
-	go t.receiveFromTUN()
-	go t.keepaliveLoop()
-	go t.peerDiscoveryLoop()
+	go t.receiveFromServer(ctx)
+	go t.receiveFromTUN(ctx)
+	go t.keepaliveLoop(ctx)
+	go t.peerDiscoveryLoop(ctx)
 
 	// Wait for disconnect
-	<-t.done
+	<-ctx.Done()
 	log.Printf("[tunnel] 断开连接")
-	t.gui.UpdateState(gui.StateDisconnected)
+	t.ui.UpdateState(gui.StateDisconnected)
 }
 
 func (t *Tunnel) Disconnect() {
-	select {
-	case <-t.done:
-		return // already stopped
-	default:
-		close(t.done)
+	if t.cancel != nil {
+		t.cancel()
 	}
 	if t.conn != nil {
 		t.conn.Close()
@@ -207,7 +208,7 @@ func (t *Tunnel) Disconnect() {
 
 // ── Registration ───────────────────────────────────────────────
 
-func (t *Tunnel) register() error {
+func (t *Tunnel) register(ctx context.Context) error {
 	reg := &protocol.RegisterPayload{
 		RoomID:   t.roomID,
 		Username: t.username,
@@ -218,6 +219,12 @@ func (t *Tunnel) register() error {
 	defer t.conn.SetReadDeadline(time.Time{})
 
 	for attempt := 0; attempt < 3; attempt++ {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+
 		_, err := t.conn.WriteToUDP(packet, t.serverAddr)
 		if err != nil {
 			return fmt.Errorf("发送注册包失败: %w", err)
@@ -258,11 +265,11 @@ func (t *Tunnel) register() error {
 
 // ── Server Receiver ────────────────────────────────────────────
 
-func (t *Tunnel) receiveFromServer() {
+func (t *Tunnel) receiveFromServer(ctx context.Context) {
 	buf := make([]byte, 65535)
 	for {
 		select {
-		case <-t.done:
+		case <-ctx.Done():
 			return
 		default:
 		}
@@ -270,7 +277,7 @@ func (t *Tunnel) receiveFromServer() {
 		n, _, err := t.conn.ReadFromUDP(buf)
 		if err != nil {
 			select {
-			case <-t.done:
+			case <-ctx.Done():
 				return
 			default:
 				continue
@@ -323,8 +330,7 @@ func (t *Tunnel) handlePeerInfo(payload []byte) {
 	}
 	t.peers = newPeers
 
-	// Update GUI player count
-	t.gui.SetPlayers(len(t.peers))
+	t.ui.SetPlayers(len(t.peers))
 }
 
 // ── Data from Server ───────────────────────────────────────────
@@ -354,10 +360,8 @@ func (t *Tunnel) startHolePunch(peerIP net.IP) {
 	packet := protocol.Encode(protocol.TypeHolePunch, punchPayload)
 
 	for i := 0; i < 5; i++ {
-		select {
-		case <-t.done:
+		if t.conn == nil {
 			return
-		default:
 		}
 		t.conn.WriteToUDP(packet, peer.PublicAddr)
 		time.Sleep(200 * time.Millisecond)
@@ -366,11 +370,11 @@ func (t *Tunnel) startHolePunch(peerIP net.IP) {
 
 // ── TUN Reader ─────────────────────────────────────────────────
 
-func (t *Tunnel) receiveFromTUN() {
+func (t *Tunnel) receiveFromTUN(ctx context.Context) {
 	buf := make([]byte, 65535)
 	for {
 		select {
-		case <-t.done:
+		case <-ctx.Done():
 			return
 		default:
 		}
@@ -378,7 +382,7 @@ func (t *Tunnel) receiveFromTUN() {
 		n, err := t.tunDev.Read(buf)
 		if err != nil {
 			select {
-			case <-t.done:
+			case <-ctx.Done():
 				return
 			default:
 				continue
@@ -399,7 +403,6 @@ func (t *Tunnel) receiveFromTUN() {
 // ── Routing ────────────────────────────────────────────────────
 
 func (t *Tunnel) routePacket(pkt []byte, srcIP, dstIP net.IP) {
-	// Build subnet for broadcast check
 	subnet := &net.IPNet{
 		IP:   t.virtualIP.Mask(t.subnetMask),
 		Mask: t.subnetMask,
@@ -450,32 +453,36 @@ func (t *Tunnel) sendToServer(pkt []byte, srcIP, dstIP net.IP) {
 
 // ── Keepalive ──────────────────────────────────────────────────
 
-func (t *Tunnel) keepaliveLoop() {
+func (t *Tunnel) keepaliveLoop(ctx context.Context) {
 	ticker := time.NewTicker(10 * time.Second)
 	defer ticker.Stop()
 	packet := protocol.Encode(protocol.TypeKeepAlive, nil)
 	for {
 		select {
-		case <-t.done:
+		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			t.conn.WriteToUDP(packet, t.serverAddr)
+			if t.conn != nil {
+				t.conn.WriteToUDP(packet, t.serverAddr)
+			}
 		}
 	}
 }
 
 // ── Peer Discovery ─────────────────────────────────────────────
 
-func (t *Tunnel) peerDiscoveryLoop() {
+func (t *Tunnel) peerDiscoveryLoop(ctx context.Context) {
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
 	packet := protocol.Encode(protocol.TypePeerRequest, nil)
 	for {
 		select {
-		case <-t.done:
+		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			t.conn.WriteToUDP(packet, t.serverAddr)
+			if t.conn != nil {
+				t.conn.WriteToUDP(packet, t.serverAddr)
+			}
 		}
 	}
 }
@@ -493,7 +500,6 @@ func setupLog() *os.File {
 
 	f, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
 	if err != nil {
-		// Fall back to stderr
 		return os.Stderr
 	}
 	log.SetOutput(f)

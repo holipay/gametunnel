@@ -1,7 +1,8 @@
 // Package protocol defines the wire protocol between GameTunnel client and server.
 //
-// Wire format:
-//   [1 byte: type] [payload...]
+// Wire format (v1):
+//
+//	[1 byte: version] [1 byte: type] [payload...]
 //
 // All multi-byte integers are little-endian.
 package protocol
@@ -9,8 +10,12 @@ package protocol
 import (
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"net"
 )
+
+// Protocol version. Bump on breaking wire-format changes.
+const ProtocolVersion byte = 1
 
 // ── Message Types ──────────────────────────────────────────────
 
@@ -28,7 +33,8 @@ const (
 // ── Common Errors ──────────────────────────────────────────────
 
 var (
-	ErrPacketTooShort = errors.New("packet too short")
+	ErrPacketTooShort     = errors.New("packet too short")
+	ErrUnsupportedVersion = errors.New("unsupported protocol version")
 )
 
 // ── Base Message ───────────────────────────────────────────────
@@ -39,32 +45,35 @@ type Message struct {
 	Payload []byte
 }
 
-// Encode prepends the type byte and returns raw bytes ready to send.
+// Encode prepends version + type bytes and returns raw bytes ready to send.
 func Encode(typ byte, payload []byte) []byte {
-	buf := make([]byte, 1+len(payload))
-	buf[0] = typ
-	copy(buf[1:], payload)
+	buf := make([]byte, 2+len(payload))
+	buf[0] = ProtocolVersion
+	buf[1] = typ
+	copy(buf[2:], payload)
 	return buf
 }
 
-// Decode extracts the message type and payload from a raw packet.
+// Decode extracts the version, message type and payload from a raw packet.
 func Decode(data []byte) (*Message, error) {
-	if len(data) < 1 {
+	if len(data) < 2 {
 		return nil, ErrPacketTooShort
 	}
-	msg := &Message{
-		Type:    data[0],
-		Payload: data[1:],
+	if data[0] != ProtocolVersion {
+		return nil, fmt.Errorf("%w: got %d, want %d", ErrUnsupportedVersion, data[0], ProtocolVersion)
 	}
-	return msg, nil
+	return &Message{
+		Type:    data[1],
+		Payload: data[2:],
+	}, nil
 }
 
 // ── Register ───────────────────────────────────────────────────
 
 // RegisterPayload is sent by client to join a room.
 type RegisterPayload struct {
-	RoomID   string // game room identifier
-	Username string // display name
+	RoomID   string
+	Username string
 }
 
 func (r *RegisterPayload) Marshal() []byte {
@@ -107,13 +116,13 @@ func UnmarshalRegister(data []byte) (*RegisterPayload, error) {
 
 // AssignIPPayload is sent by server after successful registration.
 type AssignIPPayload struct {
-	VirtualIP  net.IP // e.g. 10.10.0.2
+	VirtualIP  net.IP
 	SubnetMask net.IPMask
-	ServerIP   net.IP // server's virtual IP in the subnet
+	ServerIP   net.IP
 }
 
 func (a *AssignIPPayload) Marshal() []byte {
-	buf := make([]byte, 12) // 4 + 4 + 4
+	buf := make([]byte, 12)
 	copy(buf[0:4], a.VirtualIP.To4())
 	copy(buf[4:8], net.IP(a.SubnetMask).To4())
 	copy(buf[8:12], a.ServerIP.To4())
@@ -135,8 +144,8 @@ func UnmarshalAssignIP(data []byte) (*AssignIPPayload, error) {
 
 // PeerInfoEntry describes one peer.
 type PeerInfoEntry struct {
-	VirtualIP  net.IP // peer's virtual IP
-	PublicAddr *net.UDPAddr // peer's public address (for hole punch)
+	VirtualIP  net.IP
+	PublicAddr *net.UDPAddr
 	Username   string
 }
 
@@ -147,41 +156,43 @@ type PeerInfoPayload struct {
 
 func (p *PeerInfoPayload) Marshal() []byte {
 	var buf []byte
-	buf = append(buf, byte(len(p.Peers)))
+	// peer count (uint16)
+	buf = append(buf, byte(len(p.Peers)), byte(len(p.Peers)>>8))
 	for _, peer := range p.Peers {
 		vip := peer.VirtualIP.To4()
 		buf = append(buf, vip...)
-		// public addr as string
+		// public addr as string (uint16 length)
 		addrStr := ""
 		if peer.PublicAddr != nil {
 			addrStr = peer.PublicAddr.String()
 		}
 		addrBytes := []byte(addrStr)
-		buf = append(buf, byte(len(addrBytes)))
+		buf = append(buf, byte(len(addrBytes)), byte(len(addrBytes)>>8))
 		buf = append(buf, addrBytes...)
+		// username (uint16 length)
 		userBytes := []byte(peer.Username)
-		buf = append(buf, byte(len(userBytes)))
+		buf = append(buf, byte(len(userBytes)), byte(len(userBytes)>>8))
 		buf = append(buf, userBytes...)
 	}
 	return buf
 }
 
 func UnmarshalPeerInfo(data []byte) (*PeerInfoPayload, error) {
-	if len(data) < 1 {
+	if len(data) < 2 {
 		return nil, ErrPacketTooShort
 	}
-	count := int(data[0])
-	off := 1
+	count := int(binary.LittleEndian.Uint16(data[0:2]))
+	off := 2
 	payload := &PeerInfoPayload{Peers: make([]PeerInfoEntry, 0, count)}
 	for i := 0; i < count; i++ {
-		if len(data) < off+4+1 {
+		if len(data) < off+4+2 {
 			return nil, ErrPacketTooShort
 		}
 		vip := net.IP(append([]byte(nil), data[off:off+4]...))
 		off += 4
-		addrLen := int(data[off])
-		off++
-		if len(data) < off+addrLen+1 {
+		addrLen := int(binary.LittleEndian.Uint16(data[off:]))
+		off += 2
+		if len(data) < off+addrLen+2 {
 			return nil, ErrPacketTooShort
 		}
 		addrStr := string(data[off : off+addrLen])
@@ -193,8 +204,8 @@ func UnmarshalPeerInfo(data []byte) (*PeerInfoPayload, error) {
 				pubAddr = a
 			}
 		}
-		userLen := int(data[off])
-		off++
+		userLen := int(binary.LittleEndian.Uint16(data[off:]))
+		off += 2
 		if len(data) < off+userLen {
 			return nil, ErrPacketTooShort
 		}
@@ -213,9 +224,9 @@ func UnmarshalPeerInfo(data []byte) (*PeerInfoPayload, error) {
 
 // DataPayload wraps a packet to be relayed.
 type DataPayload struct {
-	SrcIP  net.IP // sender's virtual IP
-	DstIP  net.IP // destination virtual IP
-	Data   []byte // original IP packet
+	SrcIP net.IP
+	DstIP net.IP
+	Data  []byte
 }
 
 func (d *DataPayload) Marshal() []byte {

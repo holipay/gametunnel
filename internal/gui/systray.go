@@ -177,7 +177,10 @@ func (g *GUI) onReady() {
 }
 
 func (g *GUI) onExit() {
-	// Cleanup
+	// 确保退出时断开连接（兜底，防止外部关闭窗口时未走 Disconnect 流程）
+	if g.onDisconnect != nil {
+		g.onDisconnect()
+	}
 }
 
 // openSettings opens the config file in notepad.

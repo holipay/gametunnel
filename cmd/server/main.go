@@ -12,10 +12,14 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"log"
 	"net"
+	"os"
+	"os/signal"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/holipay/gametunnel/internal/netutil"
@@ -39,10 +43,9 @@ type Server struct {
 	clients    map[string]*Client // virtualIP string → Client
 	mu         sync.RWMutex
 	subnet     *net.IPNet
-	nextOctet  byte
 	maxPlayers int
 	serverIP   net.IP
-	sem        *semaphore.Weighted // 并发限制
+	sem        *semaphore.Weighted
 }
 
 func main() {
@@ -56,7 +59,6 @@ func main() {
 		log.Fatalf("子网无效 %q: %v", *subnetStr, err)
 	}
 
-	// 服务器在子网中占 .1
 	serverIP := make(net.IP, 4)
 	copy(serverIP, subnet.IP.To4())
 	serverIP[3] = 1
@@ -70,17 +72,29 @@ func main() {
 	if err != nil {
 		log.Fatalf("监听失败: %v", err)
 	}
-	defer conn.Close()
 
 	s := &Server{
 		conn:       conn,
 		clients:    make(map[string]*Client),
 		subnet:     subnet,
-		nextOctet:  2,
 		maxPlayers: *maxPlayers,
 		serverIP:   serverIP,
-		sem:        semaphore.NewWeighted(200), // 最多 200 个并发包处理
+		sem:        semaphore.NewWeighted(200),
 	}
+
+	// ── 优雅退出 ────────────────────────────────────────────
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+
+	go func() {
+		sig := <-sigCh
+		log.Printf("收到信号 %v，正在关闭...", sig)
+		cancel()
+		conn.Close() // 唤醒 ReadFromUDP
+	}()
 
 	log.Println("╔═══════════════════════════════════════════╗")
 	log.Println("║       GameTunnel Server 已启动            ║")
@@ -91,13 +105,19 @@ func main() {
 	log.Printf("║  上限:    %-31d ║", *maxPlayers)
 	log.Println("╚═══════════════════════════════════════════╝")
 
-	go s.keepaliveLoop()
+	go s.keepaliveLoop(ctx)
 
 	buf := make([]byte, 65535)
 	for {
 		n, remoteAddr, err := conn.ReadFromUDP(buf)
 		if err != nil {
-			continue
+			select {
+			case <-ctx.Done():
+				log.Println("Server 已关闭")
+				return
+			default:
+				continue
+			}
 		}
 		if n < 1 {
 			continue
@@ -105,9 +125,8 @@ func main() {
 		pkt := make([]byte, n)
 		copy(pkt, buf[:n])
 
-		// 限制并发，防止恶意客户端打爆内存
 		if !s.sem.TryAcquire(1) {
-			continue // 队列满，丢包
+			continue
 		}
 		go func() {
 			defer s.sem.Release(1)
@@ -138,7 +157,7 @@ func (s *Server) handlePacket(data []byte, from *net.UDPAddr) {
 	}
 }
 
-// ── 注册 ───────────────────────────────────────────────────────
+// ── 注册（拆分：重连 / 新注册）──────────────────────────────────
 
 func (s *Server) handleRegister(payload []byte, from *net.UDPAddr) {
 	reg, err := protocol.UnmarshalRegister(payload)
@@ -148,17 +167,12 @@ func (s *Server) handleRegister(payload []byte, from *net.UDPAddr) {
 
 	s.mu.Lock()
 
-	// 重连检测
-	if existing := s.findClientByAddr(from); existing != nil {
+	// 重连：已有同地址客户端
+	if existing := s.findClientByAddrLocked(from); existing != nil {
 		existing.LastSeen = time.Now()
 		selfIP := existing.VirtualIP
-		assign := &protocol.AssignIPPayload{
-			VirtualIP:  selfIP,
-			SubnetMask: s.subnet.Mask,
-			ServerIP:   s.serverIP,
-		}
-		s.send(protocol.Encode(protocol.TypeAssignIP, assign.Marshal()), from)
 		s.mu.Unlock()
+		s.sendAssignIP(selfIP, from)
 		s.sendPeerInfoTo([]*net.UDPAddr{from}, nil, selfIP)
 		return
 	}
@@ -170,8 +184,8 @@ func (s *Server) handleRegister(payload []byte, from *net.UDPAddr) {
 		return
 	}
 
-	// 分配IP
-	vip := s.nextVirtualIP()
+	// 分配 IP（回收空闲槽位）
+	vip := s.nextAvailableIP()
 	if vip == nil {
 		s.mu.Unlock()
 		s.sendKick(from, "IP已耗尽")
@@ -184,20 +198,23 @@ func (s *Server) handleRegister(payload []byte, from *net.UDPAddr) {
 		PublicAddr: from,
 		LastSeen:   time.Now(),
 	}
-
 	log.Printf("[+] %s (%s) → %s  [在线: %d]",
 		reg.Username, from, vip, len(s.clients))
 
-	// 发送IP分配
+	s.mu.Unlock()
+
+	s.sendAssignIP(vip, from)
+	s.sendPeerInfoTo(nil, nil, vip)
+}
+
+// sendAssignIP sends an IP assignment packet to the client.
+func (s *Server) sendAssignIP(vip net.IP, to *net.UDPAddr) {
 	assign := &protocol.AssignIPPayload{
 		VirtualIP:  vip,
 		SubnetMask: s.subnet.Mask,
 		ServerIP:   s.serverIP,
 	}
-	s.send(protocol.Encode(protocol.TypeAssignIP, assign.Marshal()), from)
-
-	s.mu.Unlock()
-	s.sendPeerInfoTo(nil, nil, vip)
+	s.send(protocol.Encode(protocol.TypeAssignIP, assign.Marshal()), to)
 }
 
 // ── 心跳 ───────────────────────────────────────────────────────
@@ -205,16 +222,21 @@ func (s *Server) handleRegister(payload []byte, from *net.UDPAddr) {
 func (s *Server) handleKeepAlive(from *net.UDPAddr) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if c := s.findClientByAddr(from); c != nil {
+	if c := s.findClientByAddrLocked(from); c != nil {
 		c.LastSeen = time.Now()
 	}
 }
 
-func (s *Server) keepaliveLoop() {
+func (s *Server) keepaliveLoop(ctx context.Context) {
 	ticker := time.NewTicker(15 * time.Second)
 	defer ticker.Stop()
 
-	for range ticker.C {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
 		s.mu.Lock()
 		now := time.Now()
 		changed := false
@@ -237,7 +259,7 @@ func (s *Server) keepaliveLoop() {
 
 func (s *Server) handlePeerRequest(from *net.UDPAddr) {
 	s.mu.RLock()
-	c := s.findClientByAddr(from)
+	c := s.findClientByAddrLocked(from)
 	s.mu.RUnlock()
 
 	if c == nil {
@@ -263,7 +285,7 @@ func (s *Server) handleRelay(payload []byte, from *net.UDPAddr) {
 	}
 	encoded := protocol.Encode(protocol.TypeData, relayPayload.Marshal())
 
-	// 广播包：转发给所有客户端（局域网游戏发现依赖这个）
+	// 广播包
 	if dstKey == "255.255.255.255" || netutil.IsBroadcast(dp.DstIP, s.subnet) {
 		s.mu.RLock()
 		targets := make([]*net.UDPAddr, 0, len(s.clients))
@@ -280,7 +302,7 @@ func (s *Server) handleRelay(payload []byte, from *net.UDPAddr) {
 		return
 	}
 
-	// 单播：转发给目标客户端
+	// 单播
 	s.mu.RLock()
 	dst, ok := s.clients[dstKey]
 	s.mu.RUnlock()
@@ -288,7 +310,6 @@ func (s *Server) handleRelay(payload []byte, from *net.UDPAddr) {
 	if !ok {
 		return
 	}
-
 	s.send(encoded, dst.PublicAddr)
 }
 
@@ -300,10 +321,9 @@ func (s *Server) handleHolePunch(payload []byte, from *net.UDPAddr) {
 	}
 	dstIP := net.IP(payload[:4])
 
-	// 确保源地址是 IPv4
 	srcIP4 := from.IP.To4()
 	if srcIP4 == nil {
-		return // 不支持 IPv6 源地址
+		return
 	}
 
 	s.mu.RLock()
@@ -314,7 +334,6 @@ func (s *Server) handleHolePunch(payload []byte, from *net.UDPAddr) {
 		return
 	}
 
-	// 转发打洞包，附带源地址
 	addrStr := from.String()
 	punchData := make([]byte, 4+len(addrStr))
 	copy(punchData[:4], srcIP4)
@@ -322,11 +341,11 @@ func (s *Server) handleHolePunch(payload []byte, from *net.UDPAddr) {
 	s.send(protocol.Encode(protocol.TypeHolePunch, punchData), dst.PublicAddr)
 }
 
-// ── 广播对等节点信息 ────────────────────────────────────────────
+// ── 对等节点信息快照与广播 ──────────────────────────────────────
 
-// findClientByAddr looks up a client by its public UDP address.
+// findClientByAddrLocked looks up a client by its public UDP address.
 // Must be called with at least a read lock held.
-func (s *Server) findClientByAddr(addr *net.UDPAddr) *Client {
+func (s *Server) findClientByAddrLocked(addr *net.UDPAddr) *Client {
 	addrStr := addr.String()
 	for _, c := range s.clients {
 		if c.PublicAddr.String() == addrStr {
@@ -358,11 +377,10 @@ func (s *Server) snapshotClients() []peerSnapshot {
 }
 
 // sendPeerInfoTo sends peer info to one or more targets.
-// Call after releasing the write lock. If targets is nil, broadcasts to all.
+// If targets is nil, broadcasts to all.
 func (s *Server) sendPeerInfoTo(targets []*net.UDPAddr, exclude *net.UDPAddr, selfIP net.IP) {
 	snapshot := s.snapshotClients()
 
-	// Build peer list (exclude self)
 	peers := &protocol.PeerInfoPayload{}
 	for _, sn := range snapshot {
 		if selfIP != nil && sn.virtualIP.Equal(selfIP) {
@@ -384,7 +402,6 @@ func (s *Server) sendPeerInfoTo(targets []*net.UDPAddr, exclude *net.UDPAddr, se
 		return
 	}
 
-	// Broadcast to all (excluding one)
 	for _, sn := range snapshot {
 		if exclude != nil && sn.publicAddr.String() == exclude.String() {
 			continue
@@ -393,13 +410,12 @@ func (s *Server) sendPeerInfoTo(targets []*net.UDPAddr, exclude *net.UDPAddr, se
 	}
 }
 
-// ── IP 分配 ────────────────────────────────────────────────────
+// ── IP 分配（回收空闲槽位）──────────────────────────────────────
 
-func (s *Server) nextVirtualIP() net.IP {
+func (s *Server) nextAvailableIP() net.IP {
 	base := s.subnet.IP.To4()
-	for s.nextOctet < 255 {
-		candidate := net.IPv4(base[0], base[1], base[2], s.nextOctet)
-		s.nextOctet++
+	for octet := 2; octet < 255; octet++ {
+		candidate := net.IPv4(base[0], base[1], base[2], byte(octet))
 		if candidate.Equal(s.serverIP) {
 			continue
 		}
