@@ -95,7 +95,9 @@ func (g *GUI) SetIP(ip string) {
 
 // SetPlayers updates the online player count.
 func (g *GUI) SetPlayers(count int) {
+	g.mu.Lock()
 	g.mPlayers.SetTitle(fmt.Sprintf("在线玩家: %d", count+1)) // +1 for self
+	g.mu.Unlock()
 }
 
 // SetNotice shows a one-time notice in the menu bar (e.g. first-run hint).

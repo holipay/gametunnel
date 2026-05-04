@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/holipay/gametunnel/internal/gui"
+	"github.com/holipay/gametunnel/internal/netutil"
 	"github.com/holipay/gametunnel/internal/protocol"
 	"github.com/holipay/gametunnel/internal/tun"
 )
@@ -398,7 +399,12 @@ func (t *Tunnel) receiveFromTUN() {
 // ── Routing ────────────────────────────────────────────────────
 
 func (t *Tunnel) routePacket(pkt []byte, srcIP, dstIP net.IP) {
-	if t.isBroadcast(dstIP) {
+	// Build subnet for broadcast check
+	subnet := &net.IPNet{
+		IP:   t.virtualIP.Mask(t.subnetMask),
+		Mask: t.subnetMask,
+	}
+	if netutil.IsBroadcast(dstIP, subnet) {
 		t.relayBroadcast(pkt, srcIP)
 		return
 	}
@@ -435,24 +441,6 @@ func (t *Tunnel) relayBroadcast(pkt []byte, srcIP net.IP) {
 			t.conn.WriteToUDP(encoded, peer.PublicAddr)
 		}
 	}
-}
-
-func (t *Tunnel) isBroadcast(ip net.IP) bool {
-	ip4 := ip.To4()
-	if ip4 == nil {
-		return false
-	}
-	if ip4.Equal(net.IPv4bcast) {
-		return true
-	}
-	if t.subnetMask != nil {
-		bcast := make(net.IP, 4)
-		for i := 0; i < 4; i++ {
-			bcast[i] = ip4[i] | ^t.subnetMask[i]
-		}
-		return ip4.Equal(bcast)
-	}
-	return false
 }
 
 func (t *Tunnel) sendToServer(pkt []byte, srcIP, dstIP net.IP) {
