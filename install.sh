@@ -1,5 +1,5 @@
 #!/bin/bash
-# GameTunnel 一键安装脚本（服务器端）
+# GameTunnel 一键安装脚本（服务器端 - Linux）
 # Usage: curl -sL https://raw.githubusercontent.com/holipay/gametunnel/main/install.sh | bash
 
 set -e
@@ -38,7 +38,7 @@ echo ""
 # 安装 Go（如果需要编译）
 if ! command -v go &>/dev/null; then
     echo "📦 安装 Go..."
-    GO_VERSION="1.22.2"
+    GO_VERSION="1.23.9"
     GO_TAR="go${GO_VERSION}.${OS}-${ARCH}.tar.gz"
     curl -sL "https://go.dev/dl/${GO_TAR}" -o "/tmp/${GO_TAR}"
     tar -C /usr/local -xzf "/tmp/${GO_TAR}"
@@ -86,8 +86,7 @@ echo "  状态: systemctl status gtunnel-server"
 echo "  日志: journalctl -u gtunnel-server -f"
 echo "  停止: systemctl stop gtunnel-server"
 echo ""
-echo "  玩家连接命令:"
-echo "    sudo gtunnel-client -server 你的IP:4700"
+echo "  玩家下载客户端: https://github.com/holipay/gametunnel/releases"
 echo ""
 echo "  ⚠️ 确保防火墙开放 UDP 4700 端口"
 echo ""

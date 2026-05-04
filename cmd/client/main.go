@@ -1,10 +1,11 @@
-// GameTunnel Client — 星际争霸1 局域网对战专用
+// GameTunnel Client — 星际争霸1 局域网对战专用 (Windows)
 //
 // 只需指定服务器地址，自动组网，自动转发广播包。
 // 星际1通过UDP广播(6112)发现局域网游戏，本客户端确保广播包能到达所有玩家。
 //
 // Usage:
-//   sudo client -server 1.2.3.4:4700
+//
+//	gtunnel-client.exe -server 1.2.3.4:4700
 package main
 
 import (
@@ -18,8 +19,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/gametunnel/internal/protocol"
-	"github.com/gametunnel/internal/tun"
+	"github.com/holipay/gametunnel/internal/protocol"
+	"github.com/holipay/gametunnel/internal/tun"
 )
 
 // ── Peer State ─────────────────────────────────────────────────
@@ -48,11 +49,15 @@ type Client struct {
 func main() {
 	serverAddr := flag.String("server", "127.0.0.1:4700", "服务器地址 (host:port)")
 	mtu := flag.Int("mtu", 1400, "隧道 MTU")
+	name := flag.String("name", "", "玩家名称（默认使用计算机名）")
 	flag.Parse()
 
 	// 自动生成用户名（hostname）
-	hostname, _ := os.Hostname()
-	username := hostname
+	username := *name
+	if username == "" {
+		hostname, _ := os.Hostname()
+		username = hostname
+	}
 
 	// 解析服务器地址
 	sAddr, err := net.ResolveUDPAddr("udp4", *serverAddr)
@@ -99,6 +104,7 @@ func main() {
 	fmt.Println("╔═══════════════════════════════════════════╗")
 	fmt.Println("║       GameTunnel 已连接                   ║")
 	fmt.Println("╠═══════════════════════════════════════════╣")
+	fmt.Printf("║  玩家:    %-31s ║\n", c.username)
 	fmt.Printf("║  虚拟IP:  %-31s ║\n", c.virtualIP)
 	fmt.Printf("║  服务器:  %-31s ║\n", c.serverIP)
 	fmt.Printf("║  虚拟网卡: %-30s ║\n", tunDev.Name())
@@ -107,6 +113,7 @@ func main() {
 	fmt.Println("  ✅ 虚拟局域网已就绪")
 	fmt.Println("  ✅ 打开星际争霸1 → Multiplayer → Local Area Network")
 	fmt.Println("  ✅ 建主/加入游戏即可，跟真局域网一样")
+	fmt.Println("  ✅ 按 Ctrl+C 断开连接")
 	fmt.Println()
 
 	// 启动各个协程
@@ -234,7 +241,7 @@ func (c *Client) handlePeerInfo(payload []byte) {
 				PublicAddr: entry.PublicAddr,
 				LastSeen:   time.Now(),
 			}
-			log.Printf("[client] 新玩家加入: %s", entry.VirtualIP)
+			log.Printf("[client] 新玩家加入: %s (%s)", entry.Username, entry.VirtualIP)
 			go c.startHolePunch(entry.VirtualIP)
 		}
 	}
@@ -256,7 +263,7 @@ func (c *Client) handleDataFromServer(payload []byte) {
 // ── NAT 打洞 ───────────────────────────────────────────────────
 
 func (c *Client) handleHolePunch(payload []byte) {
-	// 收到打洞包，NAT映射已建立
+	// 收到打洞包，NAT映射已建立，无需额外处理
 }
 
 func (c *Client) startHolePunch(peerIP net.IP) {
@@ -372,7 +379,6 @@ func (c *Client) isBroadcast(ip net.IP) bool {
 	if ip4 == nil {
 		return false
 	}
-	// 255.255.255.255
 	if ip4.Equal(net.IPv4bcast) {
 		return true
 	}

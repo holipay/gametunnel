@@ -1,13 +1,14 @@
 // GameTunnel Server — 公网中转服务器
 //
 // 职责：
-//   1. 接受客户端注册，分配虚拟IP
-//   2. 中转游戏流量
-//   3. 转发广播包（星际争霸1局域网发现的关键）
-//   4. 提供对等节点发现（NAT打洞）
+//  1. 接受客户端注册，分配虚拟IP
+//  2. 中转游戏流量
+//  3. 转发广播包（星际争霸1局域网发现的关键）
+//  4. 提供对等节点发现（NAT打洞）
 //
 // Usage:
-//   server -addr :4700 -subnet 10.10.0.0/24 -max 10
+//
+//	server -addr :4700 -subnet 10.10.0.0/24 -max 10
 package main
 
 import (
@@ -17,7 +18,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/gametunnel/internal/protocol"
+	"github.com/holipay/gametunnel/internal/protocol"
+	"golang.org/x/sync/semaphore"
 )
 
 // ── 客户端状态 ──────────────────────────────────────────────────
@@ -39,6 +41,7 @@ type Server struct {
 	nextOctet  byte
 	maxPlayers int
 	serverIP   net.IP
+	sem        *semaphore.Weighted // 并发限制
 }
 
 func main() {
@@ -75,6 +78,7 @@ func main() {
 		nextOctet:  2,
 		maxPlayers: *maxPlayers,
 		serverIP:   serverIP,
+		sem:        semaphore.NewWeighted(200), // 最多 200 个并发包处理
 	}
 
 	log.Println("╔═══════════════════════════════════════════╗")
@@ -99,7 +103,15 @@ func main() {
 		}
 		pkt := make([]byte, n)
 		copy(pkt, buf[:n])
-		go s.handlePacket(pkt, remoteAddr)
+
+		// 限制并发，防止恶意客户端打爆内存
+		if !s.sem.TryAcquire(1) {
+			continue // 队列满，丢包
+		}
+		go func() {
+			defer s.sem.Release(1)
+			s.handlePacket(pkt, remoteAddr)
+		}()
 	}
 }
 
@@ -146,7 +158,7 @@ func (s *Server) handleRegister(payload []byte, from *net.UDPAddr) {
 				ServerIP:   s.serverIP,
 			}
 			s.send(protocol.Encode(protocol.TypeAssignIP, assign.Marshal()), from)
-			s.sendPeerInfo(from, c.VirtualIP)
+			s.sendPeerInfoLocked(from, c.VirtualIP)
 			return
 		}
 	}
@@ -185,7 +197,7 @@ func (s *Server) handleRegister(payload []byte, from *net.UDPAddr) {
 	s.send(protocol.Encode(protocol.TypeAssignIP, assign.Marshal()), from)
 
 	// 广播对等节点信息给所有人
-	s.broadcastPeerInfo()
+	s.broadcastPeerInfoLocked()
 }
 
 // ── 心跳 ───────────────────────────────────────────────────────
@@ -206,7 +218,8 @@ func (s *Server) keepaliveLoop() {
 	defer ticker.Stop()
 
 	for range ticker.C {
-		s.mu.Lock()
+		// 先用读锁收集 dead 列表
+		s.mu.RLock()
 		now := time.Now()
 		var dead []string
 		for ip, c := range s.clients {
@@ -215,15 +228,20 @@ func (s *Server) keepaliveLoop() {
 				dead = append(dead, ip)
 			}
 		}
+		s.mu.RUnlock()
+
+		if len(dead) == 0 {
+			continue
+		}
+
+		// 写锁只用于删除
+		s.mu.Lock()
 		for _, ip := range dead {
 			delete(s.clients, ip)
 		}
-		changed := len(dead) > 0
 		s.mu.Unlock()
 
-		if changed {
-			s.broadcastPeerInfo()
-		}
+		s.broadcastPeerInfo()
 	}
 }
 
@@ -235,7 +253,7 @@ func (s *Server) handlePeerRequest(from *net.UDPAddr) {
 
 	for _, c := range s.clients {
 		if c.PublicAddr.String() == from.String() {
-			s.sendPeerInfo(from, c.VirtualIP)
+			s.sendPeerInfoLocked(from, c.VirtualIP)
 			return
 		}
 	}
@@ -294,6 +312,12 @@ func (s *Server) handleHolePunch(payload []byte, from *net.UDPAddr) {
 	}
 	dstIP := net.IP(payload[:4])
 
+	// 确保源地址是 IPv4
+	srcIP4 := from.IP.To4()
+	if srcIP4 == nil {
+		return // 不支持 IPv6 源地址
+	}
+
 	s.mu.RLock()
 	dst, ok := s.clients[dstIP.String()]
 	s.mu.RUnlock()
@@ -303,21 +327,39 @@ func (s *Server) handleHolePunch(payload []byte, from *net.UDPAddr) {
 	}
 
 	// 转发打洞包，附带源地址
-	punchData := make([]byte, 4+len(from.String()))
-	copy(punchData[:4], from.IP.To4())
-	copy(punchData[4:], []byte(from.String()))
+	addrStr := from.String()
+	punchData := make([]byte, 4+len(addrStr))
+	copy(punchData[:4], srcIP4)
+	copy(punchData[4:], []byte(addrStr))
 	s.send(protocol.Encode(protocol.TypeHolePunch, punchData), dst.PublicAddr)
 }
 
 // ── 广播对等节点信息 ────────────────────────────────────────────
 
 func (s *Server) broadcastPeerInfo() {
+	s.mu.RLock()
+	peers := s.buildPeerList()
+	s.mu.RUnlock()
+
 	for _, client := range s.clients {
-		s.sendPeerInfo(client.PublicAddr, client.VirtualIP)
+		selfIP := client.VirtualIP
+		filtered := &protocol.PeerInfoPayload{}
+		for _, p := range peers.Peers {
+			if !p.VirtualIP.Equal(selfIP) {
+				filtered.Peers = append(filtered.Peers, p)
+			}
+		}
+		s.send(protocol.Encode(protocol.TypePeerInfo, filtered.Marshal()), client.PublicAddr)
 	}
 }
 
-func (s *Server) sendPeerInfo(to *net.UDPAddr, selfIP net.IP) {
+func (s *Server) broadcastPeerInfoLocked() {
+	for _, client := range s.clients {
+		s.sendPeerInfoLocked(client.PublicAddr, client.VirtualIP)
+	}
+}
+
+func (s *Server) sendPeerInfoLocked(to *net.UDPAddr, selfIP net.IP) {
 	peers := &protocol.PeerInfoPayload{}
 	for _, c := range s.clients {
 		if c.VirtualIP.Equal(selfIP) {
@@ -330,6 +372,18 @@ func (s *Server) sendPeerInfo(to *net.UDPAddr, selfIP net.IP) {
 		})
 	}
 	s.send(protocol.Encode(protocol.TypePeerInfo, peers.Marshal()), to)
+}
+
+func (s *Server) buildPeerList() *protocol.PeerInfoPayload {
+	peers := &protocol.PeerInfoPayload{}
+	for _, c := range s.clients {
+		peers.Peers = append(peers.Peers, protocol.PeerInfoEntry{
+			VirtualIP:  c.VirtualIP,
+			PublicAddr: c.PublicAddr,
+			Username:   c.Username,
+		})
+	}
+	return peers
 }
 
 // ── IP 分配 ────────────────────────────────────────────────────
