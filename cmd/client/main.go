@@ -293,10 +293,7 @@ func (t *Tunnel) handleAuthChallenge(payload []byte) error {
 	}
 
 	packet := protocol.EncodeChecked(protocol.TypeAuthResponse, resp.Marshal())
-	_, err = t.conn.WriteToUDP(packet, t.serverAddr)
-	if err != nil {
-		return fmt.Errorf("发送认证响应失败: %w", err)
-	}
+	t.sendUDP(packet, t.serverAddr)
 
 	log.Printf("[tunnel] 已发送认证响应，等待服务器确认...")
 	return nil
@@ -432,6 +429,16 @@ func (t *Tunnel) receiveFromTUN(ctx context.Context) {
 
 		pkt := make([]byte, n)
 		copy(pkt, buf[:n])
+
+		// Validate IPv4 header: version must be 4, total length must match
+		if pkt[0]>>4 != 4 {
+			continue // not an IPv4 packet
+		}
+		ihl := int(pkt[0]&0x0F) * 4
+		if ihl < 20 || n < ihl {
+			continue // invalid header length
+		}
+
 		srcIP := net.IP(pkt[12:16])
 		dstIP := net.IP(pkt[16:20])
 		t.routePacket(pkt, srcIP, dstIP)
@@ -590,7 +597,7 @@ func saveConfig(cfg *Config) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, data, 0644)
+	return os.WriteFile(path, data, 0600) // 0600: owner-only, protect password
 }
 
 // ── Logging (file + stderr) ────────────────────────────────────
@@ -604,7 +611,7 @@ func setupLog() *os.File {
 	os.MkdirAll(logDir, 0755)
 	logPath := filepath.Join(logDir, "gametunnel.log")
 
-	f, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	f, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600) // 0600: owner-only
 	if err != nil {
 		log.SetOutput(os.Stderr)
 		return os.Stderr

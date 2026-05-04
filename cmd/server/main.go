@@ -267,9 +267,24 @@ func (s *Server) handlePacket(data []byte, from *net.UDPAddr) {
 
 // ── Registration (with optional HMAC auth) ─────────────────────
 
+const (
+	maxUsernameLen = 32
+	maxRoomIDLen   = 32
+)
+
 func (s *Server) handleRegister(payload []byte, from *net.UDPAddr) {
 	reg, err := protocol.UnmarshalRegister(payload)
 	if err != nil {
+		return
+	}
+
+	// Validate input lengths to prevent memory abuse
+	if len(reg.Username) == 0 || len(reg.Username) > maxUsernameLen {
+		s.sendKick(from, "用户名无效")
+		return
+	}
+	if len(reg.RoomID) == 0 || len(reg.RoomID) > maxRoomIDLen {
+		s.sendKick(from, "房间ID无效")
 		return
 	}
 
@@ -382,8 +397,8 @@ func (s *Server) handleAuthResponse(payload []byte, from *net.UDPAddr) {
 		return
 	}
 
-	// Check challenge expiry (30 seconds)
-	if time.Since(c.challengeAt) > 30*time.Second {
+	// Check challenge expiry (15 seconds)
+	if time.Since(c.challengeAt) > 15*time.Second {
 		delete(s.addrMap, from.String())
 		s.pendingAuth--
 		s.mu.Unlock()
@@ -455,7 +470,7 @@ func (s *Server) keepaliveLoop(ctx context.Context) {
 		}
 		// Also clean up stale pending auth entries
 		for addrStr, c := range s.addrMap {
-			if c.auth == authChallengeSent && now.Sub(c.challengeAt) > 60*time.Second {
+			if c.auth == authChallengeSent && now.Sub(c.challengeAt) > 30*time.Second {
 				delete(s.addrMap, addrStr)
 				s.pendingAuth--
 			}
@@ -501,7 +516,14 @@ func (s *Server) handleRelay(payload []byte, from *net.UDPAddr) {
 		return
 	}
 
+	srcIP := net.IP(payload[0:4])
 	dstIP := net.IP(payload[4:8])
+
+	// Validate srcIP matches the sender's virtual IP (anti-spoofing)
+	if !srcIP.Equal(sender.VirtualIP) {
+		return // drop spoofed packets
+	}
+
 	encoded := protocol.EncodeChecked(protocol.TypeData, payload) // re-wrap as-is, no decode
 
 	// Broadcast
