@@ -43,9 +43,15 @@ func New(cfg Config) (*Device, error) {
 		return nil, fmt.Errorf("virtual IP is required")
 	}
 
-	tunDev, name, err := tun.CreateTUN("GameTunnel", cfg.MTU)
+	tunDev, err := tun.CreateTUN("GameTunnel", cfg.MTU)
 	if err != nil {
 		return nil, fmt.Errorf("create TUN: %w", err)
+	}
+
+	name, err := tunDev.Name()
+	if err != nil {
+		tunDev.Close()
+		return nil, fmt.Errorf("get TUN name: %w", err)
 	}
 
 	dev := &Device{
@@ -107,7 +113,6 @@ func (d *Device) Read(buf []byte) (int, error) {
 
 // Write writes an IP packet to the TUN device.
 func (d *Device) Write(data []byte) (int, error) {
-	sizes := []int{len(data)}
 	packets := [][]byte{data}
 	_, err := d.tunDev.Write(packets, 0)
 	if err != nil {
