@@ -1,7 +1,7 @@
 # GameTunnel Makefile
 #
 # Server: Linux (公网 VPS)
-# Client: Windows only (星际争霸1玩家)
+# Client: Windows CLI tool
 
 .PHONY: all server client clean install-server
 
@@ -27,17 +27,17 @@ server-linux-arm64:
 install-server: server
 	install -m 755 $(SERVER) /usr/local/bin/gtunnel-server
 
-# ── Client (Windows only) ─────────────────────────────────────
+# ── Client (Windows CLI) ───────────────────────────────────────
 
 client:
 	@mkdir -p $(BINARY_DIR)
-	GOOS=windows GOARCH=amd64 go build -ldflags -H=windowsgui -o $(CLIENT) ./cmd/client
+	GOOS=windows GOARCH=amd64 go build -o $(CLIENT) ./cmd/client
 
 client-all: client client-arm64
 
 client-arm64:
 	@mkdir -p $(BINARY_DIR)
-	GOOS=windows GOARCH=arm64 go build -ldflags -H=windowsgui -o $(BINARY_DIR)/gtunnel-client-arm64.exe ./cmd/client
+	GOOS=windows GOARCH=arm64 go build -o $(BINARY_DIR)/gtunnel-client-arm64.exe ./cmd/client
 
 # ── Dev / Test ─────────────────────────────────────────────────
 

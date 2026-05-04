@@ -1,39 +1,32 @@
 // GameTunnel Client — 通用局域网游戏隧道 (Windows)
 //
-// GUI 模式：系统托盘图标，右键菜单操作。
+// CLI 模式：直接在终端运行，Ctrl+C 断开。
 //
 // Usage:
 //
-//	gtunnel-client.exe
 //	gtunnel-client.exe -server 1.2.3.4:4700
+//	gtunnel-client.exe -server 1.2.3.4:4700 -name Player1 -room myroom
+//	gtunnel-client.exe  (使用配置文件)
 package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"log"
 	"net"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"sync"
+	"syscall"
 	"time"
 
-	"github.com/holipay/gametunnel/internal/gui"
 	"github.com/holipay/gametunnel/internal/netutil"
 	"github.com/holipay/gametunnel/internal/protocol"
 	"github.com/holipay/gametunnel/internal/tun"
 )
-
-// ── UI 接口（解耦网络与 GUI 关注点）────────────────────────────
-
-// UI abstracts the display layer so Tunnel doesn't depend on a concrete GUI.
-type UI interface {
-	UpdateState(state gui.State)
-	SetIP(ip string)
-	SetPlayers(count int)
-	SetNotice(text string)
-}
 
 // ── Peer State ─────────────────────────────────────────────────
 
@@ -47,6 +40,7 @@ type Peer struct {
 
 type Tunnel struct {
 	conn       *net.UDPConn
+	connMu     sync.Mutex // protects WriteToUDP (not safe for concurrent use)
 	serverAddr *net.UDPAddr
 	tunDev     *tun.Device
 	virtualIP  net.IP
@@ -54,23 +48,19 @@ type Tunnel struct {
 	subnetMask net.IPMask
 	peers      map[string]*Peer
 	mu         sync.RWMutex
-	cancel     context.CancelFunc // 取消当前连接
 	username   string
 	roomID     string
-	ui         UI
 }
 
 func main() {
-	// CLI flags (override config)
 	serverFlag := flag.String("server", "", "服务器地址 (host:port)")
 	nameFlag := flag.String("name", "", "玩家名称")
 	roomFlag := flag.String("room", "", "房间ID")
+	mtuFlag := flag.Int("mtu", 1400, "隧道 MTU")
 	flag.Parse()
 
-	// Load config
-	cfg := gui.LoadConfig()
-
-	// CLI flags override config
+	// Load config (CLI flags override)
+	cfg := loadConfig()
 	if *serverFlag != "" {
 		cfg.ServerAddr = *serverFlag
 	}
@@ -80,110 +70,83 @@ func main() {
 	if *roomFlag != "" {
 		cfg.RoomID = *roomFlag
 	}
-
-	// If no server configured, save default
-	firstRun := false
 	if cfg.ServerAddr == "" {
 		cfg.ServerAddr = "127.0.0.1:4700"
-		gui.SaveConfig(cfg)
-		log.Printf("[tunnel] 首次运行，已写入默认配置: %s", gui.ConfigPath())
-		firstRun = true
+		saveConfig(cfg)
+		fmt.Fprintf(os.Stderr, "首次运行，已写入默认配置。请指定服务器地址:\n")
+		fmt.Fprintf(os.Stderr, "  gtunnel-client.exe -server 你的服务器IP:4700\n")
+		os.Exit(1)
 	}
 
-	// Set up logging to file (since we're a GUI app)
+	// Setup logging
 	logFile := setupLog()
 	defer logFile.Close()
 
-	// Create GUI
-	g := gui.New(cfg)
+	// Setup signal handling
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
-	// Show first-run notice in GUI
-	if firstRun {
-		go func() {
-			time.Sleep(500 * time.Millisecond)
-			g.SetNotice(fmt.Sprintf("首次运行，请在设置中配置服务器地址 (默认: %s)", cfg.ServerAddr))
-		}()
-	}
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 
-	// Create tunnel (GUI satisfies UI interface)
 	t := &Tunnel{
 		username: cfg.PlayerName,
 		roomID:   cfg.RoomID,
 		peers:    make(map[string]*Peer),
-		ui:       g,
 	}
 
-	// Wire up callbacks
-	g.SetCallbacks(
-		func() { go t.Connect(cfg.ServerAddr) },
-		func() { t.Disconnect() },
-	)
+	// Connect
+	go func() {
+		<-sigCh
+		fmt.Fprintln(os.Stderr, "\n正在断开...")
+		cancel()
+		t.Disconnect()
+	}()
 
-	// Run GUI (blocks until quit)
-	g.Run()
+	fmt.Printf("🎮 GameTunnel 客户端\n")
+	fmt.Printf("   服务器: %s\n", cfg.ServerAddr)
+	fmt.Printf("   玩家:   %s\n", cfg.RoomID)
+	fmt.Printf("   房间:   %s\n", cfg.RoomID)
+	fmt.Printf("\n正在连接...\n")
+
+	t.Connect(ctx, cfg.ServerAddr, *mtuFlag)
 }
 
-// ── Connect / Disconnect（单 context 模式，无竞态）─────────────
+// ── Connect / Disconnect ───────────────────────────────────────
 
-func (t *Tunnel) Connect(serverAddr string) {
-	// 取消上一次连接（安全幂等）
-	if t.cancel != nil {
-		t.cancel()
-	}
-
-	ctx, cancel := context.WithCancel(context.Background())
-	t.cancel = cancel
-	defer cancel()
-
-	t.ui.UpdateState(gui.StateConnecting)
-
-	// Parse server address
+func (t *Tunnel) Connect(ctx context.Context, serverAddr string, mtu int) {
 	sAddr, err := net.ResolveUDPAddr("udp4", serverAddr)
 	if err != nil {
-		log.Printf("[tunnel] 服务器地址无效: %v", err)
-		t.ui.UpdateState(gui.StateDisconnected)
-		return
+		log.Fatalf("服务器地址无效: %v", err)
 	}
-
-	// Bind UDP
-	conn, err := net.ListenUDP("udp4", &net.UDPAddr{})
-	if err != nil {
-		log.Printf("[tunnel] 绑定 UDP 失败: %v", err)
-		t.ui.UpdateState(gui.StateDisconnected)
-		return
-	}
-	t.conn = conn
 	t.serverAddr = sAddr
 
-	// Register
+	conn, err := net.ListenUDP("udp4", &net.UDPAddr{})
+	if err != nil {
+		log.Fatalf("绑定 UDP 失败: %v", err)
+	}
+	t.conn = conn
+
 	if err := t.register(ctx); err != nil {
-		log.Printf("[tunnel] 注册失败: %v", err)
-		conn.Close()
-		t.ui.UpdateState(gui.StateDisconnected)
-		return
+		log.Fatalf("注册失败: %v", err)
 	}
 
-	// Create TUN
 	tunCfg := tun.Config{
 		VirtualIP:  t.virtualIP,
 		SubnetMask: t.subnetMask,
 		ServerIP:   t.serverIP,
-		MTU:        1400,
+		MTU:        mtu,
 	}
 	tunDev, err := tun.New(tunCfg)
 	if err != nil {
-		log.Printf("[tunnel] 创建 TUN 失败: %v", err)
-		conn.Close()
-		t.ui.UpdateState(gui.StateDisconnected)
-		return
+		log.Fatalf("创建 TUN 失败: %v", err)
 	}
 	t.tunDev = tunDev
 	defer tunDev.Close()
 
-	// Update GUI
-	t.ui.SetIP(t.virtualIP.String())
-	t.ui.UpdateState(gui.StateConnected)
-	log.Printf("[tunnel] 已连接: %s → %s", t.virtualIP, serverAddr)
+	fmt.Printf("\n✅ 已连接! 虚拟IP: %s\n", t.virtualIP)
+	fmt.Printf("   打开游戏，进入局域网模式即可\n")
+	fmt.Printf("   按 Ctrl+C 断开\n\n")
 
 	// Run tunnel loops
 	go t.receiveFromServer(ctx)
@@ -191,16 +154,12 @@ func (t *Tunnel) Connect(serverAddr string) {
 	go t.keepaliveLoop(ctx)
 	go t.peerDiscoveryLoop(ctx)
 
-	// Wait for disconnect
 	<-ctx.Done()
 	log.Printf("[tunnel] 断开连接")
-	t.ui.UpdateState(gui.StateDisconnected)
+	fmt.Println("已断开。")
 }
 
 func (t *Tunnel) Disconnect() {
-	if t.cancel != nil {
-		t.cancel()
-	}
 	if t.conn != nil {
 		t.conn.Close()
 	}
@@ -311,7 +270,7 @@ func (t *Tunnel) handlePeerInfo(payload []byte) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
-	newPeers := make(map[string]*Peer)
+	newPeers := make(map[string]*Peer, len(info.Peers))
 	for _, entry := range info.Peers {
 		key := entry.VirtualIP.String()
 		if existing, ok := t.peers[key]; ok {
@@ -329,8 +288,6 @@ func (t *Tunnel) handlePeerInfo(payload []byte) {
 		}
 	}
 	t.peers = newPeers
-
-	t.ui.SetPlayers(len(t.peers))
 }
 
 // ── Data from Server ───────────────────────────────────────────
@@ -341,7 +298,10 @@ func (t *Tunnel) handleDataFromServer(payload []byte) {
 		return
 	}
 	if len(dp.Data) > 0 && t.tunDev != nil {
-		t.tunDev.Write(dp.Data)
+		// Copy to avoid buffer reuse issues
+		pkt := make([]byte, len(dp.Data))
+		copy(pkt, dp.Data)
+		t.tunDev.Write(pkt)
 	}
 }
 
@@ -360,10 +320,7 @@ func (t *Tunnel) startHolePunch(peerIP net.IP) {
 	packet := protocol.Encode(protocol.TypeHolePunch, punchPayload)
 
 	for i := 0; i < 5; i++ {
-		if t.conn == nil {
-			return
-		}
-		t.conn.WriteToUDP(packet, peer.PublicAddr)
+		t.sendUDP(packet, peer.PublicAddr)
 		time.Sleep(200 * time.Millisecond)
 	}
 }
@@ -422,7 +379,7 @@ func (t *Tunnel) routePacket(pkt []byte, srcIP, dstIP net.IP) {
 
 	if ok && peer.PublicAddr != nil {
 		dp := &protocol.DataPayload{SrcIP: srcIP, DstIP: dstIP, Data: pkt}
-		t.conn.WriteToUDP(protocol.Encode(protocol.TypeData, dp.Marshal()), peer.PublicAddr)
+		t.sendUDP(protocol.Encode(protocol.TypeData, dp.Marshal()), peer.PublicAddr)
 	} else {
 		t.sendToServer(pkt, srcIP, dstIP)
 	}
@@ -435,20 +392,30 @@ func (t *Tunnel) relayBroadcast(pkt []byte, srcIP net.IP) {
 		Data:  pkt,
 	}
 	encoded := protocol.Encode(protocol.TypeData, dp.Marshal())
-	t.conn.WriteToUDP(encoded, t.serverAddr)
+	t.sendUDP(encoded, t.serverAddr)
 
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 	for _, peer := range t.peers {
 		if peer.PublicAddr != nil {
-			t.conn.WriteToUDP(encoded, peer.PublicAddr)
+			t.sendUDP(encoded, peer.PublicAddr)
 		}
 	}
 }
 
 func (t *Tunnel) sendToServer(pkt []byte, srcIP, dstIP net.IP) {
 	dp := &protocol.DataPayload{SrcIP: srcIP, DstIP: dstIP, Data: pkt}
-	t.conn.WriteToUDP(protocol.Encode(protocol.TypeData, dp.Marshal()), t.serverAddr)
+	t.sendUDP(protocol.Encode(protocol.TypeData, dp.Marshal()), t.serverAddr)
+}
+
+// ── sendUDP — thread-safe UDP write ────────────────────────────
+
+func (t *Tunnel) sendUDP(data []byte, addr *net.UDPAddr) {
+	t.connMu.Lock()
+	defer t.connMu.Unlock()
+	if t.conn != nil {
+		t.conn.WriteToUDP(data, addr)
+	}
 }
 
 // ── Keepalive ──────────────────────────────────────────────────
@@ -462,9 +429,7 @@ func (t *Tunnel) keepaliveLoop(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			if t.conn != nil {
-				t.conn.WriteToUDP(packet, t.serverAddr)
-			}
+			t.sendUDP(packet, t.serverAddr)
 		}
 	}
 }
@@ -480,14 +445,74 @@ func (t *Tunnel) peerDiscoveryLoop(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			if t.conn != nil {
-				t.conn.WriteToUDP(packet, t.serverAddr)
-			}
+			t.sendUDP(packet, t.serverAddr)
 		}
 	}
 }
 
-// ── Helpers ────────────────────────────────────────────────────
+// ── Config (simplified, no GUI dependency) ─────────────────────
+
+type Config struct {
+	ServerAddr string `json:"server_addr"`
+	PlayerName string `json:"player_name"`
+	RoomID     string `json:"room_id"`
+}
+
+func configPath() string {
+	appData := os.Getenv("APPDATA")
+	if appData == "" {
+		appData = filepath.Join(os.Getenv("USERPROFILE"), "AppData", "Roaming")
+	}
+	return filepath.Join(appData, "GameTunnel", "config.json")
+}
+
+func loadConfig() *Config {
+	hostname, _ := os.Hostname()
+	cfg := &Config{
+		ServerAddr: "",
+		PlayerName: hostname,
+		RoomID:     "default",
+	}
+	data, err := os.ReadFile(configPath())
+	if err != nil {
+		return cfg
+	}
+	// Best-effort parse, ignore fields we don't know
+	type raw struct {
+		ServerAddr  string `json:"server_addr"`
+		PlayerName  string `json:"player_name"`
+		RoomID      string `json:"room_id"`
+		AutoConnect *bool  `json:"auto_connect,omitempty"` // ignored
+	}
+	var r raw
+	if err := json.Unmarshal(data, &r); err == nil {
+		if r.ServerAddr != "" {
+			cfg.ServerAddr = r.ServerAddr
+		}
+		if r.PlayerName != "" {
+			cfg.PlayerName = r.PlayerName
+		}
+		if r.RoomID != "" {
+			cfg.RoomID = r.RoomID
+		}
+	}
+	return cfg
+}
+
+func saveConfig(cfg *Config) error {
+	path := configPath()
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return err
+	}
+	data, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, data, 0644)
+}
+
+// ── Logging ────────────────────────────────────────────────────
 
 func setupLog() *os.File {
 	appData := os.Getenv("APPDATA")

@@ -6,7 +6,9 @@
 
 param(
     [Parameter(Mandatory=$true)]
-    [string]$Server
+    [string]$Server,
+    [string]$Name = $env:COMPUTERNAME,
+    [string]$Room = "default"
 )
 
 $ErrorActionPreference = "Stop"
@@ -44,22 +46,37 @@ if ($currentPath -notlike "*$InstallDir*") {
     Write-Host "  ✅ 已添加到 PATH" -ForegroundColor Green
 }
 
-# 创建桌面快捷方式
+# 创建桌面快捷方式（CLI 模式：cmd.exe 窗口保持打开）
 $WshShell = New-Object -ComObject WScript.Shell
 $Shortcut = $WshShell.CreateShortcut("$env:USERPROFILE\Desktop\GameTunnel.lnk")
 $Shortcut.TargetPath = "cmd.exe"
-$Shortcut.Arguments = "/k `"$ExePath`" -server ${Server}:4700"
+$Shortcut.Arguments = "/k `"$ExePath`" -server ${Server}:4700 -name `"$Name`" -room `"$Room`""
 $Shortcut.WorkingDirectory = $InstallDir
 $Shortcut.Description = "GameTunnel - 局域网游戏隧道"
 $Shortcut.Save()
 
+# 写入配置文件（这样不带参数也能用）
+$ConfigDir = "$env:APPDATA\GameTunnel"
+if (!(Test-Path $ConfigDir)) {
+    New-Item -ItemType Directory -Path $ConfigDir -Force | Out-Null
+}
+$Config = @{
+    server_addr = "${Server}:4700"
+    player_name = $Name
+    room_id     = $Room
+} | ConvertTo-Json
+Set-Content -Path "$ConfigDir\config.json" -Value $Config -Encoding UTF8
+Write-Host "  ✅ 已写入配置 $ConfigDir\config.json" -ForegroundColor Green
+
 Write-Host ""
 Write-Host "  ✅ 安装完成！" -ForegroundColor Green
 Write-Host ""
-Write-Host "  连接方式（二选一）:" -ForegroundColor White
+Write-Host "  连接方式（三选一）:" -ForegroundColor White
 Write-Host "    1. 双击桌面的 GameTunnel 快捷方式" -ForegroundColor White
 Write-Host "    2. 在 CMD/PowerShell 中运行:" -ForegroundColor White
 Write-Host "       gtunnel-client.exe -server ${Server}:4700" -ForegroundColor Cyan
+Write-Host "    3. 直接运行（使用已保存的配置）:" -ForegroundColor White
+Write-Host "       gtunnel-client.exe" -ForegroundColor Cyan
 Write-Host ""
 Write-Host "  连接成功后打开游戏，进入局域网模式即可" -ForegroundColor White
 Write-Host ""
