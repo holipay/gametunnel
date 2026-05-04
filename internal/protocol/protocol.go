@@ -43,7 +43,7 @@ const (
 	TypeHolePunch      byte = 0x05 // client ↔ client: NAT hole punch
 	TypeData           byte = 0x06 // client ↔ server: relayed payload
 	TypeKeepAlive      byte = 0x07 // client → server: keep connection alive
-	TypeAuthChallenge  byte = 0x08 // server → client: auth challenge (nonce + salt)
+	TypeAuthChallenge  byte = 0x08 // server → client: auth challenge (nonce)
 	TypeAuthResponse   byte = 0x09 // client → server: auth HMAC response
 	TypeKick           byte = 0x0A // server → client: kicked / error
 )
@@ -177,41 +177,26 @@ func VerifyAuthHMAC(key, clientHMAC []byte, challenge []byte, roomID, username s
 // AuthChallengePayload is sent by the server to initiate authentication.
 type AuthChallengePayload struct {
 	Challenge []byte // 16-byte random nonce
-	RoomSalt  []byte // 16-byte random salt (unused in current HMAC, reserved for future KDF)
 }
 
 func (a *AuthChallengePayload) Marshal() []byte {
-	buf := make([]byte, 2+len(a.Challenge)+2+len(a.RoomSalt))
-	off := 0
-	binary.LittleEndian.PutUint16(buf[off:], uint16(len(a.Challenge)))
-	off += 2
-	copy(buf[off:], a.Challenge)
-	off += len(a.Challenge)
-	binary.LittleEndian.PutUint16(buf[off:], uint16(len(a.RoomSalt)))
-	off += 2
-	copy(buf[off:], a.RoomSalt)
+	buf := make([]byte, 2+len(a.Challenge))
+	binary.LittleEndian.PutUint16(buf, uint16(len(a.Challenge)))
+	copy(buf[2:], a.Challenge)
 	return buf
 }
 
 func UnmarshalAuthChallenge(data []byte) (*AuthChallengePayload, error) {
-	if len(data) < 4 {
+	if len(data) < 2 {
 		return nil, ErrPacketTooShort
 	}
-	off := 0
-	clen := int(binary.LittleEndian.Uint16(data[off:]))
-	off += 2
-	if len(data) < off+clen+2 {
+	clen := int(binary.LittleEndian.Uint16(data[0:]))
+	if len(data) < 2+clen {
 		return nil, ErrPacketTooShort
 	}
-	challenge := append([]byte(nil), data[off:off+clen]...)
-	off += clen
-	slen := int(binary.LittleEndian.Uint16(data[off:]))
-	off += 2
-	if len(data) < off+slen {
-		return nil, ErrPacketTooShort
-	}
-	salt := append([]byte(nil), data[off:off+slen]...)
-	return &AuthChallengePayload{Challenge: challenge, RoomSalt: salt}, nil
+	challenge := make([]byte, clen)
+	copy(challenge, data[2:2+clen])
+	return &AuthChallengePayload{Challenge: challenge}, nil
 }
 
 // ── Auth Response Payload (client → server) ────────────────────
@@ -266,7 +251,8 @@ func UnmarshalAuthResponse(data []byte) (*AuthResponsePayload, error) {
 	if len(data) < off+hmacLen {
 		return nil, ErrPacketTooShort
 	}
-	hmacVal := append([]byte(nil), data[off:off+hmacLen]...)
+	hmacVal := make([]byte, hmacLen)
+	copy(hmacVal, data[off:off+hmacLen])
 	return &AuthResponsePayload{RoomID: roomID, Username: username, HMAC: hmacVal}, nil
 }
 
@@ -447,7 +433,6 @@ func UnmarshalData(data []byte) (*DataPayload, error) {
 	if len(data) < 8 {
 		return nil, ErrPacketTooShort
 	}
-	// Copy Data to avoid sharing the input buffer (caller may reuse it).
 	pktData := make([]byte, len(data)-8)
 	copy(pktData, data[8:])
 	return &DataPayload{

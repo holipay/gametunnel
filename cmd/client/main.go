@@ -202,24 +202,16 @@ func (t *Tunnel) register(ctx context.Context) error {
 		default:
 		}
 
-		_, err := t.conn.WriteToUDP(packet, t.serverAddr)
-		if err != nil {
-			return fmt.Errorf("发送注册包失败: %w", err)
-		}
+		t.sendUDP(packet, t.serverAddr)
 
-		buf := make([]byte, 1500)
-		n, _, err := t.conn.ReadFromUDP(buf)
+		// Wait for response (AssignIP, AuthChallenge, or Kick)
+		msg, err := t.readResponse(ctx)
 		if err != nil {
 			if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
 				log.Printf("[tunnel] 注册超时，重试 %d/3...", attempt+1)
 				continue
 			}
-			return fmt.Errorf("读取响应失败: %w", err)
-		}
-
-		msg, err := protocol.DecodeChecked(buf[:n])
-		if err != nil {
-			return fmt.Errorf("解码响应失败: %w", err)
+			return err
 		}
 
 		switch msg.Type {
@@ -229,9 +221,11 @@ func (t *Tunnel) register(ctx context.Context) error {
 			if err := t.handleAuthChallenge(msg.Payload); err != nil {
 				return err
 			}
-			// Auth response sent, wait for AssignIP on next loop iteration.
-			// Reset deadline for the auth response wait.
+			// Auth response sent, wait for AssignIP.
+			// Reset deadline but DON'T consume an attempt — the server
+			// needs time to verify, and retrying the register would be wrong.
 			t.conn.SetReadDeadline(time.Now().Add(10 * time.Second))
+			attempt-- // don't count auth round as a retry
 			continue
 		case protocol.TypeKick:
 			kick, _ := protocol.UnmarshalKick(msg.Payload)
@@ -239,6 +233,29 @@ func (t *Tunnel) register(ctx context.Context) error {
 		}
 	}
 	return fmt.Errorf("注册失败（重试3次）")
+}
+
+// readResponse reads and decodes one protocol message from the server.
+func (t *Tunnel) readResponse(ctx context.Context) (*protocol.Message, error) {
+	for {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		default:
+		}
+
+		buf := make([]byte, 1500)
+		n, _, err := t.conn.ReadFromUDP(buf)
+		if err != nil {
+			return nil, err
+		}
+
+		msg, err := protocol.DecodeChecked(buf[:n])
+		if err != nil {
+			return nil, fmt.Errorf("解码响应失败: %w", err)
+		}
+		return msg, nil
+	}
 }
 
 func (t *Tunnel) handleAssignIP(payload []byte) error {
@@ -365,8 +382,7 @@ func (t *Tunnel) handleDataFromServer(payload []byte) {
 		return
 	}
 	if len(dp.Data) > 0 && t.tunDev != nil {
-		// UnmarshalData already copies, but be explicit for safety
-		t.tunDev.Write(dp.Data)
+		t.tunDev.Write(dp.Data) // UnmarshalData already copies Data into a new slice
 	}
 }
 

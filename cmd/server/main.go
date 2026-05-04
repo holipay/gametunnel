@@ -50,9 +50,9 @@ type Client struct {
 	LastSeen   time.Time
 
 	// Auth state (only used when server has a room password)
-	auth         authState
-	challenge    []byte    // 16-byte nonce
-	challengeAt  time.Time // for expiry
+	auth        authState
+	challenge   []byte    // 16-byte nonce
+	challengeAt time.Time // for expiry
 }
 
 // ── Server ─────────────────────────────────────────────────────
@@ -72,12 +72,25 @@ type Server struct {
 
 	// Rate limiting: per-client packet count per window
 	rateMu    sync.Mutex
-	rateCount map[string]int // addr string → count
+	rateCount map[rateKey]int
 	rateTick  *time.Ticker
 
 	// Auth flood protection: limit pending (unauthenticated) connections
 	pendingAuth int // count of entries in addrMap with auth == authChallengeSent
 	maxPending  int // max allowed pending auth entries (0 = unlimited when no password)
+}
+
+// rateKey is a fixed-size key for rate limiting, avoiding string allocation per packet.
+type rateKey struct {
+IP   [4]byte
+Port uint16
+}
+
+func addrToRateKey(addr *net.UDPAddr) rateKey {
+	var k rateKey
+	copy(k.IP[:], addr.IP.To4())
+	k.Port = uint16(addr.Port)
+	return k
 }
 
 func main() {
@@ -125,7 +138,7 @@ func main() {
 		sem:        semaphore.NewWeighted(200),
 		roomPass:   *roomPass,
 		authKey:    authKey,
-		rateCount:  make(map[string]int),
+		rateCount:  make(map[rateKey]int),
 		maxPending: *maxPlayers * 3, // allow 3x max players for pending auth
 	}
 
@@ -204,7 +217,7 @@ const (
 )
 
 func (s *Server) checkRate(addr *net.UDPAddr) bool {
-	key := addr.String()
+	key := addrToRateKey(addr)
 	s.rateMu.Lock()
 	s.rateCount[key]++
 	count := s.rateCount[key]
@@ -221,7 +234,7 @@ func (s *Server) rateLimitLoop(ctx context.Context) {
 			return
 		case <-s.rateTick.C:
 			s.rateMu.Lock()
-			s.rateCount = make(map[string]int)
+			s.rateCount = make(map[rateKey]int)
 			s.rateMu.Unlock()
 		}
 	}
@@ -349,14 +362,7 @@ func (s *Server) sendAuthChallengeLocked(reg *protocol.RegisterPayload, from *ne
 	s.pendingAuth++
 	s.mu.Unlock()
 
-	// Send challenge (with a random salt reserved for future use)
-	salt := make([]byte, 16)
-	copy(salt, challenge[:16]) // reuse nonce as salt for simplicity
-
-	acp := &protocol.AuthChallengePayload{
-		Challenge: challenge,
-		RoomSalt:  salt,
-	}
+	acp := &protocol.AuthChallengePayload{Challenge: challenge}
 	s.sendChecked(protocol.TypeAuthChallenge, acp.Marshal(), from)
 }
 
@@ -478,6 +484,9 @@ func (s *Server) handlePeerRequest(from *net.UDPAddr) {
 
 // ── Relay (core) ───────────────────────────────────────────────
 
+// handleRelay forwards a data packet. For unicast, it avoids re-encoding
+// by directly wrapping the original payload. For broadcast, it must read
+// the DstIP from the payload header to determine recipients.
 func (s *Server) handleRelay(payload []byte, from *net.UDPAddr) {
 	// Verify sender is registered
 	s.mu.RLock()
@@ -487,21 +496,16 @@ func (s *Server) handleRelay(payload []byte, from *net.UDPAddr) {
 		return // drop packets from unauthenticated clients
 	}
 
-	dp, err := protocol.UnmarshalData(payload)
-	if err != nil {
+	// payload is DataPayload: [4B srcIP][4B dstIP][data...]
+	if len(payload) < 8 {
 		return
 	}
 
-	dstKey := dp.DstIP.String()
-	relayPayload := &protocol.DataPayload{
-		SrcIP: dp.SrcIP,
-		DstIP: dp.DstIP,
-		Data:  dp.Data,
-	}
-	encoded := protocol.EncodeChecked(protocol.TypeData, relayPayload.Marshal())
+	dstIP := net.IP(payload[4:8])
+	encoded := protocol.EncodeChecked(protocol.TypeData, payload) // re-wrap as-is, no decode
 
 	// Broadcast
-	if dstKey == "255.255.255.255" || netutil.IsBroadcast(dp.DstIP, s.subnet) {
+	if netutil.IsBroadcast(dstIP, s.subnet) {
 		s.mu.RLock()
 		targets := make([]*net.UDPAddr, 0, len(s.clients))
 		for _, c := range s.clients {
@@ -519,7 +523,7 @@ func (s *Server) handleRelay(payload []byte, from *net.UDPAddr) {
 
 	// Unicast
 	s.mu.RLock()
-	dst, ok := s.clients[dstKey]
+	dst, ok := s.clients[dstIP.String()]
 	s.mu.RUnlock()
 
 	if !ok {
