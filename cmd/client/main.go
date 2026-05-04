@@ -5,7 +5,7 @@
 // Usage:
 //
 //	gtunnel-client.exe -server 1.2.3.4:4700
-//	gtunnel-client.exe -server 1.2.3.4:4700 -name Player1 -room myroom
+//	gtunnel-client.exe -server 1.2.3.4:4700 -name Player1 -room myroom -password secret
 //	gtunnel-client.exe  (使用配置文件)
 package main
 
@@ -27,6 +27,9 @@ import (
 	"github.com/holipay/gametunnel/internal/protocol"
 	"github.com/holipay/gametunnel/internal/tun"
 )
+
+// Version is set at build time via -ldflags.
+var Version = "dev"
 
 // ── Peer State ─────────────────────────────────────────────────
 
@@ -50,14 +53,22 @@ type Tunnel struct {
 	mu         sync.RWMutex
 	username   string
 	roomID     string
+	roomPass   string
 }
 
 func main() {
 	serverFlag := flag.String("server", "", "服务器地址 (host:port)")
 	nameFlag := flag.String("name", "", "玩家名称")
 	roomFlag := flag.String("room", "", "房间ID")
+	passFlag := flag.String("password", "", "房间密码")
 	mtuFlag := flag.Int("mtu", 1400, "隧道 MTU")
+	versionFlag := flag.Bool("version", false, "显示版本")
 	flag.Parse()
+
+	if *versionFlag {
+		fmt.Printf("gtunnel-client %s\n", Version)
+		os.Exit(0)
+	}
 
 	// Load config (CLI flags override)
 	cfg := loadConfig()
@@ -70,6 +81,9 @@ func main() {
 	if *roomFlag != "" {
 		cfg.RoomID = *roomFlag
 	}
+	if *passFlag != "" {
+		cfg.RoomPassword = *passFlag
+	}
 	if cfg.ServerAddr == "" {
 		cfg.ServerAddr = "127.0.0.1:4700"
 		saveConfig(cfg)
@@ -78,7 +92,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Setup logging
+	// Setup logging (file + stderr)
 	logFile := setupLog()
 	defer logFile.Close()
 
@@ -92,10 +106,10 @@ func main() {
 	t := &Tunnel{
 		username: cfg.PlayerName,
 		roomID:   cfg.RoomID,
+		roomPass: cfg.RoomPassword,
 		peers:    make(map[string]*Peer),
 	}
 
-	// Connect
 	go func() {
 		<-sigCh
 		fmt.Fprintln(os.Stderr, "\n正在断开...")
@@ -103,10 +117,15 @@ func main() {
 		t.Disconnect()
 	}()
 
-	fmt.Printf("🎮 GameTunnel 客户端\n")
+	fmt.Printf("🎮 GameTunnel 客户端 %s\n", Version)
 	fmt.Printf("   服务器: %s\n", cfg.ServerAddr)
-	fmt.Printf("   玩家:   %s\n", cfg.RoomID)
+	fmt.Printf("   玩家:   %s\n", cfg.PlayerName)
 	fmt.Printf("   房间:   %s\n", cfg.RoomID)
+	if cfg.RoomPassword != "" {
+		fmt.Printf("   认证:   HMAC 密码验证\n")
+	} else {
+		fmt.Printf("   认证:   无\n")
+	}
 	fmt.Printf("\n正在连接...\n")
 
 	t.Connect(ctx, cfg.ServerAddr, *mtuFlag)
@@ -148,7 +167,6 @@ func (t *Tunnel) Connect(ctx context.Context, serverAddr string, mtu int) {
 	fmt.Printf("   打开游戏，进入局域网模式即可\n")
 	fmt.Printf("   按 Ctrl+C 断开\n\n")
 
-	// Run tunnel loops
 	go t.receiveFromServer(ctx)
 	go t.receiveFromTUN(ctx)
 	go t.keepaliveLoop(ctx)
@@ -165,14 +183,14 @@ func (t *Tunnel) Disconnect() {
 	}
 }
 
-// ── Registration ───────────────────────────────────────────────
+// ── Registration (with HMAC auth support) ──────────────────────
 
 func (t *Tunnel) register(ctx context.Context) error {
 	reg := &protocol.RegisterPayload{
 		RoomID:   t.roomID,
 		Username: t.username,
 	}
-	packet := protocol.Encode(protocol.TypeRegister, reg.Marshal())
+	packet := protocol.EncodeChecked(protocol.TypeRegister, reg.Marshal())
 
 	t.conn.SetReadDeadline(time.Now().Add(10 * time.Second))
 	defer t.conn.SetReadDeadline(time.Time{})
@@ -199,27 +217,72 @@ func (t *Tunnel) register(ctx context.Context) error {
 			return fmt.Errorf("读取响应失败: %w", err)
 		}
 
-		msg, err := protocol.Decode(buf[:n])
+		msg, err := protocol.DecodeChecked(buf[:n])
 		if err != nil {
 			return fmt.Errorf("解码响应失败: %w", err)
 		}
 
 		switch msg.Type {
 		case protocol.TypeAssignIP:
-			assign, err := protocol.UnmarshalAssignIP(msg.Payload)
-			if err != nil {
-				return fmt.Errorf("解析IP分配失败: %w", err)
+			return t.handleAssignIP(msg.Payload)
+		case protocol.TypeAuthChallenge:
+			if err := t.handleAuthChallenge(msg.Payload); err != nil {
+				return err
 			}
-			t.virtualIP = assign.VirtualIP
-			t.serverIP = assign.ServerIP
-			t.subnetMask = net.IPMask(assign.SubnetMask)
-			return nil
+			// Auth response sent, wait for AssignIP on next loop iteration.
+			// Reset deadline for the auth response wait.
+			t.conn.SetReadDeadline(time.Now().Add(10 * time.Second))
+			continue
 		case protocol.TypeKick:
 			kick, _ := protocol.UnmarshalKick(msg.Payload)
 			return fmt.Errorf("被拒绝: %s", kick.Reason)
 		}
 	}
 	return fmt.Errorf("注册失败（重试3次）")
+}
+
+func (t *Tunnel) handleAssignIP(payload []byte) error {
+	assign, err := protocol.UnmarshalAssignIP(payload)
+	if err != nil {
+		return fmt.Errorf("解析IP分配失败: %w", err)
+	}
+	t.virtualIP = assign.VirtualIP
+	t.serverIP = assign.ServerIP
+	t.subnetMask = net.IPMask(assign.SubnetMask)
+	return nil
+}
+
+func (t *Tunnel) handleAuthChallenge(payload []byte) error {
+	if t.roomPass == "" {
+		return fmt.Errorf("服务器需要房间密码，请用 -password 参数指定")
+	}
+
+	acp, err := protocol.UnmarshalAuthChallenge(payload)
+	if err != nil {
+		return fmt.Errorf("解析认证请求失败: %w", err)
+	}
+
+	key := protocol.DeriveKey(t.roomPass, t.roomID)
+	if key == nil {
+		return fmt.Errorf("无法派生认证密钥")
+	}
+
+	hmacVal := protocol.ComputeAuthHMAC(key, acp.Challenge, t.roomID, t.username, t.serverAddr)
+
+	resp := &protocol.AuthResponsePayload{
+		RoomID:   t.roomID,
+		Username: t.username,
+		HMAC:     hmacVal,
+	}
+
+	packet := protocol.EncodeChecked(protocol.TypeAuthResponse, resp.Marshal())
+	_, err = t.conn.WriteToUDP(packet, t.serverAddr)
+	if err != nil {
+		return fmt.Errorf("发送认证响应失败: %w", err)
+	}
+
+	log.Printf("[tunnel] 已发送认证响应，等待服务器确认...")
+	return nil
 }
 
 // ── Server Receiver ────────────────────────────────────────────
@@ -243,7 +306,11 @@ func (t *Tunnel) receiveFromServer(ctx context.Context) {
 			}
 		}
 
-		msg, err := protocol.Decode(buf[:n])
+		// Copy to avoid buffer reuse issues
+		pkt := make([]byte, n)
+		copy(pkt, buf[:n])
+
+		msg, err := protocol.DecodeChecked(pkt)
 		if err != nil {
 			continue
 		}
@@ -298,10 +365,8 @@ func (t *Tunnel) handleDataFromServer(payload []byte) {
 		return
 	}
 	if len(dp.Data) > 0 && t.tunDev != nil {
-		// Copy to avoid buffer reuse issues
-		pkt := make([]byte, len(dp.Data))
-		copy(pkt, dp.Data)
-		t.tunDev.Write(pkt)
+		// UnmarshalData already copies, but be explicit for safety
+		t.tunDev.Write(dp.Data)
 	}
 }
 
@@ -317,7 +382,7 @@ func (t *Tunnel) startHolePunch(peerIP net.IP) {
 
 	punchPayload := make([]byte, 4)
 	copy(punchPayload, peerIP.To4())
-	packet := protocol.Encode(protocol.TypeHolePunch, punchPayload)
+	packet := protocol.EncodeChecked(protocol.TypeHolePunch, punchPayload)
 
 	for i := 0; i < 5; i++ {
 		t.sendUDP(packet, peer.PublicAddr)
@@ -379,7 +444,7 @@ func (t *Tunnel) routePacket(pkt []byte, srcIP, dstIP net.IP) {
 
 	if ok && peer.PublicAddr != nil {
 		dp := &protocol.DataPayload{SrcIP: srcIP, DstIP: dstIP, Data: pkt}
-		t.sendUDP(protocol.Encode(protocol.TypeData, dp.Marshal()), peer.PublicAddr)
+		t.sendUDP(protocol.EncodeChecked(protocol.TypeData, dp.Marshal()), peer.PublicAddr)
 	} else {
 		t.sendToServer(pkt, srcIP, dstIP)
 	}
@@ -391,7 +456,7 @@ func (t *Tunnel) relayBroadcast(pkt []byte, srcIP net.IP) {
 		DstIP: net.IPv4(255, 255, 255, 255),
 		Data:  pkt,
 	}
-	encoded := protocol.Encode(protocol.TypeData, dp.Marshal())
+	encoded := protocol.EncodeChecked(protocol.TypeData, dp.Marshal())
 	t.sendUDP(encoded, t.serverAddr)
 
 	t.mu.RLock()
@@ -405,7 +470,7 @@ func (t *Tunnel) relayBroadcast(pkt []byte, srcIP net.IP) {
 
 func (t *Tunnel) sendToServer(pkt []byte, srcIP, dstIP net.IP) {
 	dp := &protocol.DataPayload{SrcIP: srcIP, DstIP: dstIP, Data: pkt}
-	t.sendUDP(protocol.Encode(protocol.TypeData, dp.Marshal()), t.serverAddr)
+	t.sendUDP(protocol.EncodeChecked(protocol.TypeData, dp.Marshal()), t.serverAddr)
 }
 
 // ── sendUDP — thread-safe UDP write ────────────────────────────
@@ -423,7 +488,7 @@ func (t *Tunnel) sendUDP(data []byte, addr *net.UDPAddr) {
 func (t *Tunnel) keepaliveLoop(ctx context.Context) {
 	ticker := time.NewTicker(10 * time.Second)
 	defer ticker.Stop()
-	packet := protocol.Encode(protocol.TypeKeepAlive, nil)
+	packet := protocol.EncodeChecked(protocol.TypeKeepAlive, nil)
 	for {
 		select {
 		case <-ctx.Done():
@@ -439,7 +504,7 @@ func (t *Tunnel) keepaliveLoop(ctx context.Context) {
 func (t *Tunnel) peerDiscoveryLoop(ctx context.Context) {
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
-	packet := protocol.Encode(protocol.TypePeerRequest, nil)
+	packet := protocol.EncodeChecked(protocol.TypePeerRequest, nil)
 	for {
 		select {
 		case <-ctx.Done():
@@ -450,12 +515,13 @@ func (t *Tunnel) peerDiscoveryLoop(ctx context.Context) {
 	}
 }
 
-// ── Config (simplified, no GUI dependency) ─────────────────────
+// ── Config ─────────────────────────────────────────────────────
 
 type Config struct {
-	ServerAddr string `json:"server_addr"`
-	PlayerName string `json:"player_name"`
-	RoomID     string `json:"room_id"`
+	ServerAddr   string `json:"server_addr"`
+	PlayerName   string `json:"player_name"`
+	RoomID       string `json:"room_id"`
+	RoomPassword string `json:"room_password,omitempty"`
 }
 
 func configPath() string {
@@ -477,12 +543,13 @@ func loadConfig() *Config {
 	if err != nil {
 		return cfg
 	}
-	// Best-effort parse, ignore fields we don't know
+	// Backward-compatible: ignore unknown fields
 	type raw struct {
-		ServerAddr  string `json:"server_addr"`
-		PlayerName  string `json:"player_name"`
-		RoomID      string `json:"room_id"`
-		AutoConnect *bool  `json:"auto_connect,omitempty"` // ignored
+		ServerAddr   string `json:"server_addr"`
+		PlayerName   string `json:"player_name"`
+		RoomID       string `json:"room_id"`
+		RoomPassword string `json:"room_password,omitempty"`
+		AutoConnect  *bool  `json:"auto_connect,omitempty"` // ignored
 	}
 	var r raw
 	if err := json.Unmarshal(data, &r); err == nil {
@@ -495,6 +562,7 @@ func loadConfig() *Config {
 		if r.RoomID != "" {
 			cfg.RoomID = r.RoomID
 		}
+		cfg.RoomPassword = r.RoomPassword
 	}
 	return cfg
 }
@@ -512,7 +580,7 @@ func saveConfig(cfg *Config) error {
 	return os.WriteFile(path, data, 0644)
 }
 
-// ── Logging ────────────────────────────────────────────────────
+// ── Logging (file + stderr) ────────────────────────────────────
 
 func setupLog() *os.File {
 	appData := os.Getenv("APPDATA")
@@ -525,9 +593,26 @@ func setupLog() *os.File {
 
 	f, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
 	if err != nil {
+		log.SetOutput(os.Stderr)
 		return os.Stderr
 	}
-	log.SetOutput(f)
+	// Write to both file and stderr (tee)
+	log.SetOutput(newTeeWriter(f, os.Stderr))
 	log.Printf("=== GameTunnel 启动 ===")
 	return f
+}
+
+// teeWriter writes to two writers (for log → file + stderr).
+type teeWriter struct {
+	a, b *os.File
+}
+
+func newTeeWriter(a, b *os.File) *teeWriter {
+	return &teeWriter{a: a, b: b}
+}
+
+func (t *teeWriter) Write(p []byte) (n int, err error) {
+	t.a.Write(p)
+	t.b.Write(p)
+	return len(p), nil
 }

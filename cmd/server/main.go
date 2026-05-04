@@ -1,19 +1,21 @@
 // GameTunnel Server — 公网中转服务器
 //
 // 职责：
-//  1. 接受客户端注册，分配虚拟IP
-//  2. 中转游戏流量
+//  1. 接受客户端注册（HMAC challenge-response 认证）
+//  2. 中转游戏流量（CRC32 完整性校验）
 //  3. 转发广播包（局域网游戏发现的关键）
 //  4. 提供对等节点发现（NAT打洞）
 //
 // Usage:
 //
 //	server -addr :4700 -subnet 10.10.0.0/24 -max 10
+//	server -addr :4700 -password myroomsecret
 package main
 
 import (
 	"context"
 	"flag"
+	"fmt"
 	"log"
 	"net"
 	"os"
@@ -27,32 +29,66 @@ import (
 	"golang.org/x/sync/semaphore"
 )
 
-// ── 客户端状态 ──────────────────────────────────────────────────
+// Version is set at build time via -ldflags.
+var Version = "dev"
+
+// ── Auth State ─────────────────────────────────────────────────
+
+type authState int
+
+const (
+	authNone      authState = iota // no password required, or already authenticated
+	authChallengeSent              // challenge sent, waiting for response
+)
+
+// ── Client State ───────────────────────────────────────────────
 
 type Client struct {
 	Username   string
 	VirtualIP  net.IP
 	PublicAddr *net.UDPAddr
 	LastSeen   time.Time
+
+	// Auth state (only used when server has a room password)
+	auth         authState
+	challenge    []byte    // 16-byte nonce
+	challengeAt  time.Time // for expiry
+	authKey      []byte    // HKDF-derived key (cached per client)
 }
 
-// ── 服务器 ─────────────────────────────────────────────────────
+// ── Server ─────────────────────────────────────────────────────
 
 type Server struct {
 	conn       *net.UDPConn
+	connMu     sync.Mutex // protects WriteToUDP
 	clients    map[string]*Client // virtualIP string → Client
+	addrMap    map[string]*Client // "ip:port" string → Client (O(1) lookup)
 	mu         sync.RWMutex
 	subnet     *net.IPNet
 	maxPlayers int
 	serverIP   net.IP
 	sem        *semaphore.Weighted
+	roomPass   string // room password (empty = no auth)
+	authKey    []byte // HKDF-derived key from roomPass (nil if no password)
+
+	// Rate limiting: per-client packet count per window
+	rateMu    sync.Mutex
+	rateCount map[string]int // addr string → count
+	rateTick  *time.Ticker
 }
 
 func main() {
 	addr := flag.String("addr", ":4700", "监听地址 (UDP)")
 	subnetStr := flag.String("subnet", "10.10.0.0/24", "虚拟子网 (CIDR)")
 	maxPlayers := flag.Int("max", 10, "最大玩家数")
+	roomPass := flag.String("password", "", "房间密码（留空=无认证）")
+	versionFlag := flag.Bool("version", false, "显示版本")
 	flag.Parse()
+
+	if *versionFlag {
+		fmt.Printf("gtunnel-server %s\n", Version)
+		os.Exit(0)
+	}
 
 	_, subnet, err := net.ParseCIDR(*subnetStr)
 	if err != nil {
@@ -73,13 +109,20 @@ func main() {
 		log.Fatalf("监听失败: %v", err)
 	}
 
+	// Derive auth key from room password (nil if empty).
+	authKey := protocol.DeriveKey(*roomPass, "default")
+
 	s := &Server{
 		conn:       conn,
 		clients:    make(map[string]*Client),
+		addrMap:    make(map[string]*Client),
 		subnet:     subnet,
 		maxPlayers: *maxPlayers,
 		serverIP:   serverIP,
 		sem:        semaphore.NewWeighted(200),
+		roomPass:   *roomPass,
+		authKey:    authKey,
+		rateCount:  make(map[string]int),
 	}
 
 	// ── 优雅退出 ────────────────────────────────────────────
@@ -93,8 +136,13 @@ func main() {
 		sig := <-sigCh
 		log.Printf("收到信号 %v，正在关闭...", sig)
 		cancel()
-		conn.Close() // 唤醒 ReadFromUDP
+		conn.Close()
 	}()
+
+	authStatus := "无认证"
+	if *roomPass != "" {
+		authStatus = "HMAC 认证"
+	}
 
 	log.Println("╔═══════════════════════════════════════════╗")
 	log.Println("║       GameTunnel Server 已启动            ║")
@@ -103,9 +151,12 @@ func main() {
 	log.Printf("║  子网:    %-31s ║", subnet.String())
 	log.Printf("║  服务器:  %-31s ║", serverIP)
 	log.Printf("║  上限:    %-31d ║", *maxPlayers)
+	log.Printf("║  认证:    %-31s ║", authStatus)
+	log.Printf("║  版本:    %-31s ║", Version)
 	log.Println("╚═══════════════════════════════════════════╝")
 
 	go s.keepaliveLoop(ctx)
+	go s.rateLimitLoop(ctx)
 
 	buf := make([]byte, 65535)
 	for {
@@ -122,6 +173,12 @@ func main() {
 		if n < 1 {
 			continue
 		}
+
+		// Rate limit check
+		if !s.checkRate(remoteAddr) {
+			continue
+		}
+
 		pkt := make([]byte, n)
 		copy(pkt, buf[:n])
 
@@ -135,17 +192,51 @@ func main() {
 	}
 }
 
-// ── 包处理 ─────────────────────────────────────────────────────
+// ── Rate Limiting ──────────────────────────────────────────────
+
+const (
+	rateLimit    = 500 // max packets per window per client
+	rateInterval = time.Second
+)
+
+func (s *Server) checkRate(addr *net.UDPAddr) bool {
+	key := addr.String()
+	s.rateMu.Lock()
+	s.rateCount[key]++
+	count := s.rateCount[key]
+	s.rateMu.Unlock()
+	return count <= rateLimit
+}
+
+func (s *Server) rateLimitLoop(ctx context.Context) {
+	s.rateTick = time.NewTicker(rateInterval)
+	defer s.rateTick.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-s.rateTick.C:
+			s.rateMu.Lock()
+			s.rateCount = make(map[string]int)
+			s.rateMu.Unlock()
+		}
+	}
+}
+
+// ── Packet Handling ────────────────────────────────────────────
 
 func (s *Server) handlePacket(data []byte, from *net.UDPAddr) {
-	msg, err := protocol.Decode(data)
+	// Verify CRC32 checksum
+	msg, err := protocol.DecodeChecked(data)
 	if err != nil {
-		return
+		return // silently drop corrupt packets
 	}
 
 	switch msg.Type {
 	case protocol.TypeRegister:
 		s.handleRegister(msg.Payload, from)
+	case protocol.TypeAuthResponse:
+		s.handleAuthResponse(msg.Payload, from)
 	case protocol.TypeKeepAlive:
 		s.handleKeepAlive(from)
 	case protocol.TypePeerRequest:
@@ -157,7 +248,7 @@ func (s *Server) handlePacket(data []byte, from *net.UDPAddr) {
 	}
 }
 
-// ── 注册（拆分：重连 / 新注册）──────────────────────────────────
+// ── Registration (with optional HMAC auth) ─────────────────────
 
 func (s *Server) handleRegister(payload []byte, from *net.UDPAddr) {
 	reg, err := protocol.UnmarshalRegister(payload)
@@ -167,8 +258,8 @@ func (s *Server) handleRegister(payload []byte, from *net.UDPAddr) {
 
 	s.mu.Lock()
 
-	// 重连：已有同地址客户端
-	if existing := s.findClientByAddrLocked(from); existing != nil {
+	// Reconnect: same address already registered
+	if existing := s.addrMap[from.String()]; existing != nil {
 		existing.LastSeen = time.Now()
 		selfIP := existing.VirtualIP
 		s.mu.Unlock()
@@ -177,14 +268,26 @@ func (s *Server) handleRegister(payload []byte, from *net.UDPAddr) {
 		return
 	}
 
-	// 容量检查
+	// Capacity check
 	if len(s.clients) >= s.maxPlayers {
 		s.mu.Unlock()
 		s.sendKick(from, "房间已满")
 		return
 	}
 
-	// 分配 IP（回收空闲槽位）
+	// If no password required, register immediately.
+	if s.authKey == nil {
+		s.registerClient(reg, from)
+		return
+	}
+
+	// Password required: send challenge.
+	s.mu.Unlock()
+	s.sendAuthChallenge(reg, from)
+}
+
+func (s *Server) registerClient(reg *protocol.RegisterPayload, from *net.UDPAddr) {
+	// Must be called with s.mu held.
 	vip := s.nextAvailableIP()
 	if vip == nil {
 		s.mu.Unlock()
@@ -192,37 +295,120 @@ func (s *Server) handleRegister(payload []byte, from *net.UDPAddr) {
 		return
 	}
 
-	s.clients[vip.String()] = &Client{
+	c := &Client{
 		Username:   reg.Username,
 		VirtualIP:  vip,
 		PublicAddr: from,
 		LastSeen:   time.Now(),
+		auth:       authNone,
 	}
+	s.clients[vip.String()] = c
+	s.addrMap[from.String()] = c
 	log.Printf("[+] %s (%s) → %s  [在线: %d]",
 		reg.Username, from, vip, len(s.clients))
 
+	selfIP := vip
 	s.mu.Unlock()
 
-	s.sendAssignIP(vip, from)
-	s.sendPeerInfoTo(nil, nil, vip)
+	s.sendAssignIP(selfIP, from)
+	s.sendPeerInfoTo(nil, nil, selfIP)
 }
 
-// sendAssignIP sends an IP assignment packet to the client.
-func (s *Server) sendAssignIP(vip net.IP, to *net.UDPAddr) {
-	assign := &protocol.AssignIPPayload{
-		VirtualIP:  vip,
-		SubnetMask: s.subnet.Mask,
-		ServerIP:   s.serverIP,
+func (s *Server) sendAuthChallenge(reg *protocol.RegisterPayload, from *net.UDPAddr) {
+	challenge, err := protocol.GenerateChallenge()
+	if err != nil {
+		log.Printf("[auth] 生成 challenge 失败: %v", err)
+		s.sendKick(from, "服务器内部错误")
+		return
 	}
-	s.send(protocol.Encode(protocol.TypeAssignIP, assign.Marshal()), to)
+
+	// Store pending auth state
+	s.mu.Lock()
+	c := &Client{
+		Username:    reg.Username,
+		PublicAddr:  from,
+		LastSeen:    time.Now(),
+		auth:        authChallengeSent,
+		challenge:   challenge,
+		challengeAt: time.Now(),
+		authKey:     s.authKey,
+	}
+	s.addrMap[from.String()] = c
+	s.mu.Unlock()
+
+	// Send challenge (with a random salt reserved for future use)
+	salt := make([]byte, 16)
+	copy(salt, challenge[:16]) // reuse nonce as salt for simplicity
+
+	acp := &protocol.AuthChallengePayload{
+		Challenge: challenge,
+		RoomSalt:  salt,
+	}
+	s.sendChecked(protocol.TypeAuthChallenge, acp.Marshal(), from)
 }
 
-// ── 心跳 ───────────────────────────────────────────────────────
+func (s *Server) handleAuthResponse(payload []byte, from *net.UDPAddr) {
+	resp, err := protocol.UnmarshalAuthResponse(payload)
+	if err != nil {
+		return
+	}
+
+	s.mu.RLock()
+	c := s.addrMap[from.String()]
+	s.mu.RUnlock()
+
+	if c == nil || c.auth != authChallengeSent {
+		s.sendKick(from, "未请求认证")
+		return
+	}
+
+	// Check challenge expiry (30 seconds)
+	if time.Since(c.challengeAt) > 30*time.Second {
+		s.mu.Lock()
+		delete(s.addrMap, from.String())
+		s.mu.Unlock()
+		s.sendKick(from, "认证超时")
+		return
+	}
+
+	// Verify HMAC
+	if !protocol.VerifyAuthHMAC(c.authKey, resp.HMAC, c.challenge, resp.RoomID, resp.Username, from) {
+		s.mu.Lock()
+		delete(s.addrMap, from.String())
+		s.mu.Unlock()
+		log.Printf("[auth] 认证失败: %s (%s)", resp.Username, from)
+		s.sendKick(from, "密码错误")
+		return
+	}
+
+	// Auth passed — complete registration
+	log.Printf("[auth] 认证成功: %s (%s)", resp.Username, from)
+
+	// Update the pending client with registration info and register properly.
+	reg := &protocol.RegisterPayload{
+		RoomID:   resp.RoomID,
+		Username: resp.Username,
+	}
+
+	s.mu.Lock()
+	// Remove pending entry from addrMap
+	delete(s.addrMap, from.String())
+
+	// Capacity check (might have changed)
+	if len(s.clients) >= s.maxPlayers {
+		s.mu.Unlock()
+		s.sendKick(from, "房间已满")
+		return
+	}
+	s.registerClient(reg, from)
+}
+
+// ── Keepalive ──────────────────────────────────────────────────
 
 func (s *Server) handleKeepAlive(from *net.UDPAddr) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if c := s.findClientByAddrLocked(from); c != nil {
+	if c := s.addrMap[from.String()]; c != nil {
 		c.LastSeen = time.Now()
 	}
 }
@@ -244,7 +430,14 @@ func (s *Server) keepaliveLoop(ctx context.Context) {
 			if now.Sub(c.LastSeen) > 45*time.Second {
 				log.Printf("[-] %s (%s) 超时断开", c.Username, c.VirtualIP)
 				delete(s.clients, ip)
+				delete(s.addrMap, c.PublicAddr.String())
 				changed = true
+			}
+		}
+		// Also clean up stale pending auth entries
+		for addrStr, c := range s.addrMap {
+			if c.auth == authChallengeSent && now.Sub(c.challengeAt) > 60*time.Second {
+				delete(s.addrMap, addrStr)
 			}
 		}
 		s.mu.Unlock()
@@ -255,11 +448,11 @@ func (s *Server) keepaliveLoop(ctx context.Context) {
 	}
 }
 
-// ── 对等节点请求 ────────────────────────────────────────────────
+// ── Peer Request ───────────────────────────────────────────────
 
 func (s *Server) handlePeerRequest(from *net.UDPAddr) {
 	s.mu.RLock()
-	c := s.findClientByAddrLocked(from)
+	c := s.addrMap[from.String()]
 	s.mu.RUnlock()
 
 	if c == nil {
@@ -269,9 +462,17 @@ func (s *Server) handlePeerRequest(from *net.UDPAddr) {
 	s.sendPeerInfoTo([]*net.UDPAddr{from}, nil, c.VirtualIP)
 }
 
-// ── 中转（核心）────────────────────────────────────────────────
+// ── Relay (core) ───────────────────────────────────────────────
 
 func (s *Server) handleRelay(payload []byte, from *net.UDPAddr) {
+	// Verify sender is registered
+	s.mu.RLock()
+	sender := s.addrMap[from.String()]
+	s.mu.RUnlock()
+	if sender == nil {
+		return // drop packets from unauthenticated clients
+	}
+
 	dp, err := protocol.UnmarshalData(payload)
 	if err != nil {
 		return
@@ -283,9 +484,9 @@ func (s *Server) handleRelay(payload []byte, from *net.UDPAddr) {
 		DstIP: dp.DstIP,
 		Data:  dp.Data,
 	}
-	encoded := protocol.Encode(protocol.TypeData, relayPayload.Marshal())
+	encoded := protocol.EncodeChecked(protocol.TypeData, relayPayload.Marshal())
 
-	// 广播包
+	// Broadcast
 	if dstKey == "255.255.255.255" || netutil.IsBroadcast(dp.DstIP, s.subnet) {
 		s.mu.RLock()
 		targets := make([]*net.UDPAddr, 0, len(s.clients))
@@ -297,12 +498,12 @@ func (s *Server) handleRelay(payload []byte, from *net.UDPAddr) {
 		s.mu.RUnlock()
 
 		for _, addr := range targets {
-			s.send(encoded, addr)
+			s.sendCheckedRaw(encoded, addr)
 		}
 		return
 	}
 
-	// 单播
+	// Unicast
 	s.mu.RLock()
 	dst, ok := s.clients[dstKey]
 	s.mu.RUnlock()
@@ -310,10 +511,10 @@ func (s *Server) handleRelay(payload []byte, from *net.UDPAddr) {
 	if !ok {
 		return
 	}
-	s.send(encoded, dst.PublicAddr)
+	s.sendCheckedRaw(encoded, dst.PublicAddr)
 }
 
-// ── NAT 打洞 ───────────────────────────────────────────────────
+// ── NAT Hole Punch ─────────────────────────────────────────────
 
 func (s *Server) handleHolePunch(payload []byte, from *net.UDPAddr) {
 	if len(payload) < 4 {
@@ -338,33 +539,13 @@ func (s *Server) handleHolePunch(payload []byte, from *net.UDPAddr) {
 	punchData := make([]byte, 4+len(addrStr))
 	copy(punchData[:4], srcIP4)
 	copy(punchData[4:], []byte(addrStr))
-	s.send(protocol.Encode(protocol.TypeHolePunch, punchData), dst.PublicAddr)
+	s.sendChecked(protocol.TypeHolePunch, punchData, dst.PublicAddr)
 }
 
-// ── 对等节点信息快照与广播 ──────────────────────────────────────
+// ── Peer Info Broadcast ────────────────────────────────────────
 
-// findClientByAddrLocked looks up a client by its public UDP address.
-// Must be called with at least a read lock held.
-func (s *Server) findClientByAddrLocked(addr *net.UDPAddr) *Client {
-	addrStr := addr.String()
-	for _, c := range s.clients {
-		if c.PublicAddr.String() == addrStr {
-			return c
-		}
-	}
-	return nil
-}
-
-type peerSnapshot struct {
-	virtualIP  net.IP
-	publicAddr *net.UDPAddr
-	username   string
-}
-
-// snapshotClients captures a snapshot of all clients (thread-safe).
-func (s *Server) snapshotClients() []peerSnapshot {
+func (s *Server) sendPeerInfoTo(targets []*net.UDPAddr, exclude *net.UDPAddr, selfIP net.IP) {
 	s.mu.RLock()
-	defer s.mu.RUnlock()
 	snapshot := make([]peerSnapshot, 0, len(s.clients))
 	for _, c := range s.clients {
 		snapshot = append(snapshot, peerSnapshot{
@@ -373,13 +554,7 @@ func (s *Server) snapshotClients() []peerSnapshot {
 			username:   c.Username,
 		})
 	}
-	return snapshot
-}
-
-// sendPeerInfoTo sends peer info to one or more targets.
-// If targets is nil, broadcasts to all.
-func (s *Server) sendPeerInfoTo(targets []*net.UDPAddr, exclude *net.UDPAddr, selfIP net.IP) {
-	snapshot := s.snapshotClients()
+	s.mu.RUnlock()
 
 	peers := &protocol.PeerInfoPayload{}
 	for _, sn := range snapshot {
@@ -393,11 +568,11 @@ func (s *Server) sendPeerInfoTo(targets []*net.UDPAddr, exclude *net.UDPAddr, se
 		})
 	}
 
-	encoded := protocol.Encode(protocol.TypePeerInfo, peers.Marshal())
+	encoded := protocol.EncodeChecked(protocol.TypePeerInfo, peers.Marshal())
 
 	if targets != nil {
 		for _, addr := range targets {
-			s.send(encoded, addr)
+			s.sendCheckedRaw(encoded, addr)
 		}
 		return
 	}
@@ -406,11 +581,11 @@ func (s *Server) sendPeerInfoTo(targets []*net.UDPAddr, exclude *net.UDPAddr, se
 		if exclude != nil && sn.publicAddr.String() == exclude.String() {
 			continue
 		}
-		s.send(encoded, sn.publicAddr)
+		s.sendCheckedRaw(encoded, sn.publicAddr)
 	}
 }
 
-// ── IP 分配（回收空闲槽位）──────────────────────────────────────
+// ── IP Allocation ──────────────────────────────────────────────
 
 func (s *Server) nextAvailableIP() net.IP {
 	base := s.subnet.IP.To4()
@@ -426,13 +601,39 @@ func (s *Server) nextAvailableIP() net.IP {
 	return nil
 }
 
-// ── 发送 ───────────────────────────────────────────────────────
+// ── Send Helpers (thread-safe, with checksum) ──────────────────
 
-func (s *Server) send(data []byte, to *net.UDPAddr) {
+// sendChecked encodes a message with CRC32 and sends it.
+func (s *Server) sendChecked(typ byte, payload []byte, to *net.UDPAddr) {
+	data := protocol.EncodeChecked(typ, payload)
+	s.sendCheckedRaw(data, to)
+}
+
+// sendCheckedRaw sends an already-encoded packet (with checksum).
+func (s *Server) sendCheckedRaw(data []byte, to *net.UDPAddr) {
+	s.connMu.Lock()
+	defer s.connMu.Unlock()
 	s.conn.WriteToUDP(data, to)
+}
+
+func (s *Server) sendAssignIP(vip net.IP, to *net.UDPAddr) {
+	assign := &protocol.AssignIPPayload{
+		VirtualIP:  vip,
+		SubnetMask: s.subnet.Mask,
+		ServerIP:   s.serverIP,
+	}
+	s.sendChecked(protocol.TypeAssignIP, assign.Marshal(), to)
 }
 
 func (s *Server) sendKick(to *net.UDPAddr, reason string) {
 	kick := &protocol.KickPayload{Reason: reason}
-	s.send(protocol.Encode(protocol.TypeKick, kick.Marshal()), to)
+	s.sendChecked(protocol.TypeKick, kick.Marshal(), to)
+}
+
+// ── Types ──────────────────────────────────────────────────────
+
+type peerSnapshot struct {
+	virtualIP  net.IP
+	publicAddr *net.UDPAddr
+	username   string
 }

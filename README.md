@@ -9,10 +9,13 @@
 ### 服务器（公网 VPS，Linux）
 
 ```bash
-# 一键安装
+# 一键安装（从 GitHub Releases 下载预编译二进制）
 curl -sL https://raw.githubusercontent.com/holipay/gametunnel/main/install.sh | sudo bash
 
-# 或手动：
+# 带房间密码：
+curl -sL https://raw.githubusercontent.com/holipay/gametunnel/main/install.sh | sudo ROOM_PASSWORD=你的密码 bash
+
+# 或手动编译：
 git clone https://github.com/holipay/gametunnel.git
 cd gametunnel
 make server
@@ -34,6 +37,32 @@ gtunnel-client.exe -server 你的服务器IP:4700
 ```
 
 连接成功后，打开游戏进入局域网模式即可。
+
+## 安全
+
+### 房间密码（HMAC 认证）
+
+服务端设置密码后，客户端连接时需要通过 HMAC challenge-response 验证：
+
+```bash
+# 服务端
+gtunnel-server -addr :4700 -password mysecret
+
+# 客户端
+gtunnel-client.exe -server 1.2.3.4:4700 -password mysecret
+```
+
+认证流程：
+1. 客户端发送注册请求（房间ID + 用户名）
+2. 服务端返回 16 字节随机 challenge
+3. 客户端用 HKDF-SHA256 从密码派生密钥，计算 HMAC(challenge + 上下文)
+4. 服务端验证 HMAC，通过后分配虚拟 IP
+
+密码不会在网络上传输。即使被中间人截获 challenge 和响应，也无法在合理时间内逆向密码。
+
+### 数据包完整性
+
+所有协议包都包含 CRC32 校验和，丢弃损坏/篡改的包。
 
 ## 原理
 
@@ -57,24 +86,28 @@ gtunnel-client.exe -server 你的服务器IP:4700
 
 ### 服务器
 ```bash
-gtunnel-server -addr :4700 -subnet 10.10.0.0/24 -max 10
+gtunnel-server -addr :4700 -subnet 10.10.0.0/24 -max 10 -password secret
 ```
 | 参数 | 默认值 | 说明 |
 |------|--------|------|
 | `-addr` | `:4700` | 监听端口 |
 | `-subnet` | `10.10.0.0/24` | 虚拟子网 |
 | `-max` | `10` | 最大玩家数 |
+| `-password` | _(空)_ | 房间密码（留空=无认证） |
+| `-version` | | 显示版本 |
 
 ### 客户端（Windows）
 ```cmd
-gtunnel-client.exe -server 1.2.3.4:4700 -name 玩家名 -room 房间ID
+gtunnel-client.exe -server 1.2.3.4:4700 -name 玩家名 -room 房间ID -password secret
 ```
 | 参数 | 默认值 | 说明 |
 |------|--------|------|
 | `-server` | _(必填或配置文件)_ | 服务器地址 |
 | `-name` | 计算机名 | 玩家名称 |
 | `-room` | `default` | 房间ID（同房间玩家互通） |
+| `-password` | _(空)_ | 房间密码 |
 | `-mtu` | `1400` | 隧道MTU |
+| `-version` | | 显示版本 |
 
 也可以通过配置文件设置：`%APPDATA%\GameTunnel\config.json`
 
@@ -121,6 +154,10 @@ make client
 
 # 编译所有架构的客户端
 make client-all
+
+# 查看版本
+./bin/gtunnel-server -version
+./bin/gtunnel-client.exe -version
 ```
 
 ## License

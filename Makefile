@@ -8,6 +8,8 @@
 BINARY_DIR := bin
 SERVER := $(BINARY_DIR)/gtunnel-server
 CLIENT := $(BINARY_DIR)/gtunnel-client.exe
+VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
+LDFLAGS := -ldflags "-s -w -X main.Version=$(VERSION)"
 
 all: server client
 
@@ -15,14 +17,13 @@ all: server client
 
 server:
 	@mkdir -p $(BINARY_DIR)
-	go build -o $(SERVER) ./cmd/server
+	go build $(LDFLAGS) -o $(SERVER) ./cmd/server
 
-# 交叉编译 Linux 服务器（在 macOS/Windows 上编译用）
 server-linux-amd64:
-	GOOS=linux GOARCH=amd64 go build -o $(BINARY_DIR)/gtunnel-server-linux-amd64 ./cmd/server
+	GOOS=linux GOARCH=amd64 go build $(LDFLAGS) -o $(BINARY_DIR)/gtunnel-server-linux-amd64 ./cmd/server
 
 server-linux-arm64:
-	GOOS=linux GOARCH=arm64 go build -o $(BINARY_DIR)/gtunnel-server-linux-arm64 ./cmd/server
+	GOOS=linux GOARCH=arm64 go build $(LDFLAGS) -o $(BINARY_DIR)/gtunnel-server-linux-arm64 ./cmd/server
 
 install-server: server
 	install -m 755 $(SERVER) /usr/local/bin/gtunnel-server
@@ -31,13 +32,13 @@ install-server: server
 
 client:
 	@mkdir -p $(BINARY_DIR)
-	GOOS=windows GOARCH=amd64 go build -o $(CLIENT) ./cmd/client
+	GOOS=windows GOARCH=amd64 go build $(LDFLAGS) -o $(CLIENT) ./cmd/client
 
 client-all: client client-arm64
 
 client-arm64:
 	@mkdir -p $(BINARY_DIR)
-	GOOS=windows GOARCH=arm64 go build -o $(BINARY_DIR)/gtunnel-client-arm64.exe ./cmd/client
+	GOOS=windows GOARCH=arm64 go build $(LDFLAGS) -o $(BINARY_DIR)/gtunnel-client-arm64.exe ./cmd/client
 
 # ── Dev / Test ─────────────────────────────────────────────────
 

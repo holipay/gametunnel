@@ -2,32 +2,50 @@
 //
 // Wire format (v1):
 //
-//	[1 byte: version] [1 byte: type] [payload...]
+//	[1 byte: version] [1 byte: type] [payload...] [4 bytes: CRC32]
 //
 // All multi-byte integers are little-endian.
+//
+// Authentication: HMAC challenge-response (room password → HKDF-SHA256 key)
+// Integrity: CRC32 on every packet
 package protocol
 
 import (
+	"crypto/hmac"
+	"crypto/rand"
+	"crypto/sha256"
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"hash/crc32"
+	"io"
 	"net"
+
+	"golang.org/x/crypto/hkdf"
 )
 
 // Protocol version. Bump on breaking wire-format changes.
 const ProtocolVersion byte = 1
 
+// HeaderLen is the fixed header size: version(1) + type(1).
+const HeaderLen = 2
+
+// ChecksumLen is the CRC32 checksum size appended to every packet.
+const ChecksumLen = 4
+
 // ── Message Types ──────────────────────────────────────────────
 
 const (
-	TypeRegister    byte = 0x01 // client → server: join room
-	TypeAssignIP    byte = 0x02 // server → client: virtual IP assigned
-	TypePeerInfo    byte = 0x03 // server → client: peer endpoint info
-	TypePeerRequest byte = 0x04 // client → server: request peer list
-	TypeHolePunch   byte = 0x05 // client ↔ client: NAT hole punch
-	TypeData        byte = 0x06 // client ↔ server: relayed payload
-	TypeKeepAlive   byte = 0x07 // client → server: keep connection alive
-	TypeKick        byte = 0x09 // server → client: kicked / error
+	TypeRegister       byte = 0x01 // client → server: join room
+	TypeAssignIP       byte = 0x02 // server → client: virtual IP assigned
+	TypePeerInfo       byte = 0x03 // server → client: peer endpoint info
+	TypePeerRequest    byte = 0x04 // client → server: request peer list
+	TypeHolePunch      byte = 0x05 // client ↔ client: NAT hole punch
+	TypeData           byte = 0x06 // client ↔ server: relayed payload
+	TypeKeepAlive      byte = 0x07 // client → server: keep connection alive
+	TypeAuthChallenge  byte = 0x08 // server → client: auth challenge (nonce + salt)
+	TypeAuthResponse   byte = 0x09 // client → server: auth HMAC response
+	TypeKick           byte = 0x0A // server → client: kicked / error
 )
 
 // ── Common Errors ──────────────────────────────────────────────
@@ -35,6 +53,7 @@ const (
 var (
 	ErrPacketTooShort     = errors.New("packet too short")
 	ErrUnsupportedVersion = errors.New("unsupported protocol version")
+	ErrChecksumMismatch   = errors.New("CRC32 checksum mismatch")
 )
 
 // ── Base Message ───────────────────────────────────────────────
@@ -46,17 +65,41 @@ type Message struct {
 }
 
 // Encode prepends version + type bytes and returns raw bytes ready to send.
+// Does NOT include checksum — call AppendChecksum on the result.
 func Encode(typ byte, payload []byte) []byte {
-	buf := make([]byte, 2+len(payload))
+	buf := make([]byte, HeaderLen+len(payload))
 	buf[0] = ProtocolVersion
 	buf[1] = typ
-	copy(buf[2:], payload)
+	copy(buf[HeaderLen:], payload)
 	return buf
 }
 
+// AppendChecksum appends a CRC32 checksum to a packet (mutates in-place, returns slice).
+func AppendChecksum(packet []byte) []byte {
+	crc := crc32.ChecksumIEEE(packet)
+	b := make([]byte, 4)
+	binary.LittleEndian.PutUint32(b, crc)
+	return append(packet, b...)
+}
+
+// VerifyChecksum validates the CRC32 at the end of a packet.
+// Returns the packet without the checksum tail on success.
+func VerifyChecksum(data []byte) ([]byte, error) {
+	if len(data) < HeaderLen+ChecksumLen {
+		return nil, ErrPacketTooShort
+	}
+	body := data[:len(data)-ChecksumLen]
+	checksum := binary.LittleEndian.Uint32(data[len(data)-ChecksumLen:])
+	if crc32.ChecksumIEEE(body) != checksum {
+		return nil, ErrChecksumMismatch
+	}
+	return body, nil
+}
+
 // Decode extracts the version, message type and payload from a raw packet.
+// Does NOT verify checksum — call VerifyChecksum first.
 func Decode(data []byte) (*Message, error) {
-	if len(data) < 2 {
+	if len(data) < HeaderLen {
 		return nil, ErrPacketTooShort
 	}
 	if data[0] != ProtocolVersion {
@@ -64,8 +107,167 @@ func Decode(data []byte) (*Message, error) {
 	}
 	return &Message{
 		Type:    data[1],
-		Payload: data[2:],
+		Payload: data[HeaderLen:],
 	}, nil
+}
+
+// DecodeChecked is a convenience: VerifyChecksum + Decode.
+func DecodeChecked(data []byte) (*Message, error) {
+	body, err := VerifyChecksum(data)
+	if err != nil {
+		return nil, err
+	}
+	return Decode(body)
+}
+
+// EncodeChecked is a convenience: Encode + AppendChecksum.
+func EncodeChecked(typ byte, payload []byte) []byte {
+	return AppendChecksum(Encode(typ, payload))
+}
+
+// ── Auth: Key Derivation (HKDF-SHA256) ─────────────────────────
+
+// DeriveKey derives a 32-byte HMAC key from the room password using HKDF-SHA256.
+// Room ID is used as "info" context to bind the key to a specific room.
+// Returns nil if password is empty.
+func DeriveKey(password, roomID string) []byte {
+	if password == "" {
+		return nil
+	}
+	hkdfReader := hkdf.New(sha256.New, []byte(password), nil, []byte("GameTunnel:"+roomID))
+	key := make([]byte, 32)
+	if _, err := io.ReadFull(hkdfReader, key); err != nil {
+		return nil
+	}
+	return key
+}
+
+// ── Auth: Challenge-Response ───────────────────────────────────
+
+// GenerateChallenge creates a 16-byte random nonce for authentication.
+func GenerateChallenge() ([]byte, error) {
+	nonce := make([]byte, 16)
+	if _, err := rand.Read(nonce); err != nil {
+		return nil, fmt.Errorf("generate challenge: %w", err)
+	}
+	return nonce, nil
+}
+
+// ComputeAuthHMAC computes the HMAC-SHA256 over the challenge+context.
+// Binds the response to: challenge nonce, room ID, username, and client address.
+func ComputeAuthHMAC(key []byte, challenge []byte, roomID, username string, remoteAddr *net.UDPAddr) []byte {
+	mac := hmac.New(sha256.New, key)
+	mac.Write(challenge)
+	mac.Write([]byte(roomID))
+	mac.Write([]byte(username))
+	if remoteAddr != nil {
+		mac.Write([]byte(remoteAddr.String()))
+	}
+	return mac.Sum(nil)
+}
+
+// VerifyAuthHMAC verifies the client's auth HMAC. Returns true if valid.
+func VerifyAuthHMAC(key, clientHMAC []byte, challenge []byte, roomID, username string, remoteAddr *net.UDPAddr) bool {
+	expected := ComputeAuthHMAC(key, challenge, roomID, username, remoteAddr)
+	return hmac.Equal(clientHMAC, expected)
+}
+
+// ── Auth Challenge Payload (server → client) ───────────────────
+
+// AuthChallengePayload is sent by the server to initiate authentication.
+type AuthChallengePayload struct {
+	Challenge []byte // 16-byte random nonce
+	RoomSalt  []byte // 16-byte random salt (unused in current HMAC, reserved for future KDF)
+}
+
+func (a *AuthChallengePayload) Marshal() []byte {
+	buf := make([]byte, 2+len(a.Challenge)+2+len(a.RoomSalt))
+	off := 0
+	binary.LittleEndian.PutUint16(buf[off:], uint16(len(a.Challenge)))
+	off += 2
+	copy(buf[off:], a.Challenge)
+	off += len(a.Challenge)
+	binary.LittleEndian.PutUint16(buf[off:], uint16(len(a.RoomSalt)))
+	off += 2
+	copy(buf[off:], a.RoomSalt)
+	return buf
+}
+
+func UnmarshalAuthChallenge(data []byte) (*AuthChallengePayload, error) {
+	if len(data) < 4 {
+		return nil, ErrPacketTooShort
+	}
+	off := 0
+	clen := int(binary.LittleEndian.Uint16(data[off:]))
+	off += 2
+	if len(data) < off+clen+2 {
+		return nil, ErrPacketTooShort
+	}
+	challenge := append([]byte(nil), data[off:off+clen]...)
+	off += clen
+	slen := int(binary.LittleEndian.Uint16(data[off:]))
+	off += 2
+	if len(data) < off+slen {
+		return nil, ErrPacketTooShort
+	}
+	salt := append([]byte(nil), data[off:off+slen]...)
+	return &AuthChallengePayload{Challenge: challenge, RoomSalt: salt}, nil
+}
+
+// ── Auth Response Payload (client → server) ────────────────────
+
+// AuthResponsePayload is sent by the client to prove knowledge of the room password.
+type AuthResponsePayload struct {
+	RoomID   string
+	Username string
+	HMAC     []byte // 32-byte HMAC-SHA256
+}
+
+func (a *AuthResponsePayload) Marshal() []byte {
+	roomBytes := []byte(a.RoomID)
+	userBytes := []byte(a.Username)
+	buf := make([]byte, 2+len(roomBytes)+2+len(userBytes)+2+len(a.HMAC))
+	off := 0
+	binary.LittleEndian.PutUint16(buf[off:], uint16(len(roomBytes)))
+	off += 2
+	copy(buf[off:], roomBytes)
+	off += len(roomBytes)
+	binary.LittleEndian.PutUint16(buf[off:], uint16(len(userBytes)))
+	off += 2
+	copy(buf[off:], userBytes)
+	off += len(userBytes)
+	binary.LittleEndian.PutUint16(buf[off:], uint16(len(a.HMAC)))
+	off += 2
+	copy(buf[off:], a.HMAC)
+	return buf
+}
+
+func UnmarshalAuthResponse(data []byte) (*AuthResponsePayload, error) {
+	if len(data) < 4 {
+		return nil, ErrPacketTooShort
+	}
+	off := 0
+	roomLen := int(binary.LittleEndian.Uint16(data[off:]))
+	off += 2
+	if len(data) < off+roomLen+2 {
+		return nil, ErrPacketTooShort
+	}
+	roomID := string(data[off : off+roomLen])
+	off += roomLen
+	userLen := int(binary.LittleEndian.Uint16(data[off:]))
+	off += 2
+	if len(data) < off+userLen+2 {
+		return nil, ErrPacketTooShort
+	}
+	username := string(data[off : off+userLen])
+	off += userLen
+	hmacLen := int(binary.LittleEndian.Uint16(data[off:]))
+	off += 2
+	if len(data) < off+hmacLen {
+		return nil, ErrPacketTooShort
+	}
+	hmacVal := append([]byte(nil), data[off:off+hmacLen]...)
+	return &AuthResponsePayload{RoomID: roomID, Username: username, HMAC: hmacVal}, nil
 }
 
 // ── Register ───────────────────────────────────────────────────
@@ -155,13 +357,16 @@ type PeerInfoPayload struct {
 }
 
 func (p *PeerInfoPayload) Marshal() []byte {
-	var buf []byte
-	// peer count (uint16)
+	// Pre-calculate total size to avoid repeated append growth.
+	total := 2 // peer count
+	for _, peer := range p.Peers {
+		total += 4 + 2 + len(peer.PublicAddr.String()) + 2 + len(peer.Username)
+	}
+	buf := make([]byte, 0, total)
 	buf = append(buf, byte(len(p.Peers)), byte(len(p.Peers)>>8))
 	for _, peer := range p.Peers {
 		vip := peer.VirtualIP.To4()
 		buf = append(buf, vip...)
-		// public addr as string (uint16 length)
 		addrStr := ""
 		if peer.PublicAddr != nil {
 			addrStr = peer.PublicAddr.String()
@@ -169,7 +374,6 @@ func (p *PeerInfoPayload) Marshal() []byte {
 		addrBytes := []byte(addrStr)
 		buf = append(buf, byte(len(addrBytes)), byte(len(addrBytes)>>8))
 		buf = append(buf, addrBytes...)
-		// username (uint16 length)
 		userBytes := []byte(peer.Username)
 		buf = append(buf, byte(len(userBytes)), byte(len(userBytes)>>8))
 		buf = append(buf, userBytes...)
@@ -243,10 +447,13 @@ func UnmarshalData(data []byte) (*DataPayload, error) {
 	if len(data) < 8 {
 		return nil, ErrPacketTooShort
 	}
+	// Copy Data to avoid sharing the input buffer (caller may reuse it).
+	pktData := make([]byte, len(data)-8)
+	copy(pktData, data[8:])
 	return &DataPayload{
 		SrcIP: net.IP(append([]byte(nil), data[0:4]...)),
 		DstIP: net.IP(append([]byte(nil), data[4:8]...)),
-		Data:  data[8:],
+		Data:  pktData,
 	}, nil
 }
 
