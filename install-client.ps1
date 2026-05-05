@@ -81,7 +81,13 @@ Write-Host "  ✅ 已写入配置 $ConfigDir\config.json" -ForegroundColor Green
 # 生成 start.bat（从 config.json 读取配置，不硬编码）
 $BatContent = @'
 @echo off
-chcp 65001 >nul 2>&1
+:: 切换到 UTF-8 代码页后重新执行自身，确保 cmd.exe 用 UTF-8 读取本文件
+if not defined _UTF8_RESTARTED (
+    chcp 65001 >nul 2>&1
+    set _UTF8_RESTARTED=1
+    "%~f0" %*
+    exit /b
+)
 title GameTunnel
 
 :: 请求管理员权限
@@ -134,7 +140,7 @@ echo.
 echo GameTunnel 已退出。
 pause
 '@
-Set-Content -Path "$InstallDir\start.bat" -Value $BatContent -Encoding ASCII
+Set-Content -Path "$InstallDir\start.bat" -Value $BatContent -Encoding UTF8
 Write-Host "  ✅ 已生成启动器 $InstallDir\start.bat" -ForegroundColor Green
 
 # 创建桌面快捷方式

@@ -1,5 +1,11 @@
 @echo off
-chcp 65001 >nul 2>&1
+:: 切换到 UTF-8 代码页后重新执行自身，确保 cmd.exe 用 UTF-8 读取本文件
+if not defined _UTF8_RESTARTED (
+    chcp 65001 >nul 2>&1
+    set _UTF8_RESTARTED=1
+    "%~f0" %*
+    exit /b
+)
 title GameTunnel
 
 :: ──────────────────────────────────────────────
