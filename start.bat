@@ -1,29 +1,16 @@
 @echo off
-:: 切换到 UTF-8 代码页后重新执行自身，确保 cmd.exe 用 UTF-8 读取本文件
-if not defined _UTF8_RESTARTED (
-    chcp 65001 >nul 2>&1
-    set _UTF8_RESTARTED=1
-    "%~f0" %*
-    exit /b
-)
+chcp 65001 >nul 2>&1
 title GameTunnel
 
-:: ──────────────────────────────────────────────
-:: GameTunnel 启动器
-:: 双击运行即可，会自动请求管理员权限
-:: 配置从 %APPDATA%\GameTunnel\config.json 读取
-:: （由 install-client.ps1 生成，或手动创建）
-:: ──────────────────────────────────────────────
-
-:: 请求管理员权限
+:: Request admin rights
 net session >nul 2>&1
 if %errorlevel% neq 0 (
-    echo 请求管理员权限...
+    echo Requesting admin rights...
     powershell -Command "Start-Process '%~f0' -Verb RunAs"
     exit /b
 )
 
-:: 查找客户端
+:: Find client executable
 set EXE=gtunnel-client.exe
 where %EXE% >nul 2>&1
 if %errorlevel% neq 0 (
@@ -32,20 +19,20 @@ if %errorlevel% neq 0 (
     ) else if exist "%~dp0gtunnel-client.exe" (
         set EXE=%~dp0gtunnel-client.exe
     ) else (
-        echo [错误] 找不到 gtunnel-client.exe
-        echo 请确保客户端在当前目录、PATH 或 %LOCALAPPDATA%\GameTunnel 中
-        echo 下载: https://github.com/holipay/gametunnel/releases
+        echo [ERROR] Cannot find gtunnel-client.exe
+        echo Make sure it is in the current directory, PATH, or %LOCALAPPDATA%\GameTunnel
+        echo Download: https://github.com/holipay/gametunnel/releases
         pause
         exit /b 1
     )
 )
 
-:: 从 config.json 读取配置
+:: Read config from config.json
 set CONFIG_FILE=%APPDATA%\GameTunnel\config.json
 if not exist "%CONFIG_FILE%" (
-    echo [错误] 找不到配置文件 %CONFIG_FILE%
-    echo 请先运行安装脚本，或手动创建配置文件
-    echo 格式: {"server_addr":"IP:4700","player_name":"名字","room_id":"default","room_password":""}
+    echo [ERROR] Config file not found: %CONFIG_FILE%
+    echo Please run the installer first, or create config manually
+    echo Format: {"server_addr":"IP:4700","player_name":"Name","room_id":"default","room_password":""}
     pause
     exit /b 1
 )
@@ -61,7 +48,7 @@ for /f "usebackq delims=" %%i in (`powershell -NoProfile -Command ^
     )
 )
 
-:: 构建参数
+:: Build arguments
 set ARGS=-server %SERVER%
 if defined NAME if not "%NAME%"=="" set ARGS=%ARGS% -name "%NAME%"
 if not "%ROOM%"=="default" set ARGS=%ARGS% -room %ROOM%
@@ -69,18 +56,18 @@ if defined PASSWORD if not "%PASSWORD%"=="" set ARGS=%ARGS% -password "%PASSWORD
 
 echo.
 echo  ========================================
-echo   GameTunnel - 局域网游戏隧道
+echo   GameTunnel - LAN Game Tunnel
 echo  ========================================
-echo   服务器: %SERVER%
-if defined NAME if not "%NAME%"=="" echo   玩家:   %NAME%
-echo   房间:   %ROOM%
-if defined PASSWORD if not "%PASSWORD%"=="" (echo   认证:   HMAC) else (echo   认证:   无)
+echo   Server: %SERVER%
+if defined NAME if not "%NAME%"=="" echo   Player: %NAME%
+echo   Room:   %ROOM%
+if defined PASSWORD if not "%PASSWORD%"=="" (echo   Auth:   HMAC) else (echo   Auth:   None)
 echo  ========================================
 echo.
 
-:: 启动
+:: Launch
 "%EXE%" %ARGS%
 
 echo.
-echo GameTunnel 已退出。
+echo GameTunnel exited.
 pause
