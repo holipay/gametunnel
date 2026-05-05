@@ -17,6 +17,9 @@ LISTEN_ADDR="${LISTEN_ADDR:-:4700}"
 SUBNET="${SUBNET:-10.10.0.0/24}"
 MAX_PLAYERS="${MAX_PLAYERS:-10}"
 
+# Extract port from LISTEN_ADDR (e.g., ":4700" → "4700")
+LISTEN_PORT="${LISTEN_ADDR##*:}"
+
 echo "🎮 GameTunnel Server 安装脚本"
 echo ""
 
@@ -24,6 +27,13 @@ echo ""
 if [ "$EUID" -ne 0 ]; then
     echo "❌ 请用 root 运行此脚本"
     echo "   sudo bash install.sh"
+    exit 1
+fi
+
+# 检查端口是否被占用
+if ss -uln | grep -q ":${LISTEN_PORT} "; then
+    echo "❌ UDP 端口 ${LISTEN_PORT} 已被占用"
+    echo "   请先停止占用该端口的服务，或用 LISTEN_ADDR=:其他端口 指定新端口"
     exit 1
 fi
 
@@ -75,16 +85,32 @@ fi
 
 # 验证下载的文件是有效的 ELF
 if ! file "$TMPFILE" | grep -q "ELF"; then
-    echo "❌ 下载的文件不是有效的二进制"
-    echo "   可能该架构暂无预编译版本，请手动编译:"
-    echo "   git clone https://github.com/${REPO}.git && cd gametunnel && make server"
+    echo "⚠️  预编译二进制不可用，尝试从源码编译..."
     rm -f "$TMPFILE"
-    exit 1
+    
+    # 检查 Go 是否安装
+    if ! command -v go &>/dev/null; then
+        echo "❌ 未安装 Go，无法从源码编译"
+        echo "   请安装 Go 1.22+: https://go.dev/dl/"
+        echo "   或从 https://github.com/${REPO}/releases 手动下载二进制"
+        exit 1
+    fi
+    
+    echo "📦 从源码编译..."
+    TMPDIR=$(mktemp -d)
+    curl -sL "https://github.com/${REPO}/archive/refs/heads/main.tar.gz" | tar xz -C "$TMPDIR"
+    cd "$TMPDIR"/gametunnel-main
+    CGO_ENABLED=0 make server
+    mv bin/gtunnel-server "$INSTALL_DIR/gtunnel-server"
+    chmod 755 "$INSTALL_DIR/gtunnel-server"
+    cd /
+    rm -rf "$TMPDIR"
+    echo "  ✅ 已从源码编译并安装到 $INSTALL_DIR/gtunnel-server"
+else
+    mv "$TMPFILE" "$INSTALL_DIR/gtunnel-server"
+    chmod 755 "$INSTALL_DIR/gtunnel-server"
+    echo "  ✅ 已安装到 $INSTALL_DIR/gtunnel-server"
 fi
-
-mv "$TMPFILE" "$INSTALL_DIR/gtunnel-server"
-chmod 755 "$INSTALL_DIR/gtunnel-server"
-echo "  ✅ 已安装到 $INSTALL_DIR/gtunnel-server"
 
 # 构建启动参数
 EXTRA_ARGS=""

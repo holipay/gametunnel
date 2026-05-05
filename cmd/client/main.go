@@ -178,7 +178,12 @@ func (t *Tunnel) Connect(ctx context.Context, serverAddr string, mtu int) {
 }
 
 func (t *Tunnel) Disconnect() {
-	if t.conn != nil {
+	// Notify server before closing connection
+	if t.conn != nil && t.serverAddr != nil {
+		packet := protocol.EncodeChecked(protocol.TypeDisconnect, nil)
+		t.sendUDP(packet, t.serverAddr)
+		// Small delay to allow the packet to be sent
+		time.Sleep(50 * time.Millisecond)
 		t.conn.Close()
 	}
 }
@@ -632,7 +637,7 @@ func newTeeWriter(a, b *os.File) *teeWriter {
 }
 
 func (t *teeWriter) Write(p []byte) (n int, err error) {
-	// Write to file first; if it fails, still write to stderr but return the error.
+	// Write to both file and stderr. Return the minimum bytes written.
 	n1, err1 := t.a.Write(p)
 	n2, err2 := t.b.Write(p)
 	if err1 != nil {
@@ -641,5 +646,9 @@ func (t *teeWriter) Write(p []byte) (n int, err error) {
 	if err2 != nil {
 		return n2, err2
 	}
-	return len(p), nil
+	// Both succeeded; return the smaller count to be safe.
+	if n1 < n2 {
+		return n1, nil
+	}
+	return n2, nil
 }

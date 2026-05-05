@@ -53,6 +53,7 @@ type Client struct {
 	auth        authState
 	challenge   []byte    // 16-byte nonce
 	challengeAt time.Time // for expiry
+	authRoomID  string    // room ID from register request (for key derivation)
 }
 
 // ── Server ─────────────────────────────────────────────────────
@@ -68,7 +69,6 @@ type Server struct {
 	serverIP   net.IP
 	sem        *semaphore.Weighted
 	roomPass   string // room password (empty = no auth)
-	authKey    []byte // HKDF-derived key from roomPass (nil if no password)
 
 	// Rate limiting: per-client packet count per window
 	rateMu    sync.Mutex
@@ -125,8 +125,8 @@ func main() {
 		log.Fatalf("监听失败: %v", err)
 	}
 
-	// Derive auth key from room password (nil if empty).
-	authKey := protocol.DeriveKey(*roomPass, "default")
+	// Note: auth key is derived per-client using the room ID from the register request.
+	// roomPass is stored; if empty, no authentication is required.
 
 	s := &Server{
 		conn:       conn,
@@ -137,7 +137,6 @@ func main() {
 		serverIP:   serverIP,
 		sem:        semaphore.NewWeighted(200),
 		roomPass:   *roomPass,
-		authKey:    authKey,
 		rateCount:  make(map[rateKey]int),
 		maxPending: *maxPlayers * 3, // allow 3x max players for pending auth
 	}
@@ -158,7 +157,7 @@ func main() {
 
 	authStatus := "无认证"
 	if *roomPass != "" {
-		authStatus = "HMAC 认证"
+		authStatus = "HMAC 认证 (密钥按房间ID派生)"
 	}
 
 	log.Println("╔═══════════════════════════════════════════╗")
@@ -220,9 +219,9 @@ func (s *Server) checkRate(addr *net.UDPAddr) bool {
 	key := addrToRateKey(addr)
 	s.rateMu.Lock()
 	s.rateCount[key]++
-	count := s.rateCount[key]
+	ok := s.rateCount[key] <= rateLimit
 	s.rateMu.Unlock()
-	return count <= rateLimit
+	return ok
 }
 
 func (s *Server) rateLimitLoop(ctx context.Context) {
@@ -262,6 +261,8 @@ func (s *Server) handlePacket(data []byte, from *net.UDPAddr) {
 		s.handleRelay(msg.Payload, from)
 	case protocol.TypeHolePunch:
 		s.handleHolePunch(msg.Payload, from)
+	case protocol.TypeDisconnect:
+		s.handleDisconnect(from)
 	}
 }
 
@@ -308,7 +309,7 @@ func (s *Server) handleRegister(payload []byte, from *net.UDPAddr) {
 	}
 
 	// If no password required, register immediately.
-	if s.authKey == nil {
+	if s.roomPass == "" {
 		s.registerClientLocked(reg, from)
 		return
 	}
@@ -372,6 +373,7 @@ func (s *Server) sendAuthChallengeLocked(reg *protocol.RegisterPayload, from *ne
 		auth:        authChallengeSent,
 		challenge:   challenge,
 		challengeAt: time.Now(),
+		authRoomID:  reg.RoomID,
 	}
 	s.addrMap[from.String()] = c
 	s.pendingAuth++
@@ -406,8 +408,17 @@ func (s *Server) handleAuthResponse(payload []byte, from *net.UDPAddr) {
 		return
 	}
 
-	// Use server-level authKey (not per-client, which was removed).
-	if !protocol.VerifyAuthHMAC(s.authKey, resp.HMAC, c.challenge, resp.RoomID, resp.Username, from) {
+	// Derive auth key using the room ID from the original register request.
+	authKey := protocol.DeriveKey(s.roomPass, c.authRoomID)
+	if authKey == nil {
+		delete(s.addrMap, from.String())
+		s.pendingAuth--
+		s.mu.Unlock()
+		s.sendKick(from, "服务器内部错误")
+		return
+	}
+
+	if !protocol.VerifyAuthHMAC(authKey, resp.HMAC, c.challenge, resp.RoomID, resp.Username, from) {
 		delete(s.addrMap, from.String())
 		s.pendingAuth--
 		s.mu.Unlock()
@@ -445,6 +456,22 @@ func (s *Server) handleKeepAlive(from *net.UDPAddr) {
 	if c := s.addrMap[from.String()]; c != nil {
 		c.LastSeen = time.Now()
 	}
+}
+
+// handleDisconnect removes a client that is gracefully disconnecting.
+func (s *Server) handleDisconnect(from *net.UDPAddr) {
+	s.mu.Lock()
+	c := s.addrMap[from.String()]
+	if c == nil {
+		s.mu.Unlock()
+		return
+	}
+	log.Printf("[-] %s (%s) 主动断开", c.Username, c.VirtualIP)
+	delete(s.clients, c.VirtualIP.String())
+	delete(s.addrMap, from.String())
+	s.mu.Unlock()
+
+	s.sendPeerInfoTo(nil, nil, nil)
 }
 
 func (s *Server) keepaliveLoop(ctx context.Context) {

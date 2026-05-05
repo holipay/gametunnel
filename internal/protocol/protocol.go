@@ -46,6 +46,7 @@ const (
 	TypeAuthChallenge  byte = 0x08 // server → client: auth challenge (nonce)
 	TypeAuthResponse   byte = 0x09 // client → server: auth HMAC response
 	TypeKick           byte = 0x0A // server → client: kicked / error
+	TypeDisconnect     byte = 0x0B // client → server: graceful disconnect
 )
 
 // ── Common Errors ──────────────────────────────────────────────

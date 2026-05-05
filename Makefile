@@ -17,13 +17,15 @@ all: server client
 
 server:
 	@mkdir -p $(BINARY_DIR)
-	go build $(LDFLAGS) -o $(SERVER) ./cmd/server
+	CGO_ENABLED=0 go build $(LDFLAGS) -o $(SERVER) ./cmd/server
 
 server-linux-amd64:
-	GOOS=linux GOARCH=amd64 go build $(LDFLAGS) -o $(BINARY_DIR)/gtunnel-server-linux-amd64 ./cmd/server
+	@mkdir -p $(BINARY_DIR)
+	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build $(LDFLAGS) -o $(BINARY_DIR)/gtunnel-server-linux-amd64 ./cmd/server
 
 server-linux-arm64:
-	GOOS=linux GOARCH=arm64 go build $(LDFLAGS) -o $(BINARY_DIR)/gtunnel-server-linux-arm64 ./cmd/server
+	@mkdir -p $(BINARY_DIR)
+	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build $(LDFLAGS) -o $(BINARY_DIR)/gtunnel-server-linux-arm64 ./cmd/server
 
 install-server: server
 	install -m 755 $(SERVER) /usr/local/bin/gtunnel-server
