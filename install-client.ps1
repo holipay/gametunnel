@@ -9,9 +9,9 @@
 #     .\install-client.ps1 -Server 111.229.82.204 -Password mypass
 #
 #   方式3: 离线安装
-#     将 gtunnel-client.exe 和 install-client.ps1 放在同一目录，运行脚本即可
+#     将 gtunnel-client.exe、wintun.dll 和 install-client.ps1 放在同一目录，运行脚本即可
 #
-# 客户端获取优先级: 脚本同目录下的 gtunnel-client.exe → GitHub 下载
+# 文件获取优先级: 脚本同目录下的文件 → 网络下载
 
 param(
     [Parameter(Mandatory=$true)]
@@ -67,6 +67,48 @@ if (!(Test-Path $ExePath) -or (Get-Item $ExePath).Length -lt 100000) {
     exit 1
 }
 Write-Host "  ✅ 已就绪: $ExePath" -ForegroundColor Green
+
+# 获取 wintun.dll：优先本地，其次从 wintun.net 下载 zip 并提取
+$WintunPath = "$InstallDir\wintun.dll"
+$LocalWintun = Join-Path $ScriptDir "wintun.dll"
+$WintunZipUrl = "https://www.wintun.net/builds/wintun-0.14.1.zip"
+
+if (Test-Path $WintunPath) {
+    Write-Host "  ✅ wintun.dll 已存在" -ForegroundColor Green
+} elseif ((Test-Path $LocalWintun) -and (Get-Item $LocalWintun).Length -gt 10000) {
+    Write-Host "  📦 使用本地 wintun.dll: $LocalWintun" -ForegroundColor Green
+    Copy-Item -Path $LocalWintun -Destination $WintunPath -Force
+} else {
+    Write-Host "  📥 下载 wintun.dll..." -ForegroundColor Yellow
+    $WintunZip = "$env:TEMP\wintun.zip"
+    try {
+        [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+        Invoke-WebRequest -Uri $WintunZipUrl -OutFile $WintunZip -UseBasicParsing
+        # Determine architecture
+        $Arch = if ([Environment]::Is64BitOperatingSystem) { "amd64" } else { "x86" }
+        # Extract wintun.dll from zip
+        Add-Type -AssemblyName System.IO.Compression.FileSystem
+        $zip = [IO.Compression.ZipFile]::OpenRead($WintunZip)
+        foreach ($entry in $zip.Entries) {
+            if ($entry.FullName -like "*$Arch*wintun.dll") {
+                [IO.Compression.ZipFileExtensions]::ExtractToFile($entry, $WintunPath, $true)
+                break
+            }
+        }
+        $zip.Dispose()
+    } catch {
+        Write-Host "  ⚠️ wintun.dll 下载失败: $_" -ForegroundColor Yellow
+        Write-Host "  请手动下载: https://www.wintun.net/" -ForegroundColor Yellow
+    } finally {
+        Remove-Item -Path $WintunZip -ErrorAction SilentlyContinue
+    }
+}
+
+if ((Test-Path $WintunPath) -and (Get-Item $WintunPath).Length -gt 10000) {
+    Write-Host "  ✅ wintun.dll 已就绪" -ForegroundColor Green
+} else {
+    Write-Host "  ⚠️ wintun.dll 缺失，客户端可能无法创建虚拟网卡" -ForegroundColor Yellow
+}
 
 # 添加到 PATH（当前用户）
 $currentPath = [Environment]::GetEnvironmentVariable("Path", "User")
