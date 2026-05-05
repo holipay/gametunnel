@@ -1,12 +1,17 @@
 # GameTunnel 客户端安装脚本（Windows PowerShell）
 #
-# 用法（二选一）:
+# 用法（三选一）:
 #   方式1: 下载后运行
 #     irm https://raw.githubusercontent.com/holipay/gametunnel/main/install-client.ps1 -OutFile install.ps1
 #     .\install.ps1 -Server 111.229.82.204
 #
 #   方式2: 查看参数后运行
 #     .\install-client.ps1 -Server 111.229.82.204 -Password mypass
+#
+#   方式3: 离线安装
+#     将 gtunnel-client.exe 和 install-client.ps1 放在同一目录，运行脚本即可
+#
+# 客户端获取优先级: 脚本同目录下的 gtunnel-client.exe → GitHub 下载
 
 param(
     [Parameter(Mandatory=$true)]
@@ -38,23 +43,30 @@ if (!(Test-Path $InstallDir)) {
     New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
 }
 
-# 下载客户端
-Write-Host "  📥 下载客户端..." -ForegroundColor Yellow
-try {
-    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-    Invoke-WebRequest -Uri $ExeUrl -OutFile $ExePath -UseBasicParsing
-} catch {
-    Write-Host "  ❌ 下载失败: $_" -ForegroundColor Red
-    Write-Host "  请手动从 https://github.com/holipay/gametunnel/releases 下载" -ForegroundColor Yellow
-    exit 1
+# 获取客户端：优先使用脚本同目录下的本地文件，没有则从 GitHub 下载
+$ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+$LocalExe = Join-Path $ScriptDir "gtunnel-client.exe"
+if ((Test-Path $LocalExe) -and (Get-Item $LocalExe).Length -gt 100000) {
+    Write-Host "  📦 使用本地文件: $LocalExe" -ForegroundColor Green
+    Copy-Item -Path $LocalExe -Destination $ExePath -Force
+} else {
+    Write-Host "  📥 本地未找到 gtunnel-client.exe，从 GitHub 下载..." -ForegroundColor Yellow
+    try {
+        [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+        Invoke-WebRequest -Uri $ExeUrl -OutFile $ExePath -UseBasicParsing
+    } catch {
+        Write-Host "  ❌ 下载失败: $_" -ForegroundColor Red
+        Write-Host "  请手动从 https://github.com/holipay/gametunnel/releases 下载" -ForegroundColor Yellow
+        exit 1
+    }
 }
 
-# 验证下载
+# 验证文件
 if (!(Test-Path $ExePath) -or (Get-Item $ExePath).Length -lt 100000) {
-    Write-Host "  ❌ 下载的文件异常（可能被拦截或网络问题）" -ForegroundColor Red
+    Write-Host "  ❌ 客户端文件异常（可能被拦截或下载不完整）" -ForegroundColor Red
     exit 1
 }
-Write-Host "  ✅ 已下载到 $ExePath" -ForegroundColor Green
+Write-Host "  ✅ 已就绪: $ExePath" -ForegroundColor Green
 
 # 添加到 PATH（当前用户）
 $currentPath = [Environment]::GetEnvironmentVariable("Path", "User")
