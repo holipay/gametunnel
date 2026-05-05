@@ -26,7 +26,6 @@ import (
 
 	"github.com/holipay/gametunnel/internal/netutil"
 	"github.com/holipay/gametunnel/internal/protocol"
-	"golang.org/x/sync/semaphore"
 )
 
 // Version is set at build time via -ldflags.
@@ -60,15 +59,17 @@ type Client struct {
 
 type Server struct {
 	conn       *net.UDPConn
-	connMu     sync.Mutex // protects WriteToUDP
 	clients    map[string]*Client // virtualIP string → Client
 	addrMap    map[string]*Client // "ip:port" string → Client (O(1) lookup)
 	mu         sync.RWMutex       // protects clients + addrMap
 	subnet     *net.IPNet
 	maxPlayers int
 	serverIP   net.IP
-	sem        *semaphore.Weighted
 	roomPass   string // room password (empty = no auth)
+
+	// Worker pool: fixed goroutines reading from a shared channel
+	workers int
+	pktCh   chan pktJob
 
 	// Rate limiting: per-client packet count per window
 	rateMu    sync.Mutex
@@ -78,12 +79,24 @@ type Server struct {
 	// Auth flood protection: limit pending (unauthenticated) connections
 	pendingAuth int // count of entries in addrMap with auth == authChallengeSent
 	maxPending  int // max allowed pending auth entries (0 = unlimited when no password)
+
+	// Registration rate limiting: per-IP registration attempt tracking
+	regMu      sync.Mutex
+	regCount   map[string]int    // IP string → registration attempts in current window
+	regTick    *time.Ticker
+	maxRegPerIP int              // max registrations per IP per window
+}
+
+// pktJob represents a packet to be processed by the worker pool.
+type pktJob struct {
+	data []byte
+	addr *net.UDPAddr
 }
 
 // rateKey is a fixed-size key for rate limiting, avoiding string allocation per packet.
 type rateKey struct {
-IP   [4]byte
-Port uint16
+	IP   [4]byte
+	Port uint16
 }
 
 func addrToRateKey(addr *net.UDPAddr) rateKey {
@@ -128,17 +141,25 @@ func main() {
 	// Note: auth key is derived per-client using the room ID from the register request.
 	// roomPass is stored; if empty, no authentication is required.
 
+	workers := 8 // fixed worker count — enough for game traffic, avoids goroutine churn
+	if *maxPlayers > 20 {
+		workers = 16
+	}
+
 	s := &Server{
-		conn:       conn,
-		clients:    make(map[string]*Client),
-		addrMap:    make(map[string]*Client),
-		subnet:     subnet,
-		maxPlayers: *maxPlayers,
-		serverIP:   serverIP,
-		sem:        semaphore.NewWeighted(200),
-		roomPass:   *roomPass,
-		rateCount:  make(map[rateKey]int),
-		maxPending: *maxPlayers * 3, // allow 3x max players for pending auth
+		conn:        conn,
+		clients:     make(map[string]*Client),
+		addrMap:     make(map[string]*Client),
+		subnet:      subnet,
+		maxPlayers:  *maxPlayers,
+		serverIP:    serverIP,
+		roomPass:    *roomPass,
+		workers:     workers,
+		pktCh:       make(chan pktJob, 4096),
+		rateCount:   make(map[rateKey]int),
+		maxPending:  *maxPlayers * 3, // allow 3x max players for pending auth
+		regCount:    make(map[string]int),
+		maxRegPerIP: 5, // max 5 registration attempts per IP per second
 	}
 
 	// ── 优雅退出 ────────────────────────────────────────────
@@ -173,6 +194,12 @@ func main() {
 
 	go s.keepaliveLoop(ctx)
 	go s.rateLimitLoop(ctx)
+	go s.regRateLimitLoop(ctx)
+
+	// Start worker pool
+	for i := 0; i < s.workers; i++ {
+		go s.worker(ctx)
+	}
 
 	buf := make([]byte, 65535)
 	for {
@@ -198,13 +225,12 @@ func main() {
 		pkt := make([]byte, n)
 		copy(pkt, buf[:n])
 
-		if !s.sem.TryAcquire(1) {
-			continue
+		// Non-blocking send to worker pool
+		select {
+		case s.pktCh <- pktJob{data: pkt, addr: remoteAddr}:
+		default:
+			// Channel full — drop packet (backpressure)
 		}
-		go func() {
-			defer s.sem.Release(1)
-			s.handlePacket(pkt, remoteAddr)
-		}()
 	}
 }
 
@@ -237,6 +263,43 @@ func (s *Server) rateLimitLoop(ctx context.Context) {
 			s.rateMu.Unlock()
 		}
 	}
+}
+
+// worker processes packets from the shared channel (worker pool pattern).
+func (s *Server) worker(ctx context.Context) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case job := <-s.pktCh:
+			s.handlePacket(job.data, job.addr)
+		}
+	}
+}
+
+// regRateLimitLoop resets the per-IP registration counter every second.
+func (s *Server) regRateLimitLoop(ctx context.Context) {
+	s.regTick = time.NewTicker(time.Second)
+	defer s.regTick.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-s.regTick.C:
+			s.regMu.Lock()
+			s.regCount = make(map[string]int)
+			s.regMu.Unlock()
+		}
+	}
+}
+
+// checkRegRate returns true if the IP has not exceeded the registration rate limit.
+func (s *Server) checkRegRate(ip string) bool {
+	s.regMu.Lock()
+	s.regCount[ip]++
+	ok := s.regCount[ip] <= s.maxRegPerIP
+	s.regMu.Unlock()
+	return ok
 }
 
 // ── Packet Handling ────────────────────────────────────────────
@@ -286,6 +349,13 @@ func (s *Server) handleRegister(payload []byte, from *net.UDPAddr) {
 	}
 	if len(reg.RoomID) == 0 || len(reg.RoomID) > maxRoomIDLen {
 		s.sendKick(from, "房间ID无效")
+		return
+	}
+
+	// Per-IP registration rate limit (prevents auth flood exhaustion)
+	clientIP := from.IP.String()
+	if !s.checkRegRate(clientIP) {
+		s.sendKick(from, "注册过于频繁，请稍后重试")
 		return
 	}
 
@@ -386,6 +456,11 @@ func (s *Server) sendAuthChallengeLocked(reg *protocol.RegisterPayload, from *ne
 func (s *Server) handleAuthResponse(payload []byte, from *net.UDPAddr) {
 	resp, err := protocol.UnmarshalAuthResponse(payload)
 	if err != nil {
+		return
+	}
+
+	// Validate HMAC length (must be exactly 32 bytes for SHA-256)
+	if len(resp.HMAC) != 32 {
 		return
 	}
 
@@ -677,9 +752,8 @@ func (s *Server) sendChecked(typ byte, payload []byte, to *net.UDPAddr) {
 }
 
 // sendCheckedRaw sends an already-encoded packet (with checksum).
+// net.UDPConn.WriteToUDP is safe for concurrent use — no lock needed.
 func (s *Server) sendCheckedRaw(data []byte, to *net.UDPAddr) {
-	s.connMu.Lock()
-	defer s.connMu.Unlock()
 	s.conn.WriteToUDP(data, to)
 }
 
