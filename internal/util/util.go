@@ -1,7 +1,22 @@
-// Package netutil provides shared network helpers.
-package netutil
+// Package util provides shared helpers used across packages.
+package util
 
-import "net"
+import (
+	"fmt"
+	"net"
+	"os/exec"
+)
+
+// RunCmd executes a system command and returns an error with combined output
+// if the command fails.
+func RunCmd(name string, args ...string) error {
+	cmd := exec.Command(name, args...)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("%s %v: %s", name, args, string(out))
+	}
+	return nil
+}
 
 // IsBroadcast reports whether dst is a broadcast address for the given subnet.
 // It checks both 255.255.255.255 and the subnet-directed broadcast.

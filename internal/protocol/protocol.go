@@ -6,22 +6,16 @@
 //
 // All multi-byte integers are little-endian.
 //
-// Authentication: HMAC challenge-response (room password → HKDF-SHA256 key)
-// Integrity: CRC32 on every packet
+// Authentication is handled by the auth package; this package only defines
+// the auth-related wire payloads (challenge, response).
 package protocol
 
 import (
-	"crypto/hmac"
-	"crypto/rand"
-	"crypto/sha256"
 	"encoding/binary"
 	"errors"
 	"fmt"
 	"hash/crc32"
-	"io"
 	"net"
-
-	"golang.org/x/crypto/hkdf"
 )
 
 // Protocol version. Bump on breaking wire-format changes.
@@ -36,17 +30,17 @@ const ChecksumLen = 4
 // ── Message Types ──────────────────────────────────────────────
 
 const (
-	TypeRegister       byte = 0x01 // client → server: join room
-	TypeAssignIP       byte = 0x02 // server → client: virtual IP assigned
-	TypePeerInfo       byte = 0x03 // server → client: peer endpoint info
-	TypePeerRequest    byte = 0x04 // client → server: request peer list
-	TypeHolePunch      byte = 0x05 // client ↔ client: NAT hole punch
-	TypeData           byte = 0x06 // client ↔ server: relayed payload
-	TypeKeepAlive      byte = 0x07 // client → server: keep connection alive
-	TypeAuthChallenge  byte = 0x08 // server → client: auth challenge (nonce)
-	TypeAuthResponse   byte = 0x09 // client → server: auth HMAC response
-	TypeKick           byte = 0x0A // server → client: kicked / error
-	TypeDisconnect     byte = 0x0B // client → server: graceful disconnect
+	TypeRegister      byte = 0x01 // client → server: join room
+	TypeAssignIP      byte = 0x02 // server → client: virtual IP assigned
+	TypePeerInfo      byte = 0x03 // server → client: peer endpoint info
+	TypePeerRequest   byte = 0x04 // client → server: request peer list
+	TypeHolePunch     byte = 0x05 // client ↔ client: NAT hole punch
+	TypeData          byte = 0x06 // client ↔ server: relayed payload
+	TypeKeepAlive     byte = 0x07 // client → server: keep connection alive
+	TypeAuthChallenge byte = 0x08 // server → client: auth challenge (nonce)
+	TypeAuthResponse  byte = 0x09 // client → server: auth HMAC response
+	TypeKick          byte = 0x0A // server → client: kicked / error
+	TypeDisconnect    byte = 0x0B // client → server: graceful disconnect
 )
 
 // ── Common Errors ──────────────────────────────────────────────
@@ -66,7 +60,6 @@ type Message struct {
 }
 
 // Encode prepends version + type bytes and returns raw bytes ready to send.
-// Does NOT include checksum — call AppendChecksum on the result.
 func Encode(typ byte, payload []byte) []byte {
 	buf := make([]byte, HeaderLen+len(payload))
 	buf[0] = ProtocolVersion
@@ -75,7 +68,7 @@ func Encode(typ byte, payload []byte) []byte {
 	return buf
 }
 
-// AppendChecksum appends a CRC32 checksum to a packet (mutates in-place, returns slice).
+// AppendChecksum appends a CRC32 checksum to a packet.
 func AppendChecksum(packet []byte) []byte {
 	crc := crc32.ChecksumIEEE(packet)
 	b := make([]byte, 4)
@@ -98,7 +91,6 @@ func VerifyChecksum(data []byte) ([]byte, error) {
 }
 
 // Decode extracts the version, message type and payload from a raw packet.
-// Does NOT verify checksum — call VerifyChecksum first.
 func Decode(data []byte) (*Message, error) {
 	if len(data) < HeaderLen {
 		return nil, ErrPacketTooShort
@@ -124,53 +116,6 @@ func DecodeChecked(data []byte) (*Message, error) {
 // EncodeChecked is a convenience: Encode + AppendChecksum.
 func EncodeChecked(typ byte, payload []byte) []byte {
 	return AppendChecksum(Encode(typ, payload))
-}
-
-// ── Auth: Key Derivation (HKDF-SHA256) ─────────────────────────
-
-// DeriveKey derives a 32-byte HMAC key from the room password using HKDF-SHA256.
-// Room ID is used as "info" context to bind the key to a specific room.
-// Returns nil if password is empty.
-func DeriveKey(password, roomID string) []byte {
-	if password == "" {
-		return nil
-	}
-	hkdfReader := hkdf.New(sha256.New, []byte(password), nil, []byte("GameTunnel:"+roomID))
-	key := make([]byte, 32)
-	if _, err := io.ReadFull(hkdfReader, key); err != nil {
-		return nil
-	}
-	return key
-}
-
-// ── Auth: Challenge-Response ───────────────────────────────────
-
-// GenerateChallenge creates a 16-byte random nonce for authentication.
-func GenerateChallenge() ([]byte, error) {
-	nonce := make([]byte, 16)
-	if _, err := rand.Read(nonce); err != nil {
-		return nil, fmt.Errorf("generate challenge: %w", err)
-	}
-	return nonce, nil
-}
-
-// ComputeAuthHMAC computes the HMAC-SHA256 over the challenge+context.
-// Binds the response to: challenge nonce, room ID, username, and client address.
-func ComputeAuthHMAC(key []byte, challenge []byte, roomID, username string, remoteAddr *net.UDPAddr) []byte {
-	mac := hmac.New(sha256.New, key)
-	mac.Write(challenge)
-	mac.Write([]byte(roomID))
-	mac.Write([]byte(username))
-	if remoteAddr != nil {
-		mac.Write([]byte(remoteAddr.String()))
-	}
-	return mac.Sum(nil)
-}
-
-// VerifyAuthHMAC verifies the client's auth HMAC. Returns true if valid.
-func VerifyAuthHMAC(key, clientHMAC []byte, challenge []byte, roomID, username string, remoteAddr *net.UDPAddr) bool {
-	expected := ComputeAuthHMAC(key, challenge, roomID, username, remoteAddr)
-	return hmac.Equal(clientHMAC, expected)
 }
 
 // ── Auth Challenge Payload (server → client) ───────────────────
@@ -259,7 +204,6 @@ func UnmarshalAuthResponse(data []byte) (*AuthResponsePayload, error) {
 
 // ── Register ───────────────────────────────────────────────────
 
-// RegisterPayload is sent by client to join a room.
 type RegisterPayload struct {
 	RoomID   string
 	Username string
@@ -303,7 +247,6 @@ func UnmarshalRegister(data []byte) (*RegisterPayload, error) {
 
 // ── Assign IP ──────────────────────────────────────────────────
 
-// AssignIPPayload is sent by server after successful registration.
 type AssignIPPayload struct {
 	VirtualIP  net.IP
 	SubnetMask net.IPMask
@@ -331,20 +274,17 @@ func UnmarshalAssignIP(data []byte) (*AssignIPPayload, error) {
 
 // ── Peer Info ──────────────────────────────────────────────────
 
-// PeerInfoEntry describes one peer.
 type PeerInfoEntry struct {
 	VirtualIP  net.IP
 	PublicAddr *net.UDPAddr
 	Username   string
 }
 
-// PeerInfoPayload carries info about all current peers.
 type PeerInfoPayload struct {
 	Peers []PeerInfoEntry
 }
 
 func (p *PeerInfoPayload) Marshal() []byte {
-	// Pre-calculate total size to avoid repeated append growth.
 	total := 2 // peer count
 	for _, peer := range p.Peers {
 		total += 4 + 2 + len(peer.PublicAddr.String()) + 2 + len(peer.Username)
@@ -413,7 +353,6 @@ func UnmarshalPeerInfo(data []byte) (*PeerInfoPayload, error) {
 
 // ── Data (relay) ───────────────────────────────────────────────
 
-// DataPayload wraps a packet to be relayed.
 type DataPayload struct {
 	SrcIP net.IP
 	DstIP net.IP
