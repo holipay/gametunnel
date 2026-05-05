@@ -67,7 +67,8 @@ fi
 echo "  版本: $LATEST"
 
 # 下载预编译二进制
-BINARY_NAME="gtunnel-server-${OS}-${ARCH}"
+# Release asset 命名: gtunnel-server (通用 Linux)
+BINARY_NAME="gtunnel-server"
 if [ "$LATEST" = "latest" ]; then
     DOWNLOAD_URL="https://github.com/${REPO}/releases/latest/download/${BINARY_NAME}"
 else
