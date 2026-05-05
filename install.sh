@@ -1,6 +1,10 @@
 #!/bin/bash
 # GameTunnel 一键安装脚本（服务器端 - Linux）
-# Usage: curl -sL https://raw.githubusercontent.com/holipay/gametunnel/main/install.sh | sudo bash
+#
+# 用法:
+#   在线安装:  curl -sL https://raw.githubusercontent.com/holipay/gametunnel/main/install.sh | sudo bash
+#   本地安装:  sudo bash install.sh                          (gtunnel-server 在脚本同目录)
+#   带密码:    sudo ROOM_PASSWORD=你的密码 bash install.sh
 #
 # 环境变量:
 #   LISTEN_ADDR   - 监听地址 (默认 :4700)
@@ -17,6 +21,9 @@ LISTEN_ADDR="${LISTEN_ADDR:-:4700}"
 SUBNET="${SUBNET:-10.10.0.0/24}"
 MAX_PLAYERS="${MAX_PLAYERS:-10}"
 
+# 脚本所在目录（用于本地安装）
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd || pwd)"
+
 # Extract port from LISTEN_ADDR (e.g., ":4700" → "4700")
 LISTEN_PORT="${LISTEN_ADDR##*:}"
 
@@ -30,23 +37,15 @@ if [ "$EUID" -ne 0 ]; then
     exit 1
 fi
 
-# 检查端口是否被占用
-if ss -uln | grep -q ":${LISTEN_PORT} "; then
-    echo "❌ UDP 端口 ${LISTEN_PORT} 已被占用"
-    echo "   请先停止占用该端口的服务，或用 LISTEN_ADDR=:其他端口 指定新端口"
-    exit 1
+# 检查端口是否被占用（仅新安装时检查，更新跳过）
+if ! systemctl is-active --quiet gtunnel-server 2>/dev/null; then
+    if ss -uln | grep -q ":${LISTEN_PORT} "; then
+        echo "❌ UDP 端口 ${LISTEN_PORT} 已被占用"
+        echo "   请先停止占用该端口的服务，或用 LISTEN_ADDR=:其他端口 指定新端口"
+        exit 1
+    fi
 fi
 
-# 检查系统架构
-ARCH=$(uname -m)
-OS=$(uname -s | tr '[:upper:]' '[:lower:]')
-case "$ARCH" in
-    x86_64)  ARCH="amd64" ;;
-    aarch64) ARCH="arm64" ;;
-    *)       echo "❌ 不支持的架构: $ARCH"; exit 1 ;;
-esac
-
-echo "  系统: $OS/$ARCH"
 echo "  监听: $LISTEN_ADDR"
 echo "  子网: $SUBNET"
 echo "  上限: $MAX_PLAYERS 人"
@@ -57,69 +56,87 @@ else
 fi
 echo ""
 
-# 获取最新版本号
-echo "📡 检查最新版本..."
-LATEST=$(curl -sL "https://api.github.com/repos/${REPO}/releases/latest" | grep '"tag_name"' | head -1 | cut -d'"' -f4)
-if [ -z "$LATEST" ]; then
-    echo "⚠️  无法获取版本号，使用 main 分支"
-    LATEST="latest"
-fi
-echo "  版本: $LATEST"
+# ── 获取二进制文件 ─────────────────────────────────────────────
 
-# 下载预编译二进制
-# Release asset 命名: gtunnel-server (通用 Linux)
 BINARY_NAME="gtunnel-server"
-if [ "$LATEST" = "latest" ]; then
-    DOWNLOAD_URL="https://github.com/${REPO}/releases/latest/download/${BINARY_NAME}"
-else
-    DOWNLOAD_URL="https://github.com/${REPO}/releases/download/${LATEST}/${BINARY_NAME}"
+TMPFILE=""
+USE_LOCAL=false
+
+# 优先级1: 脚本所在目录有 gtunnel-server
+if [ -f "$SCRIPT_DIR/$BINARY_NAME" ] && file "$SCRIPT_DIR/$BINARY_NAME" | grep -q "ELF"; then
+    echo "📦 使用本地文件: $SCRIPT_DIR/$BINARY_NAME"
+    TMPFILE="$SCRIPT_DIR/$BINARY_NAME"
+    USE_LOCAL=true
+
+# 优先级2: 当前目录有 gtunnel-server
+elif [ -f "./$BINARY_NAME" ] && file "./$BINARY_NAME" | grep -q "ELF"; then
+    echo "📦 使用本地文件: ./$BINARY_NAME"
+    TMPFILE="./$BINARY_NAME"
+    USE_LOCAL=true
 fi
 
-echo "📥 下载服务器..."
-TMPFILE=$(mktemp)
-if ! curl -sL "$DOWNLOAD_URL" -o "$TMPFILE"; then
-    echo "❌ 下载失败: $DOWNLOAD_URL"
-    echo "   请从 https://github.com/${REPO}/releases 手动下载"
-    rm -f "$TMPFILE"
-    exit 1
-fi
-
-# 验证下载的文件是有效的 ELF
-if ! file "$TMPFILE" | grep -q "ELF"; then
-    echo "⚠️  预编译二进制不可用，尝试从源码编译..."
-    rm -f "$TMPFILE"
-    
-    # 检查 Go 是否安装
-    if ! command -v go &>/dev/null; then
-        echo "❌ 未安装 Go，无法从源码编译"
-        echo "   请安装 Go 1.22+: https://go.dev/dl/"
-        echo "   或从 https://github.com/${REPO}/releases 手动下载二进制"
+# 优先级3: 从 GitHub 下载
+if [ -z "$TMPFILE" ]; then
+    echo "📡 检查最新版本..."
+    LATEST=$(curl -sL "https://api.github.com/repos/${REPO}/releases/latest" | grep '"tag_name"' | head -1 | cut -d'"' -f4)
+    if [ -z "$LATEST" ]; then
+        echo "❌ 无法获取版本信息，请检查网络或手动下载:"
+        echo "   https://github.com/${REPO}/releases"
         exit 1
     fi
-    
-    echo "📦 从源码编译..."
-    TMPDIR=$(mktemp -d)
-    curl -sL "https://github.com/${REPO}/archive/refs/heads/main.tar.gz" | tar xz -C "$TMPDIR"
-    cd "$TMPDIR"/gametunnel-main
-    CGO_ENABLED=0 make server
-    mv bin/gtunnel-server "$INSTALL_DIR/gtunnel-server"
-    chmod 755 "$INSTALL_DIR/gtunnel-server"
-    cd /
-    rm -rf "$TMPDIR"
-    echo "  ✅ 已从源码编译并安装到 $INSTALL_DIR/gtunnel-server"
-else
-    mv "$TMPFILE" "$INSTALL_DIR/gtunnel-server"
-    chmod 755 "$INSTALL_DIR/gtunnel-server"
-    echo "  ✅ 已安装到 $INSTALL_DIR/gtunnel-server"
+    echo "  版本: $LATEST"
+
+    DOWNLOAD_URL="https://github.com/${REPO}/releases/download/${LATEST}/${BINARY_NAME}"
+    echo "📥 下载服务器..."
+    TMPFILE=$(mktemp)
+    if ! curl -sL "$DOWNLOAD_URL" -o "$TMPFILE"; then
+        echo "❌ 下载失败: $DOWNLOAD_URL"
+        echo ""
+        echo "  替代方案："
+        echo "  1. 从 https://github.com/${REPO}/releases 手动下载 $BINARY_NAME"
+        echo "  2. 放到服务器上，和 install.sh 同目录，重新运行"
+        rm -f "$TMPFILE"
+        exit 1
+    fi
+
+    # 验证下载的文件是有效的 ELF
+    if ! file "$TMPFILE" | grep -q "ELF"; then
+        echo "❌ 下载的文件不是有效的 Linux 二进制"
+        echo ""
+        echo "  替代方案："
+        echo "  1. 从 https://github.com/${REPO}/releases 手动下载 $BINARY_NAME"
+        echo "  2. 放到服务器上，和 install.sh 同目录，重新运行"
+        rm -f "$TMPFILE"
+        exit 1
+    fi
+    echo "  ✅ 下载完成"
 fi
 
-# 构建启动参数
+# ── 安装 ───────────────────────────────────────────────────────
+
+# 停止旧服务（更新时）
+if systemctl is-active --quiet gtunnel-server 2>/dev/null; then
+    echo "🔄 停止旧服务..."
+    systemctl stop gtunnel-server
+fi
+
+cp "$TMPFILE" "$INSTALL_DIR/$BINARY_NAME"
+chmod 755 "$INSTALL_DIR/$BINARY_NAME"
+
+# 清理临时文件（仅非本地文件）
+if [ "$USE_LOCAL" = false ]; then
+    rm -f "$TMPFILE"
+fi
+
+echo "  ✅ 已安装到 $INSTALL_DIR/$BINARY_NAME"
+
+# ── 创建 systemd 服务 ─────────────────────────────────────────
+
 EXTRA_ARGS=""
 if [ -n "$ROOM_PASSWORD" ]; then
     EXTRA_ARGS="-password ${ROOM_PASSWORD}"
 fi
 
-# 创建 systemd 服务
 cat > "$SERVICE_FILE" <<EOF
 [Unit]
 Description=GameTunnel Server
@@ -127,7 +144,7 @@ After=network.target
 
 [Service]
 Type=simple
-ExecStart=${INSTALL_DIR}/gtunnel-server -addr ${LISTEN_ADDR} -subnet ${SUBNET} -max ${MAX_PLAYERS} ${EXTRA_ARGS}
+ExecStart=${INSTALL_DIR}/$BINARY_NAME -addr ${LISTEN_ADDR} -subnet ${SUBNET} -max ${MAX_PLAYERS} ${EXTRA_ARGS}
 Restart=always
 RestartSec=5
 
