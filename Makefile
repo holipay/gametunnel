@@ -47,5 +47,23 @@ client-arm64:
 run-server: server
 	sudo $(SERVER) -addr :4700 -subnet 10.10.0.0/24
 
+# ── Release ─────────────────────────────────────────────────────
+
+release: client
+	@mkdir -p $(BINARY_DIR)/release
+	cp $(CLIENT) $(BINARY_DIR)/release/
+	cp start.bat $(BINARY_DIR)/release/
+	@# Copy wintun.dll from Go module cache if available
+	@WINTUN=$$(find $$(go env GOMODCACHE) -path '*/wintun@*/dll/wintun_amd64.dll' 2>/dev/null | head -1); \
+	if [ -n "$$WINTUN" ]; then \
+		cp "$$WINTUN" $(BINARY_DIR)/release/wintun.dll; \
+		echo "  Included wintun.dll"; \
+	else \
+		echo "  [WARN] wintun.dll not found in module cache"; \
+	fi
+	cd $(BINARY_DIR)/release && zip -9 ../GameTunnel-windows-amd64.zip ./*
+	rm -rf $(BINARY_DIR)/release
+	@echo "  Created $(BINARY_DIR)/GameTunnel-windows-amd64.zip"
+
 clean:
 	rm -rf $(BINARY_DIR)

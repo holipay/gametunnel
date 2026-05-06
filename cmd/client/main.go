@@ -54,12 +54,16 @@ func main() {
 		cfg.RoomPassword = *passFlag
 	}
 	if cfg.ServerAddr == "" {
-		cfg.ServerAddr = "127.0.0.1:4700"
-		client.SaveConfig(cfg)
-		fmt.Fprintf(os.Stderr, "首次运行，已写入默认配置。请指定服务器地址:\n")
-		fmt.Fprintf(os.Stderr, "  gtunnel-client.exe -server 你的服务器IP:4700\n")
+		path := client.CreateDefaultConfig()
+		fmt.Fprintf(os.Stderr, "\n  首次运行，已创建配置文件:\n")
+		fmt.Fprintf(os.Stderr, "  %s\n\n", path)
+		fmt.Fprintf(os.Stderr, "  请用记事本编辑此文件，填入服务器地址后重新运行。\n")
+		fmt.Fprintf(os.Stderr, "  或使用命令行: gtunnel-client.exe -server 你的服务器IP:4700\n\n")
 		os.Exit(1)
 	}
+
+	// Save config so subsequent runs remember CLI overrides
+	client.SaveConfig(cfg)
 
 	// Setup logging (file + stderr)
 	logFile := client.SetupLog()

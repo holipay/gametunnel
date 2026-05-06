@@ -27,19 +27,24 @@ sudo ./bin/gtunnel-server -addr :4700
 
 ### 玩家（Windows 电脑）
 
-**方式一：PowerShell 一键安装**
-```powershell
-# 交互式（会提示输入服务器地址）
-irm https://raw.githubusercontent.com/holipay/gametunnel/main/install-client.ps1 | iex
+**方式一：下载压缩包（推荐）**
+1. 从 [Releases](https://github.com/holipay/gametunnel/releases) 下载 `GameTunnel-windows-amd64.zip`
+2. 解压到任意文件夹
+3. 用记事本编辑 `config.ini`，填入服务器地址
+4. 双击 `start.bat` 连接
 
-# 指定服务器
-$env:GT_SERVER="你的服务器IP:4700"; irm https://raw.githubusercontent.com/holipay/gametunnel/main/install-client.ps1 | iex
+配置文件 `config.ini` 示例：
+```ini
+server=1.2.3.4:4700
+name=玩家名
+room=default
+password=
 ```
 
-**方式二：双击 start.bat**
-1. 从 [Releases](https://github.com/holipay/gametunnel/releases) 下载 `start.bat`（可选同时下载 `gtunnel-client.exe` 和 `wintun.dll` 放到同目录）
-2. 双击 `start.bat`，首次运行会自动下载所需文件并引导配置
-3. 之后每次双击即可连接
+**方式二：PowerShell 安装**
+```powershell
+irm https://raw.githubusercontent.com/holipay/gametunnel/main/install-client.ps1 | iex
+```
 
 连接成功后，打开游戏进入局域网模式即可。
 
