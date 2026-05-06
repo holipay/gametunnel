@@ -4,7 +4,6 @@ import (
 	"net"
 
 	"github.com/holipay/gametunnel/internal/protocol"
-	"github.com/holipay/gametunnel/internal/util"
 )
 
 // handleRelay forwards a data packet. For broadcast, it forwards to all
@@ -35,7 +34,7 @@ func (s *Server) handleRelay(payload []byte, from *net.UDPAddr) {
 	encoded := protocol.EncodeChecked(protocol.TypeData, payload)
 
 	// Broadcast
-	if util.IsBroadcast(dstIP, s.subnet) {
+	if protocol.IsBroadcast(dstIP, s.subnet) {
 		fromStr := from.String() // cache outside the loop
 		for _, c := range s.clients {
 			if c.PublicAddr.String() != fromStr {

@@ -4,7 +4,6 @@ import (
 	"net"
 
 	"github.com/holipay/gametunnel/internal/protocol"
-	"github.com/holipay/gametunnel/internal/util"
 )
 
 // routePacket determines how to route an outgoing IP packet.
@@ -13,7 +12,7 @@ func (t *Tunnel) routePacket(pkt []byte, srcIP, dstIP net.IP) {
 		IP:   t.virtualIP.Mask(t.subnetMask),
 		Mask: t.subnetMask,
 	}
-	if util.IsBroadcast(dstIP, subnet) {
+	if protocol.IsBroadcast(dstIP, subnet) {
 		t.relayBroadcast(pkt, srcIP)
 		return
 	}

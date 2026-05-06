@@ -9,7 +9,6 @@ import (
 	"log"
 	"net"
 
-	"github.com/holipay/gametunnel/internal/util"
 	"golang.zx2c4.com/wireguard/tun"
 )
 
@@ -76,7 +75,7 @@ func (d *Device) configure() error {
 	ip := d.virtualIP.String()
 
 	// netsh interface ip set address "GameTunnel" static 10.10.0.2 255.255.255.0
-	if err := util.RunCmd("netsh", "interface", "ip", "set", "address",
+	if err := RunCmd("netsh", "interface", "ip", "set", "address",
 		fmt.Sprintf("name=%s", d.name),
 		"static", ip, mask); err != nil {
 		return fmt.Errorf("assign IP: %w", err)
@@ -88,7 +87,7 @@ func (d *Device) configure() error {
 	subnetStr := fmt.Sprintf("%s/%d", subnet, maskBits)
 
 	// route add 10.10.0.0 mask 255.255.255.0 10.10.0.2
-	if err := util.RunCmd("route", "add", subnetStr, "mask", mask, ip, "metric", "1"); err != nil {
+	if err := RunCmd("route", "add", subnetStr, "mask", mask, ip, "metric", "1"); err != nil {
 		// Not fatal — route may already exist
 		log.Printf("[tun] route add warning: %v", err)
 	}
