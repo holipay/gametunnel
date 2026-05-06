@@ -20,23 +20,35 @@ func (t *Tunnel) register(ctx context.Context) error {
 	}
 	packet := protocol.EncodeChecked(protocol.TypeRegister, reg.Marshal())
 
-	t.conn.SetReadDeadline(time.Now().Add(10 * time.Second))
+	deadline := 10 * time.Second
+	t.conn.SetReadDeadline(time.Now().Add(deadline))
 	defer t.conn.SetReadDeadline(time.Time{})
 
-	for attempt := 0; attempt < 3; attempt++ {
+	const maxRetries = 3
+	const maxAuthRounds = 3
+	retries := 0
+	authRounds := 0
+
+	t.sendUDP(packet, t.serverAddr)
+
+	for {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
 		default:
 		}
 
-		t.sendUDP(packet, t.serverAddr)
-
 		// Wait for response (AssignIP, AuthChallenge, or Kick)
 		msg, err := t.readResponse(ctx)
 		if err != nil {
 			if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
-				log.Printf("[tunnel] 注册超时，重试 %d/3...", attempt+1)
+				retries++
+				if retries > maxRetries {
+					return fmt.Errorf("注册失败（重试%d次）", maxRetries)
+				}
+				log.Printf("[tunnel] 注册超时，重试 %d/%d...", retries, maxRetries)
+				t.sendUDP(packet, t.serverAddr)
+				t.conn.SetReadDeadline(time.Now().Add(deadline))
 				continue
 			}
 			return err
@@ -46,21 +58,20 @@ func (t *Tunnel) register(ctx context.Context) error {
 		case protocol.TypeAssignIP:
 			return t.handleAssignIP(msg.Payload)
 		case protocol.TypeAuthChallenge:
+			authRounds++
+			if authRounds > maxAuthRounds {
+				return fmt.Errorf("认证失败：服务器发送了过多的认证请求")
+			}
 			if err := t.handleAuthChallenge(msg.Payload); err != nil {
 				return err
 			}
-			// Auth response sent, wait for AssignIP.
-			// Reset deadline but DON'T consume an attempt — the server
-			// needs time to verify, and retrying the register would be wrong.
-			t.conn.SetReadDeadline(time.Now().Add(10 * time.Second))
-			attempt-- // don't count auth round as a retry
+			t.conn.SetReadDeadline(time.Now().Add(deadline))
 			continue
 		case protocol.TypeKick:
 			kick, _ := protocol.UnmarshalKick(msg.Payload)
 			return fmt.Errorf("被拒绝: %s", kick.Reason)
 		}
 	}
-	return fmt.Errorf("注册失败（重试3次）")
 }
 
 // readResponse reads and decodes one protocol message from the server.
