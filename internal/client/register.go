@@ -32,6 +32,7 @@ func (t *Tunnel) register(ctx context.Context) error {
 
 		t.sendUDP(packet, t.serverAddr)
 
+		// Wait for response (AssignIP, AuthChallenge, or Kick)
 		msg, err := t.readResponse(ctx)
 		if err != nil {
 			if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
@@ -48,9 +49,11 @@ func (t *Tunnel) register(ctx context.Context) error {
 			if err := t.handleAuthChallenge(msg.Payload); err != nil {
 				return err
 			}
-			// Auth response sent, wait for AssignIP. Don't count as retry.
+			// Auth response sent, wait for AssignIP.
+			// Reset deadline but DON'T consume an attempt — the server
+			// needs time to verify, and retrying the register would be wrong.
 			t.conn.SetReadDeadline(time.Now().Add(10 * time.Second))
-			attempt--
+			attempt-- // don't count auth round as a retry
 			continue
 		case protocol.TypeKick:
 			kick, _ := protocol.UnmarshalKick(msg.Payload)

@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"github.com/holipay/gametunnel/internal/protocol"
-	"github.com/holipay/gametunnel/internal/util"
 )
 
 // Peer represents a remote player.
@@ -21,6 +20,22 @@ type Peer struct {
 	VirtualIP  net.IP
 	PublicAddr *net.UDPAddr
 	Username   string
+}
+
+// TunDevice abstracts the TUN device for testability and platform independence.
+type TunDevice interface {
+	Read(buf []byte) (int, error)
+	Write(data []byte) (int, error)
+	Close() error
+}
+
+// TunConfig holds the parameters needed to create a TUN device.
+// Populated by Connect after successful registration.
+type TunConfig struct {
+	VirtualIP  net.IP
+	SubnetMask net.IPMask
+	ServerIP   net.IP
+	MTU        int
 }
 
 // Tunnel is the GameTunnel client.
@@ -39,13 +54,6 @@ type Tunnel struct {
 	roomPass   string
 }
 
-// TunDevice abstracts the TUN device for testability and platform independence.
-type TunDevice interface {
-	Read(buf []byte) (int, error)
-	Write(data []byte) (int, error)
-	Close() error
-}
-
 // New creates a new Tunnel. Call Connect to start it.
 func New(cfg *Config) *Tunnel {
 	return &Tunnel{
@@ -56,9 +64,11 @@ func New(cfg *Config) *Tunnel {
 	}
 }
 
-// Connect registers with the server, creates the TUN device, and starts
-// the relay loops. It blocks until ctx is cancelled.
-func (t *Tunnel) Connect(ctx context.Context, serverAddr string, mtu int, newTUN func(Config) (TunDevice, error)) error {
+// Connect registers with the server, creates the TUN device via newTUN,
+// and starts the relay loops. It blocks until ctx is cancelled.
+// The newTUN callback receives TunConfig populated with the virtual IP,
+// subnet mask, and server IP assigned during registration.
+func (t *Tunnel) Connect(ctx context.Context, serverAddr string, mtu int, newTUN func(TunConfig) (TunDevice, error)) error {
 	sAddr, err := net.ResolveUDPAddr("udp4", serverAddr)
 	if err != nil {
 		return fmt.Errorf("服务器地址无效: %w", err)
@@ -75,10 +85,11 @@ func (t *Tunnel) Connect(ctx context.Context, serverAddr string, mtu int, newTUN
 		return fmt.Errorf("注册失败: %w", err)
 	}
 
-	tunCfg := Config{
-		PlayerName:   t.username,
-		RoomID:       t.roomID,
-		RoomPassword: t.roomPass,
+	tunCfg := TunConfig{
+		VirtualIP:  t.virtualIP,
+		SubnetMask: t.subnetMask,
+		ServerIP:   t.serverIP,
+		MTU:        mtu,
 	}
 	tunDev, err := newTUN(tunCfg)
 	if err != nil {
@@ -93,6 +104,7 @@ func (t *Tunnel) Connect(ctx context.Context, serverAddr string, mtu int, newTUN
 	go t.peerDiscoveryLoop(ctx)
 
 	<-ctx.Done()
+	log.Printf("[tunnel] 断开连接")
 	return nil
 }
 
@@ -249,50 +261,6 @@ func (t *Tunnel) receiveFromTUN(ctx context.Context) {
 		dstIP := net.IP(pkt[16:20])
 		t.routePacket(pkt, srcIP, dstIP)
 	}
-}
-
-// routePacket determines how to route an outgoing IP packet.
-func (t *Tunnel) routePacket(pkt []byte, srcIP, dstIP net.IP) {
-	subnet := &net.IPNet{
-		IP:   t.virtualIP.Mask(t.subnetMask),
-		Mask: t.subnetMask,
-	}
-	if util.IsBroadcast(dstIP, subnet) {
-		t.relayBroadcast(pkt, srcIP)
-		return
-	}
-	if dstIP.Equal(t.serverIP) {
-		t.sendToServer(pkt, srcIP, dstIP)
-		return
-	}
-
-	t.mu.RLock()
-	peer, ok := t.peers[dstIP.String()]
-	t.mu.RUnlock()
-
-	if ok && peer.PublicAddr != nil {
-		dp := &protocol.DataPayload{SrcIP: srcIP, DstIP: dstIP, Data: pkt}
-		t.sendUDP(protocol.EncodeChecked(protocol.TypeData, dp.Marshal()), peer.PublicAddr)
-	} else {
-		t.sendToServer(pkt, srcIP, dstIP)
-	}
-}
-
-// relayBroadcast sends a broadcast packet to the server for relay.
-func (t *Tunnel) relayBroadcast(pkt []byte, srcIP net.IP) {
-	dp := &protocol.DataPayload{
-		SrcIP: srcIP,
-		DstIP: net.IPv4(255, 255, 255, 255),
-		Data:  pkt,
-	}
-	encoded := protocol.EncodeChecked(protocol.TypeData, dp.Marshal())
-	t.sendUDP(encoded, t.serverAddr)
-}
-
-// sendToServer sends a unicast packet via the server relay.
-func (t *Tunnel) sendToServer(pkt []byte, srcIP, dstIP net.IP) {
-	dp := &protocol.DataPayload{SrcIP: srcIP, DstIP: dstIP, Data: pkt}
-	t.sendUDP(protocol.EncodeChecked(protocol.TypeData, dp.Marshal()), t.serverAddr)
 }
 
 // sendUDP is a thread-safe UDP write.
