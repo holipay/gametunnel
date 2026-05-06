@@ -54,6 +54,9 @@ type Server struct {
 	serverIP   net.IP
 	ipBitmap   []uint64 // bitmap for O(1) IP allocation (256 bits for /24)
 	roomPass   string   // room password (empty = no auth)
+	statusAddr string   // HTTP status address, empty = disabled
+	version    string
+	startTime  time.Time
 
 	// Worker pool
 	workers int
@@ -87,6 +90,8 @@ type Config struct {
 	Subnet     *net.IPNet
 	MaxPlayers int
 	RoomPass   string
+	StatusAddr string // HTTP status address (e.g. ":4701"), empty = disabled
+	Version    string
 }
 
 // New creates a new Server. Call Run() to start it.
@@ -119,6 +124,9 @@ func New(cfg Config) (*Server, error) {
 		serverIP:    serverIP,
 		ipBitmap:    make([]uint64, 4), // 256 bits for /24 subnet
 		roomPass:    cfg.RoomPass,
+		statusAddr:  cfg.StatusAddr,
+		version:     cfg.Version,
+		startTime:   time.Now(),
 		workers:     workers,
 		pktCh:       make(chan pktJob, 4096),
 		rateCount:   make(map[rateKey]int),
@@ -134,6 +142,7 @@ func New(cfg Config) (*Server, error) {
 
 // Run starts the server and blocks until ctx is cancelled.
 func (s *Server) Run(ctx context.Context) {
+	s.startStatusServer(s.statusAddr)
 	go s.keepaliveLoop(ctx)
 	go s.rateLimitLoop(ctx)
 	go s.regRateLimitLoop(ctx)

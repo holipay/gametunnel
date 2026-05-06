@@ -27,6 +27,7 @@ func main() {
 	subnetStr := flag.String("subnet", "10.10.0.0/24", "虚拟子网 (CIDR)")
 	maxPlayers := flag.Int("max", 10, "最大玩家数")
 	roomPass := flag.String("password", "", "房间密码（留空=无认证）")
+	statusAddr := flag.String("status-addr", "", "状态页面地址 (HTTP)，如 :4701，留空=禁用")
 	versionFlag := flag.Bool("version", false, "显示版本")
 	flag.Parse()
 
@@ -45,6 +46,8 @@ func main() {
 		Subnet:     subnet,
 		MaxPlayers: *maxPlayers,
 		RoomPass:   *roomPass,
+		StatusAddr: *statusAddr,
+		Version:    Version,
 	})
 	if err != nil {
 		log.Fatalf("启动失败: %v", err)
@@ -78,6 +81,9 @@ func main() {
 	log.Printf("║  上限:    %-31d ║", *maxPlayers)
 	log.Printf("║  认证:    %-31s ║", authStatus)
 	log.Printf("║  版本:    %-31s ║", Version)
+	if *statusAddr != "" {
+		log.Printf("║  状态:    %-31s ║", fmt.Sprintf("http://%s", *statusAddr))
+	}
 	log.Println("╚═══════════════════════════════════════════╝")
 
 	s.Run(ctx)
