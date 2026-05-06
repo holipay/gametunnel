@@ -11,6 +11,7 @@
 #   SUBNET        - 虚拟子网 (默认 10.10.0.0/24)
 #   MAX_PLAYERS   - 最大玩家数 (默认 10)
 #   ROOM_PASSWORD - 房间密码 (默认: 无)
+#   STATUS_ADDR   - 状态页面地址 (默认: 禁用，如 :4701)
 
 set -e
 
@@ -20,6 +21,7 @@ REPO="holipay/gametunnel"
 LISTEN_ADDR="${LISTEN_ADDR:-:4700}"
 SUBNET="${SUBNET:-10.10.0.0/24}"
 MAX_PLAYERS="${MAX_PLAYERS:-10}"
+STATUS_ADDR="${STATUS_ADDR:-}"
 
 # 脚本所在目录（用于本地安装）
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd || pwd)"
@@ -53,6 +55,9 @@ if [ -n "$ROOM_PASSWORD" ]; then
     echo "  认证: HMAC 密码验证"
 else
     echo "  认证: 无"
+fi
+if [ -n "$STATUS_ADDR" ]; then
+    echo "  状态: http://${STATUS_ADDR}"
 fi
 echo ""
 
@@ -136,6 +141,9 @@ EXTRA_ARGS=""
 if [ -n "$ROOM_PASSWORD" ]; then
     EXTRA_ARGS="-password ${ROOM_PASSWORD}"
 fi
+if [ -n "$STATUS_ADDR" ]; then
+    EXTRA_ARGS="${EXTRA_ARGS} -status-addr ${STATUS_ADDR}"
+fi
 
 cat > "$SERVICE_FILE" <<EOF
 [Unit]
@@ -165,5 +173,10 @@ echo "  停止: systemctl stop gtunnel-server"
 echo ""
 echo "  玩家下载客户端: https://github.com/${REPO}/releases"
 echo ""
-echo "  ⚠️ 确保防火墙开放 UDP 4700 端口"
+if [ -n "$STATUS_ADDR" ]; then
+    STATUS_PORT="${STATUS_ADDR##*:}"
+    echo "  ⚠️ 确保防火墙开放 UDP ${LISTEN_PORT} 和 TCP ${STATUS_PORT} 端口"
+else
+    echo "  ⚠️ 确保防火墙开放 UDP ${LISTEN_PORT} 端口"
+fi
 echo ""

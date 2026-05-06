@@ -15,6 +15,9 @@ curl -sL https://raw.githubusercontent.com/holipay/gametunnel/main/install.sh | 
 # 带房间密码：
 curl -sL https://raw.githubusercontent.com/holipay/gametunnel/main/install.sh | sudo ROOM_PASSWORD=你的密码 bash
 
+# 带状态页面：
+curl -sL https://raw.githubusercontent.com/holipay/gametunnel/main/install.sh | sudo STATUS_ADDR=:4701 bash
+
 # 或手动编译：
 git clone https://github.com/holipay/gametunnel.git
 cd gametunnel
