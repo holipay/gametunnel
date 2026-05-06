@@ -15,7 +15,7 @@ import (
 	"github.com/holipay/gametunnel/internal/protocol"
 )
 
-// ── Client State ───────────────────────────────────────────────
+// ── Auth State ─────────────────────────────────────────────────
 
 type authState int
 
@@ -23,6 +23,8 @@ const (
 	authNone         authState = iota // no password required, or already authenticated
 	authChallengeSent                 // challenge sent, waiting for response
 )
+
+// ── Client State ───────────────────────────────────────────────
 
 // Client represents a connected player.
 type Client struct {
@@ -51,7 +53,7 @@ type Server struct {
 	serverIP   net.IP
 	roomPass   string // room password (empty = no auth)
 
-	// Worker pool: fixed goroutines reading from a shared channel
+	// Worker pool
 	workers int
 	pktCh   chan pktJob
 
@@ -60,11 +62,11 @@ type Server struct {
 	rateCount map[rateKey]int
 	rateTick  *time.Ticker
 
-	// Auth flood protection: limit pending (unauthenticated) connections
+	// Auth flood protection
 	pendingAuth int
 	maxPending  int
 
-	// Registration rate limiting: per-IP registration attempt tracking
+	// Registration rate limiting
 	regMu       sync.Mutex
 	regCount    map[string]int
 	regTick     *time.Ticker
@@ -75,19 +77,6 @@ type Server struct {
 type pktJob struct {
 	data []byte
 	addr *net.UDPAddr
-}
-
-// rateKey is a fixed-size key for rate limiting.
-type rateKey struct {
-	IP   [4]byte
-	Port uint16
-}
-
-func addrToRateKey(addr *net.UDPAddr) rateKey {
-	var k rateKey
-	copy(k.IP[:], addr.IP.To4())
-	k.Port = uint16(addr.Port)
-	return k
 }
 
 // Config holds server configuration.
@@ -186,11 +175,6 @@ func (s *Server) ServerIP() net.IP {
 	return s.serverIP
 }
 
-// Subnet returns the server's subnet.
-func (s *Server) Subnet() *net.IPNet {
-	return s.subnet
-}
-
 // ── Worker Pool ────────────────────────────────────────────────
 
 func (s *Server) worker(ctx context.Context) {
@@ -228,60 +212,6 @@ func (s *Server) handlePacket(data []byte, from *net.UDPAddr) {
 	case protocol.TypeDisconnect:
 		s.handleDisconnect(from)
 	}
-}
-
-// ── Rate Limiting ──────────────────────────────────────────────
-
-const (
-	rateLimit    = 500
-	rateInterval = time.Second
-)
-
-func (s *Server) checkRate(addr *net.UDPAddr) bool {
-	key := addrToRateKey(addr)
-	s.rateMu.Lock()
-	s.rateCount[key]++
-	ok := s.rateCount[key] <= rateLimit
-	s.rateMu.Unlock()
-	return ok
-}
-
-func (s *Server) rateLimitLoop(ctx context.Context) {
-	s.rateTick = time.NewTicker(rateInterval)
-	defer s.rateTick.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-s.rateTick.C:
-			s.rateMu.Lock()
-			s.rateCount = make(map[rateKey]int)
-			s.rateMu.Unlock()
-		}
-	}
-}
-
-func (s *Server) regRateLimitLoop(ctx context.Context) {
-	s.regTick = time.NewTicker(time.Second)
-	defer s.regTick.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-s.regTick.C:
-			s.regMu.Lock()
-			s.regCount = make(map[string]int)
-			s.regMu.Unlock()
-		}
-	}
-}
-
-func (s *Server) checkRegRate(ip string) bool {
-	s.regMu.Lock()
-	s.regCount[ip]++
-	ok := s.regCount[ip] <= s.maxRegPerIP
-	s.regMu.Unlock()
-	return ok
 }
 
 // ── Keepalive Loop ─────────────────────────────────────────────
@@ -354,6 +284,3 @@ type peerSnapshot struct {
 	publicAddr *net.UDPAddr
 	username   string
 }
-
-// Logf is a helper for testability — allows tests to capture logs.
-var Logf = log.Printf
