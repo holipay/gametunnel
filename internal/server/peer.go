@@ -26,8 +26,12 @@ func (s *Server) handleDisconnect(from *net.UDPAddr) {
 		return
 	}
 	log.Printf("[-] %s (%s) 主动断开", c.Username, c.VirtualIP)
-	s.markIPFree(c.VirtualIP)
-	delete(s.clients, c.VirtualIP.String())
+	if c.auth == authChallengeSent {
+		s.pendingAuth--
+	} else {
+		s.markIPFree(c.VirtualIP)
+		delete(s.clients, c.VirtualIP.String())
+	}
 	delete(s.addrMap, from.String())
 	s.mu.Unlock()
 
