@@ -52,7 +52,6 @@ run-server: server
 release: client
 	@mkdir -p $(BINARY_DIR)/release
 	cp $(CLIENT) $(BINARY_DIR)/release/
-	cp start.bat $(BINARY_DIR)/release/
 	@# Copy wintun.dll from Go module cache if available
 	@WINTUN=$$(find $$(go env GOMODCACHE) -path '*/wintun@*/dll/wintun_amd64.dll' 2>/dev/null | head -1); \
 	if [ -n "$$WINTUN" ]; then \
@@ -61,6 +60,8 @@ release: client
 	else \
 		echo "  [WARN] wintun.dll not found in module cache"; \
 	fi
+	@# Generate default config.ini
+	@printf '# GameTunnel Configuration\n# Server address (required, e.g. 1.2.3.4:4700)\nserver=\n# Player name (default: computer name)\nname=\n# Room ID (default: default)\nroom=default\n# Password (leave empty if none)\npassword=\n' > $(BINARY_DIR)/release/config.ini
 	cd $(BINARY_DIR)/release && zip -9 ../GameTunnel-windows-amd64.zip ./*
 	rm -rf $(BINARY_DIR)/release
 	@echo "  Created $(BINARY_DIR)/GameTunnel-windows-amd64.zip"
