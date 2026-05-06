@@ -18,11 +18,14 @@ const (
 
 // Device represents an active TUN device with its virtual IP.
 type Device struct {
-	tunDev     tun.Device
-	name       string
-	virtualIP  net.IP
-	subnetMask net.IPMask
-	mtu        int
+	tunDev        tun.Device
+	name          string
+	virtualIP     net.IP
+	subnetMask    net.IPMask
+	mtu           int
+	readSizes     [1]int
+	readPackets   [1][]byte
+	writePackets  [1][]byte
 }
 
 // Config holds parameters for creating a TUN device.
@@ -97,23 +100,21 @@ func (d *Device) configure() error {
 
 // Read reads an IP packet from the TUN device.
 func (d *Device) Read(buf []byte) (int, error) {
-	sizes := make([]int, 1)
-	packets := make([][]byte, 1)
-	packets[0] = buf
-	_, err := d.tunDev.Read(packets, sizes, 0)
+	d.readPackets[0] = buf
+	_, err := d.tunDev.Read(d.readPackets[:], d.readSizes[:], 0)
 	if err != nil {
 		return 0, err
 	}
-	if sizes[0] == 0 {
+	if d.readSizes[0] == 0 {
 		return 0, fmt.Errorf("zero-length read from TUN")
 	}
-	return sizes[0], nil
+	return d.readSizes[0], nil
 }
 
 // Write writes an IP packet to the TUN device.
 func (d *Device) Write(data []byte) (int, error) {
-	packets := [][]byte{data}
-	_, err := d.tunDev.Write(packets, 0)
+	d.writePackets[0] = data
+	_, err := d.tunDev.Write(d.writePackets[:], 0)
 	if err != nil {
 		return 0, err
 	}

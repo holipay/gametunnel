@@ -31,6 +31,9 @@ func (t *Tunnel) register(ctx context.Context) error {
 
 	t.sendUDP(packet, t.serverAddr)
 
+	// Pre-allocate buffer for all readResponse calls during registration
+	respBuf := make([]byte, 1500)
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -39,7 +42,7 @@ func (t *Tunnel) register(ctx context.Context) error {
 		}
 
 		// Wait for response (AssignIP, AuthChallenge, or Kick)
-		msg, err := t.readResponse(ctx)
+		msg, err := t.readResponse(ctx, respBuf)
 		if err != nil {
 			if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
 				retries++
@@ -75,7 +78,8 @@ func (t *Tunnel) register(ctx context.Context) error {
 }
 
 // readResponse reads and decodes one protocol message from the server.
-func (t *Tunnel) readResponse(ctx context.Context) (*protocol.Message, error) {
+// Caller must provide a reusable buffer (typically 1500 bytes).
+func (t *Tunnel) readResponse(ctx context.Context, buf []byte) (*protocol.Message, error) {
 	for {
 		select {
 		case <-ctx.Done():
@@ -83,7 +87,6 @@ func (t *Tunnel) readResponse(ctx context.Context) (*protocol.Message, error) {
 		default:
 		}
 
-		buf := make([]byte, 1500)
 		n, _, err := t.conn.ReadFromUDP(buf)
 		if err != nil {
 			return nil, err
@@ -106,6 +109,12 @@ func (t *Tunnel) handleAssignIP(payload []byte) error {
 	t.virtualIP = assign.VirtualIP
 	t.serverIP = assign.ServerIP
 	t.subnetMask = net.IPMask(assign.SubnetMask)
+	// Cache subnet and serverIP4 for hot-path lookups
+	t.cachedSubnet = &net.IPNet{
+		IP:   t.virtualIP.Mask(t.subnetMask),
+		Mask: t.subnetMask,
+	}
+	t.serverIP4 = ip4Key(t.serverIP)
 	return nil
 }
 

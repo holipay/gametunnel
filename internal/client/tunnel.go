@@ -11,6 +11,13 @@ import (
 	"github.com/holipay/gametunnel/internal/protocol"
 )
 
+// ip4Key converts a 4-byte IPv4 address to a [4]byte map key.
+// Panics if ip is not a valid IPv4 address.
+func ip4Key(ip net.IP) [4]byte {
+	ip4 := ip.To4()
+	return [4]byte{ip4[0], ip4[1], ip4[2], ip4[3]}
+}
+
 // Peer represents a remote player.
 type Peer struct {
 	VirtualIP  net.IP
@@ -36,18 +43,20 @@ type TunConfig struct {
 
 // Tunnel is the GameTunnel client.
 type Tunnel struct {
-	conn       *net.UDPConn
-	connMu     sync.Mutex // protects WriteToUDP
-	serverAddr *net.UDPAddr
-	tunDev     TunDevice
-	virtualIP  net.IP
-	serverIP   net.IP
-	subnetMask net.IPMask
-	peers      map[string]*Peer
-	mu         sync.RWMutex
-	username   string
-	roomID     string
-	roomPass   string
+	conn         *net.UDPConn
+	connMu       sync.Mutex // protects WriteToUDP
+	serverAddr   *net.UDPAddr
+	tunDev       TunDevice
+	virtualIP    net.IP
+	serverIP     net.IP
+	serverIP4    [4]byte    // cached serverIP as [4]byte for fast comparison
+	subnetMask   net.IPMask
+	cachedSubnet *net.IPNet // cached subnet for broadcast detection
+	peers        map[[4]byte]*Peer
+	mu           sync.RWMutex
+	username     string
+	roomID       string
+	roomPass     string
 }
 
 // New creates a new Tunnel. Call Connect to start it.
@@ -56,7 +65,7 @@ func New(cfg *Config) *Tunnel {
 		username: cfg.PlayerName,
 		roomID:   cfg.RoomID,
 		roomPass: cfg.RoomPassword,
-		peers:    make(map[string]*Peer),
+		peers:    make(map[[4]byte]*Peer),
 	}
 }
 

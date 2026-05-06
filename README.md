@@ -41,11 +41,6 @@ room=default
 password=
 ```
 
-**方式二：PowerShell 安装**
-```powershell
-irm https://raw.githubusercontent.com/holipay/gametunnel/main/install-client.ps1 | iex
-```
-
 连接成功后，打开游戏进入局域网模式即可。
 
 ## 安全

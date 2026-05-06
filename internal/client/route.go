@@ -8,21 +8,17 @@ import (
 
 // routePacket determines how to route an outgoing IP packet.
 func (t *Tunnel) routePacket(pkt []byte, srcIP, dstIP net.IP) {
-	subnet := &net.IPNet{
-		IP:   t.virtualIP.Mask(t.subnetMask),
-		Mask: t.subnetMask,
-	}
-	if protocol.IsBroadcast(dstIP, subnet) {
+	if t.cachedSubnet != nil && protocol.IsBroadcast(dstIP, t.cachedSubnet) {
 		t.relayBroadcast(pkt, srcIP)
 		return
 	}
-	if dstIP.Equal(t.serverIP) {
+	if ip4Key(dstIP) == t.serverIP4 {
 		t.sendToServer(pkt, srcIP, dstIP)
 		return
 	}
 
 	t.mu.RLock()
-	peer, ok := t.peers[dstIP.String()]
+	peer, ok := t.peers[ip4Key(dstIP)]
 	t.mu.RUnlock()
 
 	if ok && peer.PublicAddr != nil {

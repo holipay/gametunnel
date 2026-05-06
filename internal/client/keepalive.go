@@ -11,7 +11,7 @@ import (
 // startHolePunch sends NAT hole punch packets to a peer.
 func (t *Tunnel) startHolePunch(peerIP net.IP) {
 	t.mu.RLock()
-	peer, ok := t.peers[peerIP.String()]
+	peer, ok := t.peers[ip4Key(peerIP)]
 	t.mu.RUnlock()
 	if !ok || peer.PublicAddr == nil {
 		return
