@@ -126,7 +126,9 @@ func New(cfg Config) (*Server, error) {
 		regCount:    make(map[string]int),
 		maxRegPerIP: 5,
 	}
-	s.markIPUsed(serverIP)
+	s.markIPUsed(net.IPv4(serverIP[0], serverIP[1], serverIP[2], 0))   // network address
+	s.markIPUsed(serverIP)                                                // server IP
+	s.markIPUsed(net.IPv4(serverIP[0], serverIP[1], serverIP[2], 255))  // broadcast
 	return s, nil
 }
 
