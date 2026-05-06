@@ -103,7 +103,7 @@ func run() error {
 	// No server configured — create default config.ini and guide user
 	if cfg.ServerAddr == "" {
 		path := client.CreateDefaultConfig()
-		fmt.Fprintf(os.Stderr, "\n  首次运行，已创建配置文件:\n")
+		fmt.Fprintf(os.Stderr, "  首次运行，已创建配置文件:\n")
 		fmt.Fprintf(os.Stderr, "  %s\n\n", path)
 		fmt.Fprintf(os.Stderr, "  请用记事本编辑此文件，填入服务器地址后重新运行。\n")
 		fmt.Fprintf(os.Stderr, "  或使用命令行: gtunnel-client.exe -server 你的服务器IP:4700\n\n")
