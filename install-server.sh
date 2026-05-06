@@ -2,9 +2,9 @@
 # GameTunnel 一键安装脚本（服务器端 - Linux）
 #
 # 用法:
-#   在线安装:  curl -sL https://raw.githubusercontent.com/holipay/gametunnel/main/install.sh | sudo bash
-#   本地安装:  sudo bash install.sh                          (gtunnel-server 在脚本同目录)
-#   带密码:    sudo ROOM_PASSWORD=你的密码 bash install.sh
+#   在线安装:  curl -sL https://raw.githubusercontent.com/holipay/gametunnel/main/install-server.sh | sudo bash
+#   本地安装:  sudo bash install-server.sh                    (gtunnel-server 在脚本同目录)
+#   带密码:    sudo ROOM_PASSWORD=你的密码 bash install-server.sh
 #
 # 环境变量:
 #   LISTEN_ADDR   - 监听地址 (默认 :4700)
@@ -35,7 +35,7 @@ echo ""
 # 检查 root
 if [ "$EUID" -ne 0 ]; then
     echo "❌ 请用 root 运行此脚本"
-    echo "   sudo bash install.sh"
+    echo "   sudo bash install-server.sh"
     exit 1
 fi
 
@@ -99,18 +99,18 @@ if [ -z "$TMPFILE" ]; then
         echo ""
         echo "  替代方案："
         echo "  1. 从 https://github.com/${REPO}/releases 手动下载 $BINARY_NAME"
-        echo "  2. 放到服务器上，和 install.sh 同目录，重新运行"
+        echo "  2. 放到服务器上，和 install-server.sh 同目录，重新运行"
         rm -f "$TMPFILE"
         exit 1
     fi
 
-    # 验证下载的文件是有效的 ELF
+    # 验证是 ELF 二进制
     if ! file "$TMPFILE" | grep -q "ELF"; then
         echo "❌ 下载的文件不是有效的 Linux 二进制"
         echo ""
         echo "  替代方案："
         echo "  1. 从 https://github.com/${REPO}/releases 手动下载 $BINARY_NAME"
-        echo "  2. 放到服务器上，和 install.sh 同目录，重新运行"
+        echo "  2. 放到服务器上，和 install-server.sh 同目录，重新运行"
         rm -f "$TMPFILE"
         exit 1
     fi
