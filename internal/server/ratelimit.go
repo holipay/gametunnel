@@ -46,7 +46,10 @@ func (s *Server) rateLimitLoop(ctx context.Context) {
 			return
 		case <-s.rateTick.C:
 			s.rateMu.Lock()
-			s.rateCount = make(map[rateKey]int)
+			// Clear map without reallocating — reuse existing memory
+			for k := range s.rateCount {
+				delete(s.rateCount, k)
+			}
 			s.rateMu.Unlock()
 		}
 	}
@@ -73,7 +76,9 @@ func (s *Server) regRateLimitLoop(ctx context.Context) {
 			return
 		case <-s.regTick.C:
 			s.regMu.Lock()
-			s.regCount = make(map[string]int)
+			for k := range s.regCount {
+				delete(s.regCount, k)
+			}
 			s.regMu.Unlock()
 		}
 	}

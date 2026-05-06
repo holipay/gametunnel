@@ -1,6 +1,7 @@
 package client
 
 import (
+	"io"
 	"log"
 	"os"
 	"path/filepath"
@@ -18,31 +19,7 @@ func SetupLog() *os.File {
 		log.SetOutput(os.Stderr)
 		return os.Stderr
 	}
-	log.SetOutput(newTeeWriter(f, os.Stderr))
+	log.SetOutput(io.MultiWriter(f, os.Stderr))
 	log.Printf("=== GameTunnel 启动 ===")
 	return f
-}
-
-// teeWriter writes to two writers (for log → file + stderr).
-type teeWriter struct {
-	a, b *os.File
-}
-
-func newTeeWriter(a, b *os.File) *teeWriter {
-	return &teeWriter{a: a, b: b}
-}
-
-func (t *teeWriter) Write(p []byte) (n int, err error) {
-	n1, err1 := t.a.Write(p)
-	n2, err2 := t.b.Write(p)
-	if err1 != nil {
-		return n1, err1
-	}
-	if err2 != nil {
-		return n2, err2
-	}
-	if n1 < n2 {
-		return n1, nil
-	}
-	return n2, nil
 }

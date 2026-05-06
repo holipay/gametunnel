@@ -8,6 +8,7 @@ package server
 import (
 	"context"
 	"log"
+	"math/bits"
 	"net"
 	"sync"
 	"time"
@@ -51,7 +52,8 @@ type Server struct {
 	subnet     *net.IPNet
 	maxPlayers int
 	serverIP   net.IP
-	roomPass   string // room password (empty = no auth)
+	ipBitmap   []uint64 // bitmap for O(1) IP allocation (256 bits for /24)
+	roomPass   string   // room password (empty = no auth)
 
 	// Worker pool
 	workers int
@@ -108,13 +110,14 @@ func New(cfg Config) (*Server, error) {
 		workers = 16
 	}
 
-	return &Server{
+	s := &Server{
 		conn:        conn,
 		clients:     make(map[string]*Client),
 		addrMap:     make(map[string]*Client),
 		subnet:      cfg.Subnet,
 		maxPlayers:  cfg.MaxPlayers,
 		serverIP:    serverIP,
+		ipBitmap:    make([]uint64, 4), // 256 bits for /24 subnet
 		roomPass:    cfg.RoomPass,
 		workers:     workers,
 		pktCh:       make(chan pktJob, 4096),
@@ -122,7 +125,9 @@ func New(cfg Config) (*Server, error) {
 		maxPending:  cfg.MaxPlayers * 3,
 		regCount:    make(map[string]int),
 		maxRegPerIP: 5,
-	}, nil
+	}
+	s.markIPUsed(serverIP)
+	return s, nil
 }
 
 // Run starts the server and blocks until ctx is cancelled.
@@ -173,6 +178,36 @@ func (s *Server) Close() error {
 // ServerIP returns the server's virtual IP.
 func (s *Server) ServerIP() net.IP {
 	return s.serverIP
+}
+
+// markIPUsed marks an IP address as taken in the allocation bitmap.
+// MUST be called with s.mu held.
+func (s *Server) markIPUsed(ip net.IP) {
+	octet := ip.To4()[3]
+	s.ipBitmap[octet/64] |= 1 << (octet % 64)
+}
+
+// markIPFree marks an IP address as available in the allocation bitmap.
+// MUST be called with s.mu held.
+func (s *Server) markIPFree(ip net.IP) {
+	octet := ip.To4()[3]
+	s.ipBitmap[octet/64] &^= 1 << (octet % 64)
+}
+
+// nextAvailableIP finds the next unallocated IP in the subnet using a bitmap.
+// MUST be called with s.mu held. O(1) average case.
+func (s *Server) nextAvailableIP() net.IP {
+	base := s.subnet.IP.To4()
+	for i, word := range s.ipBitmap {
+		if word != ^uint64(0) {
+			bit := bits.TrailingZeros64(^word)
+			octet := i*64 + bit
+			if octet >= 2 && octet < 255 {
+				return net.IPv4(base[0], base[1], base[2], byte(octet))
+			}
+		}
+	}
+	return nil
 }
 
 // ── Worker Pool ────────────────────────────────────────────────
@@ -232,6 +267,7 @@ func (s *Server) keepaliveLoop(ctx context.Context) {
 		for ip, c := range s.clients {
 			if now.Sub(c.LastSeen) > 45*time.Second {
 				log.Printf("[-] %s (%s) 超时断开", c.Username, c.VirtualIP)
+				s.markIPFree(c.VirtualIP)
 				delete(s.clients, ip)
 				delete(s.addrMap, c.PublicAddr.String())
 				changed = true

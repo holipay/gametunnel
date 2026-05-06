@@ -7,13 +7,16 @@ import (
 
 func newTestServer(subnetStr string, serverIP net.IP) *Server {
 	_, subnet, _ := net.ParseCIDR(subnetStr)
-	return &Server{
-		clients:   make(map[string]*Client),
-		addrMap:   make(map[string]*Client),
-		subnet:    subnet,
-		serverIP:  serverIP,
+	s := &Server{
+		clients:    make(map[string]*Client),
+		addrMap:    make(map[string]*Client),
+		subnet:     subnet,
+		serverIP:   serverIP,
+		ipBitmap:   make([]uint64, 4),
 		maxPlayers: 10,
 	}
+	s.markIPUsed(serverIP)
+	return s
 }
 
 func TestNextAvailableIP(t *testing.T) {
@@ -26,6 +29,7 @@ func TestNextAvailableIP(t *testing.T) {
 	}
 
 	// Allocate .2, next should be .3
+	s.markIPUsed(net.IPv4(10, 10, 0, 2))
 	s.clients["10.10.0.2"] = &Client{VirtualIP: net.IPv4(10, 10, 0, 2)}
 	ip = s.nextAvailableIP()
 	if !ip.Equal(net.IPv4(10, 10, 0, 3)) {
@@ -39,6 +43,7 @@ func TestNextAvailableIPSkipsServer(t *testing.T) {
 	// Allocate .2 through .254, skipping .1 (server)
 	for i := 2; i <= 254; i++ {
 		ip := net.IPv4(10, 10, 0, byte(i))
+		s.markIPUsed(ip)
 		s.clients[ip.String()] = &Client{VirtualIP: ip}
 	}
 
@@ -54,6 +59,7 @@ func TestNextAvailableIPExhausted(t *testing.T) {
 	// Fill all slots (.2 through .254)
 	for i := 2; i <= 254; i++ {
 		ip := net.IPv4(10, 10, 0, byte(i))
+		s.markIPUsed(ip)
 		s.clients[ip.String()] = &Client{VirtualIP: ip}
 	}
 
@@ -67,8 +73,12 @@ func TestNextAvailableIPSkipsGaps(t *testing.T) {
 	s := newTestServer("10.10.0.0/24", net.IPv4(10, 10, 0, 1))
 
 	// Allocate .2 and .4, skip .3
-	s.clients["10.10.0.2"] = &Client{VirtualIP: net.IPv4(10, 10, 0, 2)}
-	s.clients["10.10.0.4"] = &Client{VirtualIP: net.IPv4(10, 10, 0, 4)}
+	ip2 := net.IPv4(10, 10, 0, 2)
+	ip4 := net.IPv4(10, 10, 0, 4)
+	s.markIPUsed(ip2)
+	s.markIPUsed(ip4)
+	s.clients["10.10.0.2"] = &Client{VirtualIP: ip2}
+	s.clients["10.10.0.4"] = &Client{VirtualIP: ip4}
 
 	ip := s.nextAvailableIP()
 	if !ip.Equal(net.IPv4(10, 10, 0, 3)) {

@@ -10,14 +10,6 @@ import (
 // handleRelay forwards a data packet. For broadcast, it forwards to all
 // peers in the room. For unicast, it forwards to the specific peer.
 func (s *Server) handleRelay(payload []byte, from *net.UDPAddr) {
-	s.mu.RLock()
-	sender := s.addrMap[from.String()]
-	s.mu.RUnlock()
-	if sender == nil {
-		return
-	}
-
-	// payload is DataPayload: [4B srcIP][4B dstIP][data...]
 	if len(payload) < 8 {
 		return
 	}
@@ -25,35 +17,38 @@ func (s *Server) handleRelay(payload []byte, from *net.UDPAddr) {
 	srcIP := net.IP(payload[0:4])
 	dstIP := net.IP(payload[4:8])
 
-	// Validate srcIP matches the sender's virtual IP (anti-spoofing)
-	if !srcIP.Equal(sender.VirtualIP) {
+	// Single RLock acquisition for sender lookup, validation, and forwarding
+	s.mu.RLock()
+	sender := s.addrMap[from.String()]
+	if sender == nil {
+		s.mu.RUnlock()
 		return
 	}
 
+	// Validate srcIP matches sender's virtual IP (anti-spoofing)
+	if !srcIP.Equal(sender.VirtualIP) {
+		s.mu.RUnlock()
+		return
+	}
+
+	// Encode AFTER validation — avoids wasting CPU on spoofed packets
 	encoded := protocol.EncodeChecked(protocol.TypeData, payload)
 
 	// Broadcast
 	if util.IsBroadcast(dstIP, s.subnet) {
-		s.mu.RLock()
-		targets := make([]*net.UDPAddr, 0, len(s.clients))
+		fromStr := from.String() // cache outside the loop
 		for _, c := range s.clients {
-			if c.PublicAddr.String() != from.String() {
-				targets = append(targets, c.PublicAddr)
+			if c.PublicAddr.String() != fromStr {
+				s.sendCheckedRaw(encoded, c.PublicAddr)
 			}
 		}
 		s.mu.RUnlock()
-
-		for _, addr := range targets {
-			s.sendCheckedRaw(encoded, addr)
-		}
 		return
 	}
 
 	// Unicast
-	s.mu.RLock()
 	dst, ok := s.clients[dstIP.String()]
 	s.mu.RUnlock()
-
 	if !ok {
 		return
 	}

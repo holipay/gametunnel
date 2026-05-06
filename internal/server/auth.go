@@ -84,6 +84,8 @@ func (s *Server) registerClientLocked(reg *protocol.RegisterPayload, from *net.U
 		return
 	}
 
+	s.markIPUsed(vip)
+
 	c := &Client{
 		Username:   reg.Username,
 		VirtualIP:  vip,

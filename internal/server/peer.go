@@ -26,6 +26,7 @@ func (s *Server) handleDisconnect(from *net.UDPAddr) {
 		return
 	}
 	log.Printf("[-] %s (%s) 主动断开", c.Username, c.VirtualIP)
+	s.markIPFree(c.VirtualIP)
 	delete(s.clients, c.VirtualIP.String())
 	delete(s.addrMap, from.String())
 	s.mu.Unlock()
@@ -88,19 +89,4 @@ func (s *Server) sendPeerInfoTo(targets []*net.UDPAddr, exclude *net.UDPAddr, se
 		}
 		s.sendCheckedRaw(encoded, sn.publicAddr)
 	}
-}
-
-// nextAvailableIP finds the next unallocated IP in the subnet.
-func (s *Server) nextAvailableIP() net.IP {
-	base := s.subnet.IP.To4()
-	for octet := 2; octet < 255; octet++ {
-		candidate := net.IPv4(base[0], base[1], base[2], byte(octet))
-		if candidate.Equal(s.serverIP) {
-			continue
-		}
-		if _, taken := s.clients[candidate.String()]; !taken {
-			return candidate
-		}
-	}
-	return nil
 }
