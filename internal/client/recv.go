@@ -56,6 +56,10 @@ func (t *Tunnel) handlePeerInfo(payload []byte) {
 
 	newPeers := make(map[[4]byte]*Peer, len(info.Peers))
 	for _, entry := range info.Peers {
+		// Skip self — server sends full list including this client
+		if entry.VirtualIP.Equal(t.virtualIP) {
+			continue
+		}
 		key := ip4Key(entry.VirtualIP)
 		if existing, ok := t.peers[key]; ok {
 			existing.PublicAddr = entry.PublicAddr

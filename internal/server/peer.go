@@ -1,11 +1,18 @@
 package server
 
 import (
+	"context"
 	"log"
 	"net"
 	"time"
 
 	"github.com/holipay/gametunnel/internal/protocol"
+)
+
+const (
+	// peerInfoInterval is how often the batch PeerInfo broadcast runs.
+	// 50ms coalesces up to ~20 join/leave events per broadcast, acceptable latency for LAN games.
+	peerInfoInterval = 50 * time.Millisecond
 )
 
 // handleKeepAlive updates the last-seen time for a client.
@@ -36,10 +43,11 @@ func (s *Server) handleDisconnect(from *net.UDPAddr) {
 	delete(s.addrMap, fromKey)
 	s.mu.Unlock()
 
-	s.sendPeerInfoTo(nil, nil)
+	s.peerInfoDirty.Store(true)
 }
 
 // handlePeerRequest handles a client's request for the peer list.
+// Responds immediately (not batched) since this is an on-demand request.
 func (s *Server) handlePeerRequest(from *net.UDPAddr) {
 	s.mu.RLock()
 	c := s.addrMap[addrToRateKey(from)]
@@ -49,13 +57,66 @@ func (s *Server) handlePeerRequest(from *net.UDPAddr) {
 		return
 	}
 
-	s.sendPeerInfoTo([]*net.UDPAddr{from}, c.VirtualIP)
+	s.sendPeerInfoToClient(from)
 }
 
-// sendPeerInfoTo sends peer information to the specified targets.
-// If targets is nil, broadcasts to all clients.
-// If selfIP is set, excludes that IP from the peer list.
-func (s *Server) sendPeerInfoTo(targets []*net.UDPAddr, selfIP net.IP) {
+// peerInfoLoop periodically checks the dirty flag and broadcasts PeerInfo.
+// This coalesces rapid join/leave events into a single broadcast per interval.
+func (s *Server) peerInfoLoop(ctx context.Context) {
+	ticker := time.NewTicker(peerInfoInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+
+		if s.peerInfoDirty.CompareAndSwap(true, false) {
+			s.sendPeerInfoBroadcast()
+		}
+	}
+}
+
+// sendPeerInfoBroadcast sends the full peer list to all connected clients.
+// The payload includes ALL clients — each client filters out itself locally.
+func (s *Server) sendPeerInfoBroadcast() {
+	s.mu.RLock()
+	if len(s.clients) == 0 {
+		s.mu.RUnlock()
+		return
+	}
+
+	snapshot := make([]peerSnapshot, 0, len(s.clients))
+	for _, c := range s.clients {
+		snapshot = append(snapshot, peerSnapshot{
+			virtualIP:  c.VirtualIP,
+			publicAddr: c.PublicAddr,
+			username:   c.Username,
+		})
+	}
+	s.mu.RUnlock()
+
+	peers := &protocol.PeerInfoPayload{}
+	for _, sn := range snapshot {
+		peers.Peers = append(peers.Peers, protocol.PeerInfoEntry{
+			VirtualIP:  sn.virtualIP,
+			PublicAddr: sn.publicAddr,
+			Username:   sn.username,
+		})
+	}
+
+	encoded := protocol.EncodeChecked(protocol.TypePeerInfo, peers.Marshal())
+
+	for _, sn := range snapshot {
+		s.sendCheckedRaw(encoded, sn.publicAddr)
+	}
+}
+
+// sendPeerInfoToClient sends the peer list to a single client.
+// The payload includes ALL clients — the client filters out itself locally.
+func (s *Server) sendPeerInfoToClient(target *net.UDPAddr) {
 	s.mu.RLock()
 	snapshot := make([]peerSnapshot, 0, len(s.clients))
 	for _, c := range s.clients {
@@ -69,9 +130,6 @@ func (s *Server) sendPeerInfoTo(targets []*net.UDPAddr, selfIP net.IP) {
 
 	peers := &protocol.PeerInfoPayload{}
 	for _, sn := range snapshot {
-		if selfIP != nil && sn.virtualIP.Equal(selfIP) {
-			continue
-		}
 		peers.Peers = append(peers.Peers, protocol.PeerInfoEntry{
 			VirtualIP:  sn.virtualIP,
 			PublicAddr: sn.publicAddr,
@@ -80,15 +138,5 @@ func (s *Server) sendPeerInfoTo(targets []*net.UDPAddr, selfIP net.IP) {
 	}
 
 	encoded := protocol.EncodeChecked(protocol.TypePeerInfo, peers.Marshal())
-
-	if targets != nil {
-		for _, addr := range targets {
-			s.sendCheckedRaw(encoded, addr)
-		}
-		return
-	}
-
-	for _, sn := range snapshot {
-		s.sendCheckedRaw(encoded, sn.publicAddr)
-	}
+	s.sendCheckedRaw(encoded, target)
 }

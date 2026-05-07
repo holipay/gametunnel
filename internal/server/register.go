@@ -55,7 +55,7 @@ func (s *Server) handleRegister(payload []byte, from *net.UDPAddr) {
 		selfIP := existing.VirtualIP
 		s.mu.Unlock()
 		s.sendAssignIP(selfIP, from)
-		s.sendPeerInfoTo([]*net.UDPAddr{from}, selfIP)
+		s.sendPeerInfoToClient(from)
 		return
 	}
 
@@ -111,7 +111,10 @@ func (s *Server) registerClientLocked(reg *protocol.RegisterPayload, from *net.U
 	s.mu.Unlock()
 
 	s.sendAssignIP(selfIP, from)
-	s.sendPeerInfoTo(nil, selfIP)
+	// Send full peer list to new player immediately (for hole punching)
+	s.sendPeerInfoToClient(from)
+	// Mark dirty so existing players learn about the new player within peerInfoInterval
+	s.peerInfoDirty.Store(true)
 }
 
 // sendAuthChallengeLocked sends auth challenge. MUST be called with s.mu held.

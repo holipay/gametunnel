@@ -71,6 +71,9 @@ type Server struct {
 	workers int
 	pktCh   chan pktJob
 
+	// PeerInfo batching: coalesce rapid join/leave into periodic broadcasts
+	peerInfoDirty atomic.Bool // set on join/leave, checked by peerInfoLoop
+
 	// Rate limiting: per-client packet count per window
 	rateMu    sync.Mutex
 	rateCount map[rateKey]int
@@ -132,10 +135,23 @@ func New(cfg Config) (*Server, error) {
 	copy(serverIP, cfg.Subnet.IP.To4())
 	serverIP[3] = 1
 
-	workers := 8
-	if cfg.MaxPlayers > 20 {
-		workers = 16
+	// Worker pool: 1 worker per 4 players, clamped to [8, 32]
+	workers := cfg.MaxPlayers / 4
+	if workers < 8 {
+		workers = 8
 	}
+	if workers > 32 {
+		workers = 32
+	}
+
+	// Channel buffer: scale with player count for burst absorption
+	chanBuf := cfg.MaxPlayers * 64
+	if chanBuf < 4096 {
+		chanBuf = 4096
+	}
+
+	// Tune UDP socket buffers (ignoring error on non-Linux platforms)
+	setSocketBuffers(conn)
 
 	s := &Server{
 		conn:        conn,
@@ -150,7 +166,7 @@ func New(cfg Config) (*Server, error) {
 		version:     cfg.Version,
 		startTime:   time.Now(),
 		workers:     workers,
-		pktCh:       make(chan pktJob, 4096),
+		pktCh:       make(chan pktJob, chanBuf),
 		rateCount:   make(map[rateKey]int),
 		maxPending:  cfg.MaxPlayers * 3,
 		regCount:    make(map[string]int),
@@ -168,6 +184,7 @@ func (s *Server) Run(ctx context.Context) {
 	go s.keepaliveLoop(ctx)
 	go s.rateLimitLoop(ctx)
 	go s.regRateLimitLoop(ctx)
+	go s.peerInfoLoop(ctx)
 
 	for i := 0; i < s.workers; i++ {
 		go s.worker(ctx)
@@ -338,7 +355,7 @@ func (s *Server) keepaliveLoop(ctx context.Context) {
 		s.mu.Unlock()
 
 		if changed {
-			s.sendPeerInfoTo(nil, nil)
+			s.peerInfoDirty.Store(true)
 		}
 	}
 }
