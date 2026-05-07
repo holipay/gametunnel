@@ -282,11 +282,34 @@ func (s *Server) keepaliveLoop(ctx context.Context) {
 			return
 		case <-ticker.C:
 		}
-		s.mu.Lock()
+
 		now := time.Now()
-		changed := false
+
+		// Phase 1: scan under RLock (non-blocking for packet processing)
+		s.mu.RLock()
+		var staleClients [][4]byte
+		var staleAuth []rateKey
 		for key, c := range s.clients {
 			if now.Sub(c.LastSeen) > 45*time.Second {
+				staleClients = append(staleClients, key)
+			}
+		}
+		for addrKey, c := range s.addrMap {
+			if c.auth == authChallengeSent && now.Sub(c.challengeAt) > 30*time.Second {
+				staleAuth = append(staleAuth, addrKey)
+			}
+		}
+		s.mu.RUnlock()
+
+		if len(staleClients) == 0 && len(staleAuth) == 0 {
+			continue
+		}
+
+		// Phase 2: delete under WLock (re-verify stale entries)
+		s.mu.Lock()
+		changed := false
+		for _, key := range staleClients {
+			if c, ok := s.clients[key]; ok && now.Sub(c.LastSeen) > 45*time.Second {
 				log.Printf("[-] %s (%s) 超时断开", c.Username, c.VirtualIP)
 				s.markIPFree(c.VirtualIP)
 				delete(s.clients, key)
@@ -294,9 +317,8 @@ func (s *Server) keepaliveLoop(ctx context.Context) {
 				changed = true
 			}
 		}
-		// Clean up stale pending auth entries
-		for addrKey, c := range s.addrMap {
-			if c.auth == authChallengeSent && now.Sub(c.challengeAt) > 30*time.Second {
+		for _, addrKey := range staleAuth {
+			if c, ok := s.addrMap[addrKey]; ok && c.auth == authChallengeSent && now.Sub(c.challengeAt) > 30*time.Second {
 				delete(s.addrMap, addrKey)
 				s.pendingAuth--
 			}
