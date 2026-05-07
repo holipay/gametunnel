@@ -65,6 +65,7 @@ echo ""
 
 BINARY_NAME="gtunnel-server"
 TMPFILE=""
+EXTRACT_DIR=""
 USE_LOCAL=false
 
 # 优先级1: 脚本所在目录有 gtunnel-server
@@ -91,27 +92,43 @@ if [ -z "$TMPFILE" ]; then
     fi
     echo "  版本: $LATEST"
 
-    DOWNLOAD_URL="https://github.com/${REPO}/releases/download/${LATEST}/${BINARY_NAME}"
+    ARCHIVE_NAME="GameTunnel-linux-amd64.tar.gz"
+    DOWNLOAD_URL="https://github.com/${REPO}/releases/download/${LATEST}/${ARCHIVE_NAME}"
     echo "📥 下载服务器..."
     TMPFILE=$(mktemp)
     if ! curl -sL "$DOWNLOAD_URL" -o "$TMPFILE"; then
         echo "❌ 下载失败: $DOWNLOAD_URL"
         echo ""
         echo "  替代方案："
-        echo "  1. 从 https://github.com/${REPO}/releases 手动下载 $BINARY_NAME"
-        echo "  2. 放到服务器上，和 install-server.sh 同目录，重新运行"
+        echo "  1. 从 https://github.com/${REPO}/releases 手动下载 ${ARCHIVE_NAME}"
+        echo "  2. 解压后放到服务器上，和 install-server.sh 同目录，重新运行"
         rm -f "$TMPFILE"
         exit 1
     fi
 
-    # 验证是 ELF 二进制
-    if ! file "$TMPFILE" | grep -q "ELF"; then
-        echo "❌ 下载的文件不是有效的 Linux 二进制"
+    # 解压提取 gtunnel-server
+    EXTRACT_DIR=$(mktemp -d)
+    if ! tar xzf "$TMPFILE" -C "$EXTRACT_DIR" $BINARY_NAME 2>/dev/null; then
+        echo "❌ 解压失败: $ARCHIVE_NAME"
         echo ""
         echo "  替代方案："
-        echo "  1. 从 https://github.com/${REPO}/releases 手动下载 $BINARY_NAME"
-        echo "  2. 放到服务器上，和 install-server.sh 同目录，重新运行"
+        echo "  1. 从 https://github.com/${REPO}/releases 手动下载 ${ARCHIVE_NAME}"
+        echo "  2. 解压后放到服务器上，和 install-server.sh 同目录，重新运行"
         rm -f "$TMPFILE"
+        rm -rf "$EXTRACT_DIR"
+        exit 1
+    fi
+    rm -f "$TMPFILE"
+    TMPFILE="$EXTRACT_DIR/$BINARY_NAME"
+
+    # 验证是 ELF 二进制
+    if ! file "$TMPFILE" | grep -q "ELF"; then
+        echo "❌ 解压后的文件不是有效的 Linux 二进制"
+        echo ""
+        echo "  替代方案："
+        echo "  1. 从 https://github.com/${REPO}/releases 手动下载 ${ARCHIVE_NAME}"
+        echo "  2. 解压后放到服务器上，和 install-server.sh 同目录，重新运行"
+        rm -rf "$EXTRACT_DIR"
         exit 1
     fi
     echo "  ✅ 下载完成"
@@ -131,6 +148,7 @@ chmod 755 "$INSTALL_DIR/$BINARY_NAME"
 # 清理临时文件（仅非本地文件）
 if [ "$USE_LOCAL" = false ]; then
     rm -f "$TMPFILE"
+    [ -n "$EXTRACT_DIR" ] && rm -rf "$EXTRACT_DIR"
 fi
 
 echo "  ✅ 已安装到 $INSTALL_DIR/$BINARY_NAME"

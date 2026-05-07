@@ -3,7 +3,7 @@
 # Server: Linux (公网 VPS)
 # Client: Windows CLI tool
 
-.PHONY: all server client clean install-server
+.PHONY: all server client clean install-server release release-client release-server test
 
 BINARY_DIR := bin
 SERVER := $(BINARY_DIR)/gtunnel-server
@@ -52,7 +52,9 @@ run-server: server
 
 # ── Release ─────────────────────────────────────────────────────
 
-release: client
+release: release-client release-server
+
+release-client: client
 	@mkdir -p $(BINARY_DIR)/release
 	cp $(CLIENT) $(BINARY_DIR)/release/
 	@# Copy wintun.dll from bin/ if available
@@ -67,6 +69,13 @@ release: client
 	cd $(BINARY_DIR)/release && zip -9 ../GameTunnel-windows-amd64.zip ./*
 	rm -rf $(BINARY_DIR)/release
 	@echo "  Created $(BINARY_DIR)/GameTunnel-windows-amd64.zip"
+
+release-server: server-linux-amd64
+	@mkdir -p $(BINARY_DIR)/release-server
+	cp $(BINARY_DIR)/gtunnel-server-linux-amd64 $(BINARY_DIR)/release-server/gtunnel-server
+	cd $(BINARY_DIR)/release-server && tar czf ../GameTunnel-linux-amd64.tar.gz gtunnel-server
+	rm -rf $(BINARY_DIR)/release-server
+	@echo "  Created $(BINARY_DIR)/GameTunnel-linux-amd64.tar.gz"
 
 clean:
 	rm -rf $(BINARY_DIR)
