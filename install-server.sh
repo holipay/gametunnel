@@ -92,7 +92,13 @@ if [ -z "$TMPFILE" ]; then
     fi
     echo "  版本: $LATEST"
 
-    ARCHIVE_NAME="GameTunnel-linux-amd64.tar.gz"
+    # 根据系统架构选择下载包
+    ARCH=$(uname -m)
+    case "$ARCH" in
+        x86_64|amd64)   ARCHIVE_NAME="GameTunnel-linux-amd64.tar.gz" ;;
+        aarch64|arm64)   ARCHIVE_NAME="GameTunnel-linux-arm64.tar.gz" ;;
+        *) echo "❌ 不支持的架构: $ARCH"; exit 1 ;;
+    esac
     DOWNLOAD_URL="https://github.com/${REPO}/releases/download/${LATEST}/${ARCHIVE_NAME}"
     echo "📥 下载服务器..."
     TMPFILE=$(mktemp)
