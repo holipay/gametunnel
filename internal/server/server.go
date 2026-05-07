@@ -300,7 +300,7 @@ func (s *Server) keepaliveLoop(ctx context.Context) {
 		s.mu.Unlock()
 
 		if changed {
-			s.sendPeerInfoTo(nil, nil, nil)
+			s.sendPeerInfoTo(nil, nil)
 		}
 	}
 }

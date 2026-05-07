@@ -36,7 +36,7 @@ func (s *Server) handleDisconnect(from *net.UDPAddr) {
 	delete(s.addrMap, fromKey)
 	s.mu.Unlock()
 
-	s.sendPeerInfoTo(nil, nil, nil)
+	s.sendPeerInfoTo(nil, nil)
 }
 
 // handlePeerRequest handles a client's request for the peer list.
@@ -49,13 +49,13 @@ func (s *Server) handlePeerRequest(from *net.UDPAddr) {
 		return
 	}
 
-	s.sendPeerInfoTo([]*net.UDPAddr{from}, nil, c.VirtualIP)
+	s.sendPeerInfoTo([]*net.UDPAddr{from}, c.VirtualIP)
 }
 
 // sendPeerInfoTo sends peer information to the specified targets.
-// If targets is nil, broadcasts to all clients (excluding exclude).
+// If targets is nil, broadcasts to all clients.
 // If selfIP is set, excludes that IP from the peer list.
-func (s *Server) sendPeerInfoTo(targets []*net.UDPAddr, exclude *net.UDPAddr, selfIP net.IP) {
+func (s *Server) sendPeerInfoTo(targets []*net.UDPAddr, selfIP net.IP) {
 	s.mu.RLock()
 	snapshot := make([]peerSnapshot, 0, len(s.clients))
 	for _, c := range s.clients {
@@ -89,9 +89,6 @@ func (s *Server) sendPeerInfoTo(targets []*net.UDPAddr, exclude *net.UDPAddr, se
 	}
 
 	for _, sn := range snapshot {
-		if exclude != nil && sn.publicAddr.String() == exclude.String() {
-			continue
-		}
 		s.sendCheckedRaw(encoded, sn.publicAddr)
 	}
 }

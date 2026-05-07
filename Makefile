@@ -44,6 +44,9 @@ client-arm64:
 
 # ── Dev / Test ─────────────────────────────────────────────────
 
+test:
+	go test -v -count=1 ./...
+
 run-server: server
 	sudo $(SERVER) -addr :4700 -subnet 10.10.0.0/24
 
@@ -52,13 +55,12 @@ run-server: server
 release: client
 	@mkdir -p $(BINARY_DIR)/release
 	cp $(CLIENT) $(BINARY_DIR)/release/
-	@# Copy wintun.dll from Go module cache if available
-	@WINTUN=$$(find $$(go env GOMODCACHE) -path '*/wintun@*/dll/wintun_amd64.dll' 2>/dev/null | head -1); \
-	if [ -n "$$WINTUN" ]; then \
-		cp "$$WINTUN" $(BINARY_DIR)/release/wintun.dll; \
+	@# Copy wintun.dll from bin/ if available
+	@if [ -f $(BINARY_DIR)/wintun.dll ]; then \
+		cp $(BINARY_DIR)/wintun.dll $(BINARY_DIR)/release/; \
 		echo "  Included wintun.dll"; \
 	else \
-		echo "  [WARN] wintun.dll not found in module cache"; \
+		echo "  [WARN] $(BINARY_DIR)/wintun.dll not found"; \
 	fi
 	@# Copy default config.ini
 	cp configs/config.ini $(BINARY_DIR)/release/config.ini

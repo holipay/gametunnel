@@ -47,7 +47,7 @@ func (s *Server) handleRegister(payload []byte, from *net.UDPAddr) {
 		selfIP := existing.VirtualIP
 		s.mu.Unlock()
 		s.sendAssignIP(selfIP, from)
-		s.sendPeerInfoTo([]*net.UDPAddr{from}, nil, selfIP)
+		s.sendPeerInfoTo([]*net.UDPAddr{from}, selfIP)
 		return
 	}
 
@@ -103,7 +103,7 @@ func (s *Server) registerClientLocked(reg *protocol.RegisterPayload, from *net.U
 	s.mu.Unlock()
 
 	s.sendAssignIP(selfIP, from)
-	s.sendPeerInfoTo(nil, nil, selfIP)
+	s.sendPeerInfoTo(nil, selfIP)
 }
 
 // sendAuthChallengeLocked sends auth challenge. MUST be called with s.mu held.
