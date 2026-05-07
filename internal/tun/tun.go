@@ -84,6 +84,14 @@ func (d *Device) configure() error {
 		return fmt.Errorf("assign IP: %w", err)
 	}
 
+	// Set interface metric low so 255.255.255.255 broadcasts prefer this interface
+	// This is critical for games like StarCraft that use global broadcast for LAN discovery
+	if err := RunCmd("netsh", "interface", "ip", "set", "interface",
+		fmt.Sprintf("name=%s", d.name),
+		"metric=1"); err != nil {
+		log.Printf("[tun] set interface metric warning: %v", err)
+	}
+
 	// Add subnet route (usually auto-added, but be explicit)
 	subnet := d.virtualIP.Mask(d.subnetMask)
 	maskBits, _ := d.subnetMask.Size()
@@ -93,6 +101,13 @@ func (d *Device) configure() error {
 	if err := RunCmd("route", "add", subnetStr, "mask", mask, ip, "metric", "1"); err != nil {
 		// Not fatal — route may already exist
 		log.Printf("[tun] route add warning: %v", err)
+	}
+
+	// Route global broadcast (255.255.255.255) through TUN
+	// StarCraft and similar games send UDP broadcasts to 255.255.255.255:6112
+	// Without this route, broadcasts go through the physical NIC instead of the tunnel
+	if err := RunCmd("route", "add", "255.255.255.255", "mask", "255.255.255.255", ip, "metric", "1"); err != nil {
+		log.Printf("[tun] broadcast route warning: %v", err)
 	}
 
 	return nil
