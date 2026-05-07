@@ -130,7 +130,7 @@ func (s *Server) sendAuthChallengeLocked(reg *protocol.RegisterPayload, from *ne
 	s.pendingAuth++
 	s.mu.Unlock()
 
-	acp := &protocol.AuthChallengePayload{Challenge: challenge}
+	acp := &protocol.AuthChallengePayload{Challenge: challenge, ClientAddr: from.String()}
 	s.sendChecked(protocol.TypeAuthChallenge, acp.Marshal(), from)
 }
 

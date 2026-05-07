@@ -220,13 +220,18 @@ func UnmarshalKick(data []byte) (*KickPayload, error) {
 
 // AuthChallengePayload is sent by the server to initiate authentication.
 type AuthChallengePayload struct {
-	Challenge []byte // 16-byte random nonce
+	Challenge  []byte // 16-byte random nonce
+	ClientAddr string // client's public address as seen by server
 }
 
 func (a *AuthChallengePayload) Marshal() []byte {
-	buf := make([]byte, 2+len(a.Challenge))
+	addrBytes := []byte(a.ClientAddr)
+	buf := make([]byte, 2+len(a.Challenge)+2+len(addrBytes))
 	binary.LittleEndian.PutUint16(buf, uint16(len(a.Challenge)))
 	copy(buf[2:], a.Challenge)
+	off := 2 + len(a.Challenge)
+	binary.LittleEndian.PutUint16(buf[off:], uint16(len(addrBytes)))
+	copy(buf[off+2:], addrBytes)
 	return buf
 }
 
@@ -235,12 +240,18 @@ func UnmarshalAuthChallenge(data []byte) (*AuthChallengePayload, error) {
 		return nil, ErrPacketTooShort
 	}
 	clen := int(binary.LittleEndian.Uint16(data[0:]))
-	if len(data) < 2+clen {
+	if len(data) < 2+clen+2 {
 		return nil, ErrPacketTooShort
 	}
 	challenge := make([]byte, clen)
 	copy(challenge, data[2:2+clen])
-	return &AuthChallengePayload{Challenge: challenge}, nil
+	off := 2 + clen
+	addrLen := int(binary.LittleEndian.Uint16(data[off:]))
+	if len(data) < off+2+addrLen {
+		return nil, ErrPacketTooShort
+	}
+	clientAddr := string(data[off+2 : off+2+addrLen])
+	return &AuthChallengePayload{Challenge: challenge, ClientAddr: clientAddr}, nil
 }
 
 // ── Auth Response Payload (client → server) ────────────────────

@@ -298,7 +298,7 @@ func TestAuthChallengeRoundTrip(t *testing.T) {
 	for i := range challenge {
 		challenge[i] = byte(i)
 	}
-	a := &AuthChallengePayload{Challenge: challenge}
+	a := &AuthChallengePayload{Challenge: challenge, ClientAddr: "114.219.29.15:50604"}
 	data := a.Marshal()
 	a2, err := UnmarshalAuthChallenge(data)
 	if err != nil {
@@ -306,6 +306,22 @@ func TestAuthChallengeRoundTrip(t *testing.T) {
 	}
 	if !bytes.Equal(a2.Challenge, challenge) {
 		t.Errorf("challenge mismatch")
+	}
+	if a2.ClientAddr != "114.219.29.15:50604" {
+		t.Errorf("ClientAddr: got %q, want %q", a2.ClientAddr, "114.219.29.15:50604")
+	}
+}
+
+func TestAuthChallengeNoAddr(t *testing.T) {
+	challenge := make([]byte, 16)
+	a := &AuthChallengePayload{Challenge: challenge, ClientAddr: ""}
+	data := a.Marshal()
+	a2, err := UnmarshalAuthChallenge(data)
+	if err != nil {
+		t.Fatalf("UnmarshalAuthChallenge failed: %v", err)
+	}
+	if a2.ClientAddr != "" {
+		t.Errorf("expected empty ClientAddr, got %q", a2.ClientAddr)
 	}
 }
 

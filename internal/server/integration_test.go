@@ -159,9 +159,12 @@ func TestIntegration_RegisterWithAuth(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Step 2: Compute HMAC
+	// Step 2: Compute HMAC using address from challenge
 	key := auth.DeriveKey("test123", "room1")
-	clientAddr := conn.LocalAddr().(*net.UDPAddr)
+	var clientAddr *net.UDPAddr
+	if challenge.ClientAddr != "" {
+		clientAddr, _ = net.ResolveUDPAddr("udp4", challenge.ClientAddr)
+	}
 	hmacVal := auth.ComputeHMAC(key, challenge.Challenge, "room1", "player1", clientAddr)
 
 	// Step 3: Send AuthResponse, expect AssignIP

@@ -134,7 +134,13 @@ func (t *Tunnel) handleAuthChallenge(payload []byte) error {
 		return fmt.Errorf("无法派生认证密钥")
 	}
 
-	hmacVal := auth.ComputeHMAC(key, acp.Challenge, t.roomID, t.username, t.serverAddr)
+	// 使用服务端观测到的客户端地址（经过 NAT 后的公网地址）
+	var clientAddr *net.UDPAddr
+	if acp.ClientAddr != "" {
+		clientAddr, _ = net.ResolveUDPAddr("udp4", acp.ClientAddr)
+	}
+
+	hmacVal := auth.ComputeHMAC(key, acp.Challenge, t.roomID, t.username, clientAddr)
 
 	resp := &protocol.AuthResponsePayload{
 		RoomID:   t.roomID,
