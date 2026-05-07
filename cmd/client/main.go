@@ -147,12 +147,21 @@ func run() error {
 	fmt.Printf("\n  正在连接...\n")
 
 	err := t.Connect(ctx, cfg.ServerAddr, *mtuFlag, func(tunCfg client.TunConfig) (client.TunDevice, error) {
-		return tun.New(tun.Config{
+		dev, err := tun.New(tun.Config{
 			VirtualIP:  tunCfg.VirtualIP,
 			SubnetMask: tunCfg.SubnetMask,
 			ServerIP:   tunCfg.ServerIP,
 			MTU:        tunCfg.MTU,
 		})
+		if err == nil {
+			mask, _ := tunCfg.SubnetMask.Size()
+			fmt.Println()
+			fmt.Printf("  ✅ 已连接! 虚拟IP: %s/%d\n", tunCfg.VirtualIP, mask)
+			fmt.Printf("  TUN 设备: %s\n", dev.Name())
+			fmt.Println("  打开游戏进入局域网模式即可联机")
+			fmt.Println()
+		}
+		return dev, err
 	})
 	if err != nil {
 		return fmt.Errorf("连接失败: %w", err)
