@@ -6,6 +6,7 @@ import (
 	"log"
 	"net"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/holipay/gametunnel/internal/protocol"
@@ -43,20 +44,22 @@ type TunConfig struct {
 
 // Tunnel is the GameTunnel client.
 type Tunnel struct {
-	conn         *net.UDPConn
-	connMu       sync.Mutex // protects WriteToUDP
-	serverAddr   *net.UDPAddr
-	tunDev       TunDevice
-	virtualIP    net.IP
-	serverIP     net.IP
-	serverIP4    [4]byte    // cached serverIP as [4]byte for fast comparison
-	subnetMask   net.IPMask
-	cachedSubnet *net.IPNet // cached subnet for broadcast detection
-	peers        map[[4]byte]*Peer
-	mu           sync.RWMutex
-	username     string
-	roomID       string
-	roomPass     string
+	conn          *net.UDPConn
+	connMu        sync.Mutex // protects WriteToUDP
+	serverAddr    *net.UDPAddr
+	tunDev        TunDevice
+	virtualIP     net.IP
+	serverIP      net.IP
+	serverIP4     [4]byte    // cached serverIP as [4]byte for fast comparison
+	subnetMask    net.IPMask
+	cachedSubnet  *net.IPNet // cached subnet for broadcast detection
+	peers         map[[4]byte]*Peer
+	mu            sync.RWMutex
+	username      string
+	roomID        string
+	roomPass      string
+	disconnectOnce sync.Once
+	sendErrors     atomic.Int64 // send failure counter
 }
 
 // New creates a new Tunnel. Call Connect to start it.
@@ -114,13 +117,18 @@ func (t *Tunnel) Connect(ctx context.Context, serverAddr string, mtu int, newTUN
 }
 
 // Disconnect gracefully disconnects from the server.
+// Safe to call multiple times (uses sync.Once).
 func (t *Tunnel) Disconnect() {
-	if t.conn != nil && t.serverAddr != nil {
-		packet := protocol.EncodeChecked(protocol.TypeDisconnect, nil)
-		t.sendUDP(packet, t.serverAddr)
-		time.Sleep(50 * time.Millisecond)
-		t.conn.Close()
-	}
+	t.disconnectOnce.Do(func() {
+		if t.serverAddr != nil {
+			packet := protocol.EncodeChecked(protocol.TypeDisconnect, nil)
+			t.sendUDP(packet, t.serverAddr)
+			time.Sleep(50 * time.Millisecond)
+		}
+		if t.conn != nil {
+			t.conn.Close()
+		}
+	})
 }
 
 // VirtualIP returns the assigned virtual IP (valid after Connect).
@@ -133,6 +141,10 @@ func (t *Tunnel) sendUDP(data []byte, addr *net.UDPAddr) {
 	t.connMu.Lock()
 	defer t.connMu.Unlock()
 	if t.conn != nil {
-		t.conn.WriteToUDP(data, addr)
+		if _, err := t.conn.WriteToUDP(data, addr); err != nil {
+			if t.sendErrors.Add(1) == 1 {
+				log.Printf("[tunnel] 发送失败: %v", err)
+			}
+		}
 	}
 }

@@ -11,6 +11,7 @@ import (
 	"math/bits"
 	"net"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/holipay/gametunnel/internal/protocol"
@@ -82,6 +83,9 @@ type Server struct {
 	regCount    map[string]int
 	regTick     *time.Ticker
 	maxRegPerIP int
+
+	// Diagnostics
+	sendErrors atomic.Int64 // send failure counter
 }
 
 // pktJob represents a packet to be processed by the worker pool.
@@ -309,11 +313,19 @@ func (s *Server) keepaliveLoop(ctx context.Context) {
 
 func (s *Server) sendChecked(typ byte, payload []byte, to *net.UDPAddr) {
 	data := protocol.EncodeChecked(typ, payload)
-	s.conn.WriteToUDP(data, to)
+	if _, err := s.conn.WriteToUDP(data, to); err != nil {
+		if s.sendErrors.Add(1) == 1 {
+			log.Printf("[server] 发送失败: %v", err)
+		}
+	}
 }
 
 func (s *Server) sendCheckedRaw(data []byte, to *net.UDPAddr) {
-	s.conn.WriteToUDP(data, to)
+	if _, err := s.conn.WriteToUDP(data, to); err != nil {
+		if s.sendErrors.Add(1) == 1 {
+			log.Printf("[server] 发送失败: %v", err)
+		}
+	}
 }
 
 func (s *Server) sendKick(to *net.UDPAddr, reason string) {

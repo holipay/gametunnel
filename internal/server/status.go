@@ -3,6 +3,7 @@ package server
 import (
 	"encoding/json"
 	"fmt"
+	"html/template"
 	"log"
 	"net/http"
 	"time"
@@ -10,13 +11,14 @@ import (
 
 // StatusInfo is the JSON response from the status API.
 type StatusInfo struct {
-	Version    string           `json:"version"`
-	Uptime     string           `json:"uptime"`
-	Players    int              `json:"players"`
-	MaxPlayers int              `json:"max_players"`
-	Subnet     string           `json:"subnet"`
-	ServerIP   string           `json:"server_ip"`
-	HasAuth    bool             `json:"has_auth"`
+	Version     string           `json:"version"`
+	Uptime      string           `json:"uptime"`
+	Players     int              `json:"players"`
+	MaxPlayers  int              `json:"max_players"`
+	Subnet      string           `json:"subnet"`
+	ServerIP    string           `json:"server_ip"`
+	HasAuth     bool             `json:"has_auth"`
+	SendErrors  int64            `json:"send_errors"`
 	Connections []ConnectionInfo `json:"connections,omitempty"`
 }
 
@@ -57,11 +59,7 @@ func (s *Server) handleStatusJSON(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(info)
 }
 
-func (s *Server) handleStatusHTML(w http.ResponseWriter, r *http.Request) {
-	info := s.buildStatusInfo()
-
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	fmt.Fprintf(w, `<!DOCTYPE html>
+var statusTmpl = template.Must(template.New("status").Parse(`<!DOCTYPE html>
 <html>
 <head>
 <meta charset="utf-8">
@@ -73,7 +71,7 @@ func (s *Server) handleStatusHTML(w http.ResponseWriter, r *http.Request) {
   .stat { display: inline-block; background: #16213e; border-radius: 8px; padding: 12px 20px; margin: 5px; min-width: 120px; text-align: center; }
   .stat .num { font-size: 2em; font-weight: bold; color: #00d4ff; }
   .stat .label { font-size: 0.85em; color: #888; }
-  table { width: 100%%; border-collapse: collapse; margin-top: 20px; }
+  table { width: 100%; border-collapse: collapse; margin-top: 20px; }
   th { text-align: left; padding: 8px; border-bottom: 2px solid #333; color: #00d4ff; }
   td { padding: 8px; border-bottom: 1px solid #2a2a3e; }
   .meta { color: #666; font-size: 0.85em; margin-top: 20px; }
@@ -82,26 +80,26 @@ func (s *Server) handleStatusHTML(w http.ResponseWriter, r *http.Request) {
 <body>
 <h1>🎮 GameTunnel Server</h1>
 <div>
-  <div class="stat"><div class="num">%d/%d</div><div class="label">玩家</div></div>
-  <div class="stat"><div class="num">%s</div><div class="label">运行时间</div></div>
-  <div class="stat"><div class="num">%s</div><div class="label">版本</div></div>
+  <div class="stat"><div class="num">{{.Players}}/{{.MaxPlayers}}</div><div class="label">玩家</div></div>
+  <div class="stat"><div class="num">{{.Uptime}}</div><div class="label">运行时间</div></div>
+  <div class="stat"><div class="num">{{.Version}}</div><div class="label">版本</div></div>
 </div>
-`, info.Players, info.MaxPlayers, info.Uptime, info.Version)
+{{if .Connections}}
+<table><tr><th>玩家</th><th>虚拟 IP</th><th>地址</th><th>空闲</th></tr>
+{{range .Connections}}<tr><td>{{.Username}}</td><td>{{.VirtualIP}}</td><td>{{.PublicAddr}}</td><td>{{.Idle}}</td></tr>
+{{end}}</table>
+{{else}}
+<p style="color:#666">暂无玩家连接</p>
+{{end}}
+<div class="meta">{{.Subnet}} · {{.ServerIP}} · {{if .HasAuth}}HMAC 认证{{else}}无认证{{end}}</div>
+</body></html>`))
 
-	if len(info.Connections) > 0 {
-		fmt.Fprint(w, `<table><tr><th>玩家</th><th>虚拟 IP</th><th>地址</th><th>空闲</th></tr>`)
-		for _, c := range info.Connections {
-			fmt.Fprintf(w, `<tr><td>%s</td><td>%s</td><td>%s</td><td>%s</td></tr>`,
-				c.Username, c.VirtualIP, c.PublicAddr, c.Idle)
-		}
-		fmt.Fprint(w, `</table>`)
-	} else {
-		fmt.Fprint(w, `<p style="color:#666">暂无玩家连接</p>`)
+func (s *Server) handleStatusHTML(w http.ResponseWriter, r *http.Request) {
+	info := s.buildStatusInfo()
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	if err := statusTmpl.Execute(w, info); err != nil {
+		log.Printf("[status] 模板渲染失败: %v", err)
 	}
-
-	fmt.Fprintf(w, `<div class="meta">%s · %s · %s</div>`,
-		info.Subnet, info.ServerIP, map[bool]string{true: "HMAC 认证", false: "无认证"}[info.HasAuth])
-	fmt.Fprint(w, `</body></html>`)
 }
 
 func (s *Server) buildStatusInfo() StatusInfo {
@@ -138,6 +136,7 @@ func (s *Server) buildStatusInfo() StatusInfo {
 		Subnet:      s.subnet.String(),
 		ServerIP:    s.serverIP.String(),
 		HasAuth:     s.roomPass != "",
+		SendErrors:  s.sendErrors.Load(),
 		Connections: conns,
 	}
 }
