@@ -7,6 +7,7 @@ package server
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"math/bits"
 	"net"
@@ -14,6 +15,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/holipay/gametunnel/internal/auth"
 	"github.com/holipay/gametunnel/internal/protocol"
 )
 
@@ -74,6 +76,9 @@ type Server struct {
 	rateCount map[rateKey]int
 	rateTick  *time.Ticker
 
+	// Cached auth keys (derived once per roomID, avoids repeated HKDF)
+	authKeys sync.Map // map[string][]byte, roomID → derived key
+
 	// Auth flood protection
 	pendingAuth int
 	maxPending  int
@@ -114,6 +119,13 @@ func New(cfg Config) (*Server, error) {
 	conn, err := net.ListenUDP("udp4", udpAddr)
 	if err != nil {
 		return nil, err
+	}
+
+	// 校验子网大小: 当前 IP 分配仅支持 /24
+	ones, bits := cfg.Subnet.Mask.Size()
+	if bits != 32 || ones != 24 {
+		conn.Close()
+		return nil, fmt.Errorf("子网必须是 /24 (当前: /%d)", ones)
 	}
 
 	serverIP := make(net.IP, 4)
@@ -336,16 +348,19 @@ func (s *Server) keepaliveLoop(ctx context.Context) {
 func (s *Server) sendChecked(typ byte, payload []byte, to *net.UDPAddr) {
 	data := protocol.EncodeChecked(typ, payload)
 	if _, err := s.conn.WriteToUDP(data, to); err != nil {
-		if s.sendErrors.Add(1) == 1 {
-			log.Printf("[server] 发送失败: %v", err)
+		n := s.sendErrors.Add(1)
+		// 指数退避记录: 第1、2、4、8...次（2的幂次）记录日志
+		if n&(n-1) == 0 {
+			log.Printf("[server] 发送失败 (累计%d次): %v", n, err)
 		}
 	}
 }
 
 func (s *Server) sendCheckedRaw(data []byte, to *net.UDPAddr) {
 	if _, err := s.conn.WriteToUDP(data, to); err != nil {
-		if s.sendErrors.Add(1) == 1 {
-			log.Printf("[server] 发送失败: %v", err)
+		n := s.sendErrors.Add(1)
+		if n&(n-1) == 0 {
+			log.Printf("[server] 发送失败 (累计%d次): %v", n, err)
 		}
 	}
 }
@@ -362,6 +377,18 @@ func (s *Server) sendAssignIP(vip net.IP, to *net.UDPAddr) {
 		ServerIP:   s.serverIP,
 	}
 	s.sendChecked(protocol.TypeAssignIP, assign.Marshal(), to)
+}
+
+// getAuthKey returns the cached auth key for the given roomID, deriving it if needed.
+func (s *Server) getAuthKey(roomID string) []byte {
+	if v, ok := s.authKeys.Load(roomID); ok {
+		return v.([]byte)
+	}
+	key := auth.DeriveKey(s.roomPass, roomID)
+	if key != nil {
+		s.authKeys.Store(roomID, key)
+	}
+	return key
 }
 
 // ── Types ──────────────────────────────────────────────────────

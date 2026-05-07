@@ -40,8 +40,16 @@ func (s *Server) handleRegister(payload []byte, from *net.UDPAddr) {
 
 	s.mu.Lock()
 
-	// Reconnect: same address already registered
 	fromKey := addrToRateKey(from)
+
+	// 防止认证绕过: 待认证中的地址重发 Register 不应放行
+	if existing := s.addrMap[fromKey]; existing != nil && existing.auth == authChallengeSent {
+		s.mu.Unlock()
+		s.sendKick(from, "认证进行中，请等待")
+		return
+	}
+
+	// Reconnect: same address already registered and authenticated
 	if existing := s.addrMap[fromKey]; existing != nil {
 		existing.LastSeen = time.Now()
 		selfIP := existing.VirtualIP
@@ -164,8 +172,8 @@ func (s *Server) handleAuthResponse(payload []byte, from *net.UDPAddr) {
 		return
 	}
 
-	// Derive auth key using the room ID from the original register request
-	authKey := auth.DeriveKey(s.roomPass, c.authRoomID)
+	// Get cached auth key for this roomID
+	authKey := s.getAuthKey(c.authRoomID)
 	if authKey == nil {
 		delete(s.addrMap, fromKey)
 		s.pendingAuth--

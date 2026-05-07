@@ -33,16 +33,19 @@ func (s *Server) handleRelay(payload []byte, from *net.UDPAddr) {
 	// Encode AFTER validation — avoids wasting CPU on spoofed packets
 	encoded := protocol.EncodeChecked(protocol.TypeData, payload)
 
-	// Broadcast
+	// Broadcast: snapshot targets under RLock, send after releasing lock
 	if protocol.IsBroadcast(dstIP, s.subnet) {
-		// Use rateKey for zero-allocation comparison
 		fromKey := addrToRateKey(from)
+		var targets []*net.UDPAddr
 		for _, c := range s.clients {
 			if addrToRateKey(c.PublicAddr) != fromKey {
-				s.sendCheckedRaw(encoded, c.PublicAddr)
+				targets = append(targets, c.PublicAddr)
 			}
 		}
 		s.mu.RUnlock()
+		for _, addr := range targets {
+			s.sendCheckedRaw(encoded, addr)
+		}
 		return
 	}
 
