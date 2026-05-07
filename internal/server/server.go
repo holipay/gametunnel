@@ -41,13 +41,19 @@ type Client struct {
 	authRoomID  string    // room ID from register request (for key derivation)
 }
 
+// ip4Key converts a 4-byte IPv4 address to a [4]byte map key.
+func ip4Key(ip net.IP) [4]byte {
+	ip4 := ip.To4()
+	return [4]byte{ip4[0], ip4[1], ip4[2], ip4[3]}
+}
+
 // ── Server ─────────────────────────────────────────────────────
 
 // Server is the GameTunnel relay server.
 type Server struct {
 	conn       *net.UDPConn
-	clients    map[string]*Client // virtualIP string → Client
-	addrMap    map[string]*Client // "ip:port" string → Client (O(1) lookup)
+	clients    map[[4]byte]*Client // virtualIP [4]byte → Client
+	addrMap    map[rateKey]*Client // client endpoint → Client (O(1) lookup)
 	mu         sync.RWMutex       // protects clients + addrMap
 	subnet     *net.IPNet
 	maxPlayers int
@@ -117,8 +123,8 @@ func New(cfg Config) (*Server, error) {
 
 	s := &Server{
 		conn:        conn,
-		clients:     make(map[string]*Client),
-		addrMap:     make(map[string]*Client),
+		clients:     make(map[[4]byte]*Client),
+		addrMap:     make(map[rateKey]*Client),
 		subnet:      cfg.Subnet,
 		maxPlayers:  cfg.MaxPlayers,
 		serverIP:    serverIP,
@@ -275,19 +281,19 @@ func (s *Server) keepaliveLoop(ctx context.Context) {
 		s.mu.Lock()
 		now := time.Now()
 		changed := false
-		for ip, c := range s.clients {
+		for key, c := range s.clients {
 			if now.Sub(c.LastSeen) > 45*time.Second {
 				log.Printf("[-] %s (%s) 超时断开", c.Username, c.VirtualIP)
 				s.markIPFree(c.VirtualIP)
-				delete(s.clients, ip)
-				delete(s.addrMap, c.PublicAddr.String())
+				delete(s.clients, key)
+				delete(s.addrMap, addrToRateKey(c.PublicAddr))
 				changed = true
 			}
 		}
 		// Clean up stale pending auth entries
-		for addrStr, c := range s.addrMap {
+		for addrKey, c := range s.addrMap {
 			if c.auth == authChallengeSent && now.Sub(c.challengeAt) > 30*time.Second {
-				delete(s.addrMap, addrStr)
+				delete(s.addrMap, addrKey)
 				s.pendingAuth--
 			}
 		}

@@ -8,8 +8,8 @@ import (
 func newTestServer(subnetStr string, serverIP net.IP) *Server {
 	_, subnet, _ := net.ParseCIDR(subnetStr)
 	s := &Server{
-		clients:    make(map[string]*Client),
-		addrMap:    make(map[string]*Client),
+		clients:    make(map[[4]byte]*Client),
+		addrMap:    make(map[rateKey]*Client),
 		subnet:     subnet,
 		serverIP:   serverIP,
 		ipBitmap:   make([]uint64, 4),
@@ -31,8 +31,9 @@ func TestNextAvailableIP(t *testing.T) {
 	}
 
 	// Allocate .2, next should be .3
-	s.markIPUsed(net.IPv4(10, 10, 0, 2))
-	s.clients["10.10.0.2"] = &Client{VirtualIP: net.IPv4(10, 10, 0, 2)}
+	ip2 := net.IPv4(10, 10, 0, 2)
+	s.markIPUsed(ip2)
+	s.clients[ip4Key(ip2)] = &Client{VirtualIP: ip2}
 	ip = s.nextAvailableIP()
 	if !ip.Equal(net.IPv4(10, 10, 0, 3)) {
 		t.Errorf("second IP: got %v, want 10.10.0.3", ip)
@@ -46,7 +47,7 @@ func TestNextAvailableIPSkipsServer(t *testing.T) {
 	for i := 2; i <= 254; i++ {
 		ip := net.IPv4(10, 10, 0, byte(i))
 		s.markIPUsed(ip)
-		s.clients[ip.String()] = &Client{VirtualIP: ip}
+		s.clients[ip4Key(ip)] = &Client{VirtualIP: ip}
 	}
 
 	ip := s.nextAvailableIP()
@@ -62,7 +63,7 @@ func TestNextAvailableIPExhausted(t *testing.T) {
 	for i := 2; i <= 254; i++ {
 		ip := net.IPv4(10, 10, 0, byte(i))
 		s.markIPUsed(ip)
-		s.clients[ip.String()] = &Client{VirtualIP: ip}
+		s.clients[ip4Key(ip)] = &Client{VirtualIP: ip}
 	}
 
 	ip := s.nextAvailableIP()
@@ -79,8 +80,8 @@ func TestNextAvailableIPSkipsGaps(t *testing.T) {
 	ip4 := net.IPv4(10, 10, 0, 4)
 	s.markIPUsed(ip2)
 	s.markIPUsed(ip4)
-	s.clients["10.10.0.2"] = &Client{VirtualIP: ip2}
-	s.clients["10.10.0.4"] = &Client{VirtualIP: ip4}
+	s.clients[ip4Key(ip2)] = &Client{VirtualIP: ip2}
+	s.clients[ip4Key(ip4)] = &Client{VirtualIP: ip4}
 
 	ip := s.nextAvailableIP()
 	if !ip.Equal(net.IPv4(10, 10, 0, 3)) {

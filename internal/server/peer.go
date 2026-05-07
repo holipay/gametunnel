@@ -12,15 +12,16 @@ import (
 func (s *Server) handleKeepAlive(from *net.UDPAddr) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if c := s.addrMap[from.String()]; c != nil {
+	if c := s.addrMap[addrToRateKey(from)]; c != nil {
 		c.LastSeen = time.Now()
 	}
 }
 
 // handleDisconnect removes a client that is gracefully disconnecting.
 func (s *Server) handleDisconnect(from *net.UDPAddr) {
+	fromKey := addrToRateKey(from)
 	s.mu.Lock()
-	c := s.addrMap[from.String()]
+	c := s.addrMap[fromKey]
 	if c == nil {
 		s.mu.Unlock()
 		return
@@ -30,9 +31,9 @@ func (s *Server) handleDisconnect(from *net.UDPAddr) {
 		s.pendingAuth--
 	} else {
 		s.markIPFree(c.VirtualIP)
-		delete(s.clients, c.VirtualIP.String())
+		delete(s.clients, ip4Key(c.VirtualIP))
 	}
-	delete(s.addrMap, from.String())
+	delete(s.addrMap, fromKey)
 	s.mu.Unlock()
 
 	s.sendPeerInfoTo(nil, nil, nil)
@@ -41,7 +42,7 @@ func (s *Server) handleDisconnect(from *net.UDPAddr) {
 // handlePeerRequest handles a client's request for the peer list.
 func (s *Server) handlePeerRequest(from *net.UDPAddr) {
 	s.mu.RLock()
-	c := s.addrMap[from.String()]
+	c := s.addrMap[addrToRateKey(from)]
 	s.mu.RUnlock()
 
 	if c == nil {

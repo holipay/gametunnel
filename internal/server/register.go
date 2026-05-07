@@ -41,7 +41,8 @@ func (s *Server) handleRegister(payload []byte, from *net.UDPAddr) {
 	s.mu.Lock()
 
 	// Reconnect: same address already registered
-	if existing := s.addrMap[from.String()]; existing != nil {
+	fromKey := addrToRateKey(from)
+	if existing := s.addrMap[fromKey]; existing != nil {
 		existing.LastSeen = time.Now()
 		selfIP := existing.VirtualIP
 		s.mu.Unlock()
@@ -93,8 +94,8 @@ func (s *Server) registerClientLocked(reg *protocol.RegisterPayload, from *net.U
 		LastSeen:   time.Now(),
 		auth:       authNone,
 	}
-	s.clients[vip.String()] = c
-	s.addrMap[from.String()] = c
+	s.clients[ip4Key(vip)] = c
+	s.addrMap[addrToRateKey(from)] = c
 	log.Printf("[+] %s (%s) → %s  [在线: %d]",
 		reg.Username, from, vip, len(s.clients))
 
@@ -125,7 +126,7 @@ func (s *Server) sendAuthChallengeLocked(reg *protocol.RegisterPayload, from *ne
 		challengeAt: time.Now(),
 		authRoomID:  reg.RoomID,
 	}
-	s.addrMap[from.String()] = c
+	s.addrMap[addrToRateKey(from)] = c
 	s.pendingAuth++
 	s.mu.Unlock()
 
@@ -145,7 +146,8 @@ func (s *Server) handleAuthResponse(payload []byte, from *net.UDPAddr) {
 	}
 
 	s.mu.Lock()
-	c := s.addrMap[from.String()]
+	fromKey := addrToRateKey(from)
+	c := s.addrMap[fromKey]
 
 	if c == nil || c.auth != authChallengeSent {
 		s.mu.Unlock()
@@ -155,7 +157,7 @@ func (s *Server) handleAuthResponse(payload []byte, from *net.UDPAddr) {
 
 	// Check challenge expiry (15 seconds)
 	if time.Since(c.challengeAt) > 15*time.Second {
-		delete(s.addrMap, from.String())
+		delete(s.addrMap, fromKey)
 		s.pendingAuth--
 		s.mu.Unlock()
 		s.sendKick(from, "认证超时")
@@ -165,7 +167,7 @@ func (s *Server) handleAuthResponse(payload []byte, from *net.UDPAddr) {
 	// Derive auth key using the room ID from the original register request
 	authKey := auth.DeriveKey(s.roomPass, c.authRoomID)
 	if authKey == nil {
-		delete(s.addrMap, from.String())
+		delete(s.addrMap, fromKey)
 		s.pendingAuth--
 		s.mu.Unlock()
 		s.sendKick(from, "服务器内部错误")
@@ -173,7 +175,7 @@ func (s *Server) handleAuthResponse(payload []byte, from *net.UDPAddr) {
 	}
 
 	if !auth.VerifyHMAC(authKey, resp.HMAC, c.challenge, resp.RoomID, resp.Username, from) {
-		delete(s.addrMap, from.String())
+		delete(s.addrMap, fromKey)
 		s.pendingAuth--
 		s.mu.Unlock()
 		log.Printf("[auth] 认证失败: %s (%s)", resp.Username, from)
@@ -184,7 +186,7 @@ func (s *Server) handleAuthResponse(payload []byte, from *net.UDPAddr) {
 	// Auth passed — complete registration
 	log.Printf("[auth] 认证成功: %s (%s)", resp.Username, from)
 
-	delete(s.addrMap, from.String())
+	delete(s.addrMap, fromKey)
 	s.pendingAuth--
 
 	if len(s.clients) >= s.maxPlayers {

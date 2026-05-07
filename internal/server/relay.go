@@ -18,7 +18,7 @@ func (s *Server) handleRelay(payload []byte, from *net.UDPAddr) {
 
 	// Single RLock acquisition for sender lookup, validation, and forwarding
 	s.mu.RLock()
-	sender := s.addrMap[from.String()]
+	sender := s.addrMap[addrToRateKey(from)]
 	if sender == nil {
 		s.mu.RUnlock()
 		return
@@ -35,9 +35,10 @@ func (s *Server) handleRelay(payload []byte, from *net.UDPAddr) {
 
 	// Broadcast
 	if protocol.IsBroadcast(dstIP, s.subnet) {
-		fromStr := from.String() // cache outside the loop
+		// Use rateKey for zero-allocation comparison
+		fromKey := addrToRateKey(from)
 		for _, c := range s.clients {
-			if c.PublicAddr.String() != fromStr {
+			if addrToRateKey(c.PublicAddr) != fromKey {
 				s.sendCheckedRaw(encoded, c.PublicAddr)
 			}
 		}
@@ -46,7 +47,7 @@ func (s *Server) handleRelay(payload []byte, from *net.UDPAddr) {
 	}
 
 	// Unicast
-	dst, ok := s.clients[dstIP.String()]
+	dst, ok := s.clients[ip4Key(dstIP)]
 	s.mu.RUnlock()
 	if !ok {
 		return
@@ -67,7 +68,7 @@ func (s *Server) handleHolePunch(payload []byte, from *net.UDPAddr) {
 	}
 
 	s.mu.RLock()
-	dst, ok := s.clients[dstIP.String()]
+	dst, ok := s.clients[ip4Key(dstIP)]
 	s.mu.RUnlock()
 
 	if !ok {
