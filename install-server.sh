@@ -138,8 +138,22 @@ if [ -z "$TMPFILE" ]; then
     DOWNLOAD_URL="https://github.com/${REPO}/releases/download/${LATEST}/${LOCAL_ARCHIVE}"
     echo "📥 下载服务器..."
     TMPFILE=$(mktemp)
-    if ! curl -sL "$DOWNLOAD_URL" -o "$TMPFILE"; then
-        echo "❌ 下载失败: $DOWNLOAD_URL"
+    # -L: follow redirects, -s: silent, -w: output HTTP code
+    HTTP_CODE=$(curl -sL -w '%{http_code}' -o "$TMPFILE" "$DOWNLOAD_URL")
+    if [ "$HTTP_CODE" != "200" ]; then
+        echo "❌ 下载失败 (HTTP $HTTP_CODE): $DOWNLOAD_URL"
+        echo ""
+        echo "  替代方案："
+        echo "  1. 从 https://github.com/${REPO}/releases 手动下载 ${LOCAL_ARCHIVE}"
+        echo "  2. 解压后放到服务器上，和 install-server.sh 同目录，重新运行"
+        rm -f "$TMPFILE"
+        exit 1
+    fi
+
+    # 校验下载文件是否为有效 gzip（避免 404 HTML 页面）
+    if ! file "$TMPFILE" | grep -q "gzip"; then
+        echo "❌ 下载的文件不是有效的压缩包: ${LOCAL_ARCHIVE}"
+        echo "  可能原因: release 中该文件尚未生成，请稍后重试"
         echo ""
         echo "  替代方案："
         echo "  1. 从 https://github.com/${REPO}/releases 手动下载 ${LOCAL_ARCHIVE}"
