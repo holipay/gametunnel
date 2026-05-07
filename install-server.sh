@@ -71,8 +71,8 @@ USE_LOCAL=false
 # 确定架构
 ARCH=$(uname -m)
 case "$ARCH" in
-    x86_64|amd64)   LOCAL_ARCHIVE="GameTunnel-linux-amd64.tar.gz" ;;
-    aarch64|arm64)   LOCAL_ARCHIVE="GameTunnel-linux-arm64.tar.gz" ;;
+    x86_64|amd64)   LOCAL_ARCHIVE="GameTunnel-Server-linux-amd64.tar.gz" ;;
+    aarch64|arm64)   LOCAL_ARCHIVE="GameTunnel-Server-linux-arm64.tar.gz" ;;
     *) echo "❌ 不支持的架构: $ARCH"; exit 1 ;;
 esac
 

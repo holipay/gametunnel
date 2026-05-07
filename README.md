@@ -28,7 +28,7 @@ sudo ./bin/gtunnel-server -addr :4700
 ### 玩家（Windows 电脑）
 
 **方式一：下载压缩包（推荐）**
-1. 从 [Releases](https://github.com/holipay/gametunnel/releases) 下载 `GameTunnel-windows-amd64.zip`
+1. 从 [Releases](https://github.com/holipay/gametunnel/releases) 下载 `GameTunnel-Client-windows-amd64.zip`
 2. 解压到任意文件夹（共 3 个文件）
 3. 用记事本编辑 `config.ini`，填入服务器地址
 4. 双击 `gtunnel-client.exe`，自动请求管理员权限后连接
