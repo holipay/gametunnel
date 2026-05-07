@@ -7,6 +7,7 @@ import (
 	"html/template"
 	"log"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -34,6 +35,11 @@ type ConnectionInfo struct {
 func (s *Server) startStatusServer(ctx context.Context, addr string) {
 	if addr == "" {
 		return
+	}
+
+	// 自动补全地址格式: "4701" → ":4701"
+	if !strings.Contains(addr, ":") {
+		addr = ":" + addr
 	}
 
 	mux := http.NewServeMux()
