@@ -140,3 +140,59 @@ func (s *Server) sendPeerInfoToClient(target *net.UDPAddr) {
 	encoded := protocol.EncodeChecked(protocol.TypePeerInfo, peers.Marshal())
 	s.sendCheckedRaw(encoded, target)
 }
+
+// pingInterval is how often the server pings clients for RTT measurement.
+const pingInterval = 5 * time.Second
+
+// pingLoop periodically sends TypePing to all authenticated clients.
+func (s *Server) pingLoop(ctx context.Context) {
+	ticker := time.NewTicker(pingInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+
+		s.mu.RLock()
+		if len(s.clients) == 0 {
+			s.mu.RUnlock()
+			continue
+		}
+		snapshot := make([]peerSnapshot, 0, len(s.clients))
+		for _, c := range s.clients {
+			snapshot = append(snapshot, peerSnapshot{
+				publicAddr: c.PublicAddr,
+			})
+		}
+		s.mu.RUnlock()
+
+		ts := time.Now().UnixNano()
+		ping := &protocol.PingPayload{Timestamp: ts}
+		encoded := protocol.EncodeChecked(protocol.TypePing, ping.Marshal())
+		for _, sn := range snapshot {
+			s.sendCheckedRaw(encoded, sn.publicAddr)
+		}
+	}
+}
+
+// handlePong processes a latency pong response and updates client RTT.
+func (s *Server) handlePong(payload []byte, from *net.UDPAddr) {
+	ping, err := protocol.UnmarshalPing(payload)
+	if err != nil {
+		return
+	}
+
+	rtt := time.Since(time.Unix(0, ping.Timestamp))
+	if rtt < 0 || rtt > 10*time.Second {
+		return
+	}
+
+	s.mu.Lock()
+	if c := s.addrMap[addrToRateKey(from)]; c != nil {
+		c.RTT = rtt
+	}
+	s.mu.Unlock()
+}

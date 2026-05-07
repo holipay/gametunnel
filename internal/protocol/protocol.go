@@ -37,6 +37,8 @@ const (
 	TypeAuthResponse  byte = 0x09 // client → server: auth HMAC response
 	TypeKick          byte = 0x0A // server → client: kicked / error
 	TypeDisconnect    byte = 0x0B // client → server: graceful disconnect
+	TypePing          byte = 0x0C // server → client: latency ping
+	TypePong          byte = 0x0D // client → server: latency pong (echo)
 )
 
 // ── Common Errors ──────────────────────────────────────────────

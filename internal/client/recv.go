@@ -38,6 +38,9 @@ func (t *Tunnel) receiveFromServer(ctx context.Context) {
 			t.handlePeerInfo(msg.Payload)
 		case protocol.TypeData:
 			t.handleDataFromServer(msg.Payload)
+		case protocol.TypePing:
+			// Echo ping back as pong for RTT measurement
+			t.sendUDP(protocol.EncodeChecked(protocol.TypePong, msg.Payload), t.serverAddr)
 		case protocol.TypeHolePunch:
 			// NAT mapping established
 		}

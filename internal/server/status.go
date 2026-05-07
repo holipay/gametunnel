@@ -30,6 +30,7 @@ type ConnectionInfo struct {
 	VirtualIP  string `json:"virtual_ip"`
 	PublicAddr string `json:"public_addr"`
 	Idle       string `json:"idle"`
+	Ping       string `json:"ping"`
 }
 
 func (s *Server) startStatusServer(ctx context.Context, addr string) {
@@ -97,8 +98,8 @@ var statusTmpl = template.Must(template.New("status").Parse(`<!DOCTYPE html>
   <div class="stat"><div class="num">{{.Version}}</div><div class="label">版本</div></div>
 </div>
 {{if .Connections}}
-<table><tr><th>玩家</th><th>虚拟 IP</th><th>地址</th><th>空闲</th></tr>
-{{range .Connections}}<tr><td>{{.Username}}</td><td>{{.VirtualIP}}</td><td>{{.PublicAddr}}</td><td>{{.Idle}}</td></tr>
+<table><tr><th>玩家</th><th>虚拟 IP</th><th>地址</th><th>延迟</th><th>空闲</th></tr>
+{{range .Connections}}<tr><td>{{.Username}}</td><td>{{.VirtualIP}}</td><td>{{.PublicAddr}}</td><td>{{.Ping}}</td><td>{{.Idle}}</td></tr>
 {{end}}</table>
 {{else}}
 <p style="color:#666">暂无玩家连接</p>
@@ -130,11 +131,16 @@ func (s *Server) buildStatusInfo() StatusInfo {
 		if c.PublicAddr != nil {
 			pubAddr = c.PublicAddr.String()
 		}
+		pingStr := "--"
+		if c.RTT > 0 {
+			pingStr = fmt.Sprintf("%dms", c.RTT.Milliseconds())
+		}
 		conns = append(conns, ConnectionInfo{
 			Username:   c.Username,
 			VirtualIP:  c.VirtualIP.String(),
 			PublicAddr: pubAddr,
 			Idle:       idleStr,
+			Ping:       pingStr,
 		})
 	}
 

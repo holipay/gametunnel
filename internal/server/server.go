@@ -36,6 +36,7 @@ type Client struct {
 	VirtualIP  net.IP
 	PublicAddr *net.UDPAddr
 	LastSeen   time.Time
+	RTT        time.Duration // round-trip latency
 
 	// Auth state (only used when server has a room password)
 	auth        authState
@@ -182,6 +183,7 @@ func New(cfg Config) (*Server, error) {
 func (s *Server) Run(ctx context.Context) {
 	s.startStatusServer(ctx, s.statusAddr)
 	go s.keepaliveLoop(ctx)
+	go s.pingLoop(ctx)
 	go s.rateLimitLoop(ctx)
 	go s.regRateLimitLoop(ctx)
 	go s.peerInfoLoop(ctx)
@@ -296,6 +298,8 @@ func (s *Server) handlePacket(data []byte, from *net.UDPAddr) {
 		s.handleHolePunch(msg.Payload, from)
 	case protocol.TypeDisconnect:
 		s.handleDisconnect(from)
+	case protocol.TypePong:
+		s.handlePong(msg.Payload, from)
 	}
 }
 

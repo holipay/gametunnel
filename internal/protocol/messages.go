@@ -310,3 +310,24 @@ func UnmarshalAuthResponse(data []byte) (*AuthResponsePayload, error) {
 	copy(hmacVal, data[off:off+hmacLen])
 	return &AuthResponsePayload{RoomID: roomID, Username: username, HMAC: hmacVal}, nil
 }
+
+// ── Ping/Pong ─────────────────────────────────────────────────
+
+// PingPayload carries a timestamp for RTT measurement.
+// Server sends TypePing, client echoes it back as TypePong.
+type PingPayload struct {
+	Timestamp int64 // unix timestamp in nanoseconds
+}
+
+func (p *PingPayload) Marshal() []byte {
+	buf := make([]byte, 8)
+	binary.LittleEndian.PutUint64(buf, uint64(p.Timestamp))
+	return buf
+}
+
+func UnmarshalPing(data []byte) (*PingPayload, error) {
+	if len(data) < 8 {
+		return nil, ErrPacketTooShort
+	}
+	return &PingPayload{Timestamp: int64(binary.LittleEndian.Uint64(data))}, nil
+}
