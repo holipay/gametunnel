@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"html/template"
@@ -30,7 +31,7 @@ type ConnectionInfo struct {
 	Idle       string `json:"idle"`
 }
 
-func (s *Server) startStatusServer(addr string) {
+func (s *Server) startStatusServer(ctx context.Context, addr string) {
 	if addr == "" {
 		return
 	}
@@ -49,6 +50,11 @@ func (s *Server) startStatusServer(addr string) {
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Printf("[status] HTTP 服务启动失败: %v", err)
 		}
+	}()
+
+	go func() {
+		<-ctx.Done()
+		srv.Close()
 	}()
 }
 

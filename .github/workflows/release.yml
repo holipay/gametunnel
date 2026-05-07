@@ -2,7 +2,7 @@ name: Release
 
 on:
   push:
-    tags: ['v*']
+    tags: ["v*"]
 
 permissions:
   contents: write
@@ -14,7 +14,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.25'
+          go-version: "1.25"
       - run: go test -race ./internal/...
 
   release:
@@ -23,10 +23,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0  # needed for git describe
+          fetch-depth: 0 # needed for git describe
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.25'
+          go-version: "1.25"
 
       - name: Set version
         run: echo "VERSION=${GITHUB_REF_NAME}" >> $GITHUB_ENV
@@ -37,7 +37,7 @@ jobs:
         run: CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags "-s -w -X main.Version=${VERSION}" -o gtunnel-server ./cmd/server
 
       - name: Package server (amd64)
-        run: tar czf GameTunnel-linux-amd64.tar.gz gtunnel-server
+        run: tar czf GameTunnel-Server-linux-amd64.tar.gz gtunnel-server
 
       - name: Build server (arm64)
         run: CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -ldflags "-s -w -X main.Version=${VERSION}" -o gtunnel-server-arm64 ./cmd/server
@@ -45,7 +45,7 @@ jobs:
       - name: Package server (arm64)
         run: |
           mv gtunnel-server-arm64 gtunnel-server
-          tar czf GameTunnel-linux-arm64.tar.gz gtunnel-server
+          tar czf GameTunnel-Server-linux-arm64.tar.gz gtunnel-server
           rm gtunnel-server
 
       # ── Client ────────────────────────────────────────────────
@@ -63,7 +63,7 @@ jobs:
       - name: Package client
         run: |
           cp configs/config.ini .
-          zip GameTunnel-windows-amd64.zip gtunnel-client.exe wintun.dll config.ini
+          zip GameTunnel-Client-windows-amd64.zip gtunnel-client.exe wintun.dll config.ini
 
       # ── Create Release ────────────────────────────────────────
 
@@ -72,6 +72,6 @@ jobs:
         with:
           generate_release_notes: true
           files: |
-            GameTunnel-linux-amd64.tar.gz
-            GameTunnel-linux-arm64.tar.gz
-            GameTunnel-windows-amd64.zip
+            GameTunnel-Server-linux-amd64.tar.gz
+            GameTunnel-Server-linux-arm64.tar.gz
+            GameTunnel-Client-windows-amd64.zip

@@ -152,7 +152,7 @@ func New(cfg Config) (*Server, error) {
 
 // Run starts the server and blocks until ctx is cancelled.
 func (s *Server) Run(ctx context.Context) {
-	s.startStatusServer(s.statusAddr)
+	s.startStatusServer(ctx, s.statusAddr)
 	go s.keepaliveLoop(ctx)
 	go s.rateLimitLoop(ctx)
 	go s.regRateLimitLoop(ctx)

@@ -66,16 +66,16 @@ release-client: client
 	fi
 	@# Copy default config.ini
 	cp configs/config.ini $(BINARY_DIR)/release/config.ini
-	cd $(BINARY_DIR)/release && zip -9 ../GameTunnel-windows-amd64.zip ./*
+	cd $(BINARY_DIR)/release && zip -9 ../GameTunnel-Client-windows-amd64.zip ./*
 	rm -rf $(BINARY_DIR)/release
-	@echo "  Created $(BINARY_DIR)/GameTunnel-windows-amd64.zip"
+	@echo "  Created $(BINARY_DIR)/GameTunnel-Client-windows-amd64.zip"
 
 release-server: server-linux-amd64
 	@mkdir -p $(BINARY_DIR)/release-server
 	cp $(BINARY_DIR)/gtunnel-server-linux-amd64 $(BINARY_DIR)/release-server/gtunnel-server
-	cd $(BINARY_DIR)/release-server && tar czf ../GameTunnel-linux-amd64.tar.gz gtunnel-server
+	cd $(BINARY_DIR)/release-server && tar czf ../GameTunnel-Server-linux-amd64.tar.gz gtunnel-server
 	rm -rf $(BINARY_DIR)/release-server
-	@echo "  Created $(BINARY_DIR)/GameTunnel-linux-amd64.tar.gz"
+	@echo "  Created $(BINARY_DIR)/GameTunnel-Server-linux-amd64.tar.gz"
 
 clean:
 	rm -rf $(BINARY_DIR)

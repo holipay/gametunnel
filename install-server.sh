@@ -3,7 +3,7 @@
 #
 # 用法:
 #   在线安装:  curl -sL https://raw.githubusercontent.com/holipay/gametunnel/main/install-server.sh | sudo bash
-#   本地安装:  sudo bash install-server.sh                    (gtunnel-server 在脚本同目录)
+#   本地安装:  sudo bash install-server.sh                    (gtunnel-server 或 .tar.gz 压缩包在脚本同目录)
 #   带密码:    sudo ROOM_PASSWORD=你的密码 bash install-server.sh
 #
 # 环境变量:
@@ -68,20 +68,62 @@ TMPFILE=""
 EXTRACT_DIR=""
 USE_LOCAL=false
 
-# 优先级1: 脚本所在目录有 gtunnel-server
+# 确定架构
+ARCH=$(uname -m)
+case "$ARCH" in
+    x86_64|amd64)   LOCAL_ARCHIVE="GameTunnel-linux-amd64.tar.gz" ;;
+    aarch64|arm64)   LOCAL_ARCHIVE="GameTunnel-linux-arm64.tar.gz" ;;
+    *) echo "❌ 不支持的架构: $ARCH"; exit 1 ;;
+esac
+
+# 优先级1: 脚本所在目录有 gtunnel-server 二进制
 if [ -f "$SCRIPT_DIR/$BINARY_NAME" ] && file "$SCRIPT_DIR/$BINARY_NAME" | grep -q "ELF"; then
     echo "📦 使用本地文件: $SCRIPT_DIR/$BINARY_NAME"
     TMPFILE="$SCRIPT_DIR/$BINARY_NAME"
     USE_LOCAL=true
 
-# 优先级2: 当前目录有 gtunnel-server
+# 优先级2: 当前目录有 gtunnel-server 二进制
 elif [ -f "./$BINARY_NAME" ] && file "./$BINARY_NAME" | grep -q "ELF"; then
     echo "📦 使用本地文件: ./$BINARY_NAME"
     TMPFILE="./$BINARY_NAME"
     USE_LOCAL=true
+
+# 优先级3: 脚本所在目录有 .tar.gz 压缩包
+elif [ -f "$SCRIPT_DIR/$LOCAL_ARCHIVE" ]; then
+    echo "📦 使用本地压缩包: $SCRIPT_DIR/$LOCAL_ARCHIVE"
+    EXTRACT_DIR=$(mktemp -d)
+    if ! tar xzf "$SCRIPT_DIR/$LOCAL_ARCHIVE" -C "$EXTRACT_DIR" $BINARY_NAME 2>/dev/null; then
+        echo "❌ 解压本地压缩包失败: $SCRIPT_DIR/$LOCAL_ARCHIVE"
+        rm -rf "$EXTRACT_DIR"
+        exit 1
+    fi
+    TMPFILE="$EXTRACT_DIR/$BINARY_NAME"
+    if ! file "$TMPFILE" | grep -q "ELF"; then
+        echo "❌ 解压后的文件不是有效的 Linux 二进制"
+        rm -rf "$EXTRACT_DIR"
+        exit 1
+    fi
+    USE_LOCAL=false  # 标记为非本地二进制，安装后清理临时文件
+
+# 优先级4: 当前目录有 .tar.gz 压缩包
+elif [ -f "./$LOCAL_ARCHIVE" ]; then
+    echo "📦 使用本地压缩包: ./$LOCAL_ARCHIVE"
+    EXTRACT_DIR=$(mktemp -d)
+    if ! tar xzf "./$LOCAL_ARCHIVE" -C "$EXTRACT_DIR" $BINARY_NAME 2>/dev/null; then
+        echo "❌ 解压本地压缩包失败: ./$LOCAL_ARCHIVE"
+        rm -rf "$EXTRACT_DIR"
+        exit 1
+    fi
+    TMPFILE="$EXTRACT_DIR/$BINARY_NAME"
+    if ! file "$TMPFILE" | grep -q "ELF"; then
+        echo "❌ 解压后的文件不是有效的 Linux 二进制"
+        rm -rf "$EXTRACT_DIR"
+        exit 1
+    fi
+    USE_LOCAL=false  # 标记为非本地二进制，安装后清理临时文件
 fi
 
-# 优先级3: 从 GitHub 下载
+# 优先级5: 从 GitHub 下载
 if [ -z "$TMPFILE" ]; then
     echo "📡 检查最新版本..."
     LATEST=$(curl -sL "https://api.github.com/repos/${REPO}/releases/latest" | grep '"tag_name"' | head -1 | cut -d'"' -f4)
@@ -92,21 +134,15 @@ if [ -z "$TMPFILE" ]; then
     fi
     echo "  版本: $LATEST"
 
-    # 根据系统架构选择下载包
-    ARCH=$(uname -m)
-    case "$ARCH" in
-        x86_64|amd64)   ARCHIVE_NAME="GameTunnel-linux-amd64.tar.gz" ;;
-        aarch64|arm64)   ARCHIVE_NAME="GameTunnel-linux-arm64.tar.gz" ;;
-        *) echo "❌ 不支持的架构: $ARCH"; exit 1 ;;
-    esac
-    DOWNLOAD_URL="https://github.com/${REPO}/releases/download/${LATEST}/${ARCHIVE_NAME}"
+    # LOCAL_ARCHIVE 已在上方根据架构定义
+    DOWNLOAD_URL="https://github.com/${REPO}/releases/download/${LATEST}/${LOCAL_ARCHIVE}"
     echo "📥 下载服务器..."
     TMPFILE=$(mktemp)
     if ! curl -sL "$DOWNLOAD_URL" -o "$TMPFILE"; then
         echo "❌ 下载失败: $DOWNLOAD_URL"
         echo ""
         echo "  替代方案："
-        echo "  1. 从 https://github.com/${REPO}/releases 手动下载 ${ARCHIVE_NAME}"
+        echo "  1. 从 https://github.com/${REPO}/releases 手动下载 ${LOCAL_ARCHIVE}"
         echo "  2. 解压后放到服务器上，和 install-server.sh 同目录，重新运行"
         rm -f "$TMPFILE"
         exit 1
@@ -115,10 +151,10 @@ if [ -z "$TMPFILE" ]; then
     # 解压提取 gtunnel-server
     EXTRACT_DIR=$(mktemp -d)
     if ! tar xzf "$TMPFILE" -C "$EXTRACT_DIR" $BINARY_NAME 2>/dev/null; then
-        echo "❌ 解压失败: $ARCHIVE_NAME"
+        echo "❌ 解压失败: ${LOCAL_ARCHIVE}"
         echo ""
         echo "  替代方案："
-        echo "  1. 从 https://github.com/${REPO}/releases 手动下载 ${ARCHIVE_NAME}"
+        echo "  1. 从 https://github.com/${REPO}/releases 手动下载 ${LOCAL_ARCHIVE}"
         echo "  2. 解压后放到服务器上，和 install-server.sh 同目录，重新运行"
         rm -f "$TMPFILE"
         rm -rf "$EXTRACT_DIR"
@@ -132,7 +168,7 @@ if [ -z "$TMPFILE" ]; then
         echo "❌ 解压后的文件不是有效的 Linux 二进制"
         echo ""
         echo "  替代方案："
-        echo "  1. 从 https://github.com/${REPO}/releases 手动下载 ${ARCHIVE_NAME}"
+        echo "  1. 从 https://github.com/${REPO}/releases 手动下载 ${LOCAL_ARCHIVE}"
         echo "  2. 解压后放到服务器上，和 install-server.sh 同目录，重新运行"
         rm -rf "$EXTRACT_DIR"
         exit 1

@@ -1,3 +1,5 @@
+//go:build windows
+
 // GameTunnel Client — 通用局域网游戏隧道 (Windows)
 //
 // Usage:

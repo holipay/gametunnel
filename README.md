@@ -114,6 +114,7 @@ gtunnel-server -addr :4700 -subnet 10.10.0.0/24 -max 10 -password secret
 | `-subnet` | `10.10.0.0/24` | 虚拟子网 |
 | `-max` | `10` | 最大玩家数 |
 | `-password` | _(空)_ | 房间密码（留空=无认证） |
+| `-status-addr` | _(禁用)_ | 状态页面地址 (HTTP)，如 `:4701` |
 | `-version` | | 显示版本 |
 
 ### 客户端（Windows）
@@ -129,7 +130,7 @@ gtunnel-client.exe -server 1.2.3.4:4700 -name 玩家名 -room 房间ID -password
 | `-mtu` | `1400` | 隧道MTU |
 | `-version` | | 显示版本 |
 
-也可以通过配置文件设置：`%APPDATA%\GameTunnel\config.json`
+配置文件优先级：`config.ini`（exe 同目录）> `%APPDATA%\GameTunnel\config.json`（旧版兼容）
 
 ## 防火墙
 
