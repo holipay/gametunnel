@@ -78,12 +78,28 @@ func (d *Device) Name() string {
 
 // Read reads a packet from the TUN device. Satisfies client.TunDevice.
 func (d *Device) Read(buf []byte) (int, error) {
-	return d.tunDev.Read(buf, 0)
+	d.readPackets[0] = buf
+	n, err := d.tunDev.Read(d.readPackets[:], d.readSizes[:], 0)
+	if err != nil {
+		return 0, err
+	}
+	if n == 0 {
+		return 0, nil
+	}
+	return d.readSizes[0], nil
 }
 
 // Write writes a packet to the TUN device. Satisfies client.TunDevice.
 func (d *Device) Write(data []byte) (int, error) {
-	return d.tunDev.Write(data, 0)
+	d.writePackets[0] = data
+	n, err := d.tunDev.Write(d.writePackets[:], 0)
+	if err != nil {
+		return 0, err
+	}
+	if n == 0 {
+		return 0, nil
+	}
+	return len(data), nil
 }
 
 // configure assigns the IP address, sets up routing, and ensures broadcast

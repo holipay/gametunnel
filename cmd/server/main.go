@@ -46,7 +46,7 @@ func main() {
 
 	_, subnet, err := net.ParseCIDR(*subnetStr)
 	if err != nil {
-		log.Fatalf("子网解析失败 %x: %v", *subnetStr, err)
+		log.Fatalf("子网解析失败 %s: %v", *subnetStr, err)
 	}
 
 	s, err := server.New(server.Config{
