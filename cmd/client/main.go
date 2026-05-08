@@ -129,6 +129,11 @@ func run() error {
 	logFile := client.SetupLog()
 	defer logFile.Close()
 
+	// Add Windows Firewall rules so game traffic and tunnel UDP can pass through.
+	// Requires admin (already elevated by requestAdmin()).
+	firewallCleanup, _ := tun.SetupFirewall()
+	defer firewallCleanup()
+
 	// Graceful shutdown on Ctrl+C
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
