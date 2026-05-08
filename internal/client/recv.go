@@ -114,16 +114,34 @@ func (t *Tunnel) handlePeerInfo(ctx context.Context, payload []byte) {
 }
 
 // handleDataFromServer writes relayed data to the TUN device.
+// For server-relayed packets the server already validated srcIP, but P2P direct
+// packets arrive without server verification, so we check against the peer list.
 func (t *Tunnel) handleDataFromServer(payload []byte) {
 	dp, err := protocol.UnmarshalData(payload)
 	if err != nil {
 		return
 	}
-	if len(dp.Data) > 0 && t.tunDev != nil {
-		// Track direct peer traffic for P2P path detection
-		markDirectPeerTraffic(dp.SrcIP)
-		t.tunDev.Write(dp.Data)
+	if len(dp.Data) == 0 || t.tunDev == nil {
+		return
 	}
+
+	srcKey := ip4Key(dp.SrcIP)
+
+	// Allow traffic from the server's virtual IP (relay path) or known peers.
+	if srcKey != t.serverIP4 {
+		t.mu.RLock()
+		_, known := t.peers[srcKey]
+		t.mu.RUnlock()
+		if !known {
+			// Unknown srcIP on P2P path — drop to prevent injection.
+			// Legitimate new peers will be accepted after the next PeerInfo update.
+			return
+		}
+	}
+
+	// Track direct peer traffic for P2P path detection
+	markDirectPeerTraffic(dp.SrcIP)
+	t.tunDev.Write(dp.Data)
 }
 
 // receiveFromTUN reads IP packets from the TUN device and routes them.
