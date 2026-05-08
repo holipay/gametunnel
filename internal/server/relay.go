@@ -6,8 +6,8 @@ import (
 	"github.com/holipay/gametunnel/internal/protocol"
 )
 
-// handleRelay forwards a data packet. For broadcast, it forwards to all
-// peers in the room. For unicast, it forwards to the specific peer.
+// handleRelay forwards a data packet. For broadcast and multicast, it forwards
+// to all peers in the room. For unicast, it forwards to the specific peer.
 func (s *Server) handleRelay(payload []byte, from *net.UDPAddr) {
 	if len(payload) < 8 {
 		return
@@ -33,8 +33,9 @@ func (s *Server) handleRelay(payload []byte, from *net.UDPAddr) {
 	// Encode AFTER validation — avoids wasting CPU on spoofed packets
 	encoded := protocol.EncodeChecked(protocol.TypeData, payload)
 
-	// Broadcast: snapshot targets under RLock, send after releasing lock
-	if protocol.IsBroadcast(dstIP, s.subnet) {
+	// Broadcast/multicast: snapshot targets under RLock, send after releasing lock
+	// Covers: 255.255.255.255, subnet broadcast, and multicast (224.0.0.0/4)
+	if protocol.IsRelayTarget(dstIP, s.subnet) {
 		fromKey := addrToRateKey(from)
 		var targets []*net.UDPAddr
 		for _, c := range s.clients {

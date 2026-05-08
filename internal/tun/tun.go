@@ -118,6 +118,13 @@ func (d *Device) configure() error {
 		log.Printf("[tun] subnet broadcast route warning: %v", err)
 	}
 
+	// Step 7: Route mDNS multicast (224.0.0.251) through TUN
+	// StarCraft 1 and other games use mDNS for LAN discovery.
+	// Without this route, multicast goes to the physical NIC.
+	if err := RunCmd("route", "add", "224.0.0.251", "mask", "255.255.255.255", ip, "metric", "1"); err != nil {
+		log.Printf("[tun] mDNS route warning: %v", err)
+	}
+
 	return nil
 }
 

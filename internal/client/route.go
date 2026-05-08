@@ -8,7 +8,9 @@ import (
 
 // routePacket determines how to route an outgoing IP packet.
 func (t *Tunnel) routePacket(pkt []byte, srcIP, dstIP net.IP) {
-	if t.cachedSubnet != nil && protocol.IsBroadcast(dstIP, t.cachedSubnet) {
+	// Broadcast (255.255.255.255, subnet broadcast) and multicast (224.0.0.0/4)
+	// are relayed to all peers via the server.
+	if t.cachedSubnet != nil && protocol.IsRelayTarget(dstIP, t.cachedSubnet) {
 		t.relayBroadcast(pkt, srcIP)
 		return
 	}
@@ -29,10 +31,8 @@ func (t *Tunnel) routePacket(pkt []byte, srcIP, dstIP net.IP) {
 	}
 }
 
-// relayBroadcast sends a broadcast packet to the server for relay.
-// Only sends to server — server forwards to all peers in the room.
-// Does NOT also send directly to P2P peers, as that causes duplicate
-// broadcast delivery.
+// relayBroadcast sends a broadcast/multicast packet to the server for relay.
+// Server forwards to all peers in the room.
 func (t *Tunnel) relayBroadcast(pkt []byte, srcIP net.IP) {
 	dp := &protocol.DataPayload{
 		SrcIP: srcIP,

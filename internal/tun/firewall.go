@@ -19,6 +19,7 @@ const (
 //	Port   Protocol  Games
 //	6112   UDP+TCP   StarCraft, StarCraft: Brood War, Diablo II, Warcraft II
 //	6113   UDP       StarCraft (alternate)
+//	5353   UDP       mDNS — StarCraft 1 LAN discovery (224.0.0.251)
 //	47624  UDP       Some older games
 var commonLANPorts = []struct {
 	Port     string
@@ -27,6 +28,7 @@ var commonLANPorts = []struct {
 	{"6112", "udp"},
 	{"6112", "tcp"},
 	{"6113", "udp"},
+	{"5353", "udp"},
 	{"47624", "udp"},
 }
 
@@ -85,7 +87,7 @@ func SetupFirewall() (cleanup func(), err error) {
 		)
 	}
 
-	log.Printf("[tun] firewall rules added (app: %s, LAN ports: 6112/udp, 6112/tcp, 6113/udp, 47624/udp)", exePath)
+	log.Printf("[tun] firewall rules added (app: %s, LAN ports: 6112/udp+tcp, 6113/udp, 5353/udp, 47624/udp)", exePath)
 
 	// Return cleanup function
 	cleanup = func() {
