@@ -1,15 +1,15 @@
 //go:build windows
 
-// Package tun handles creation and management of TUN (virtual network) devices
-// on Windows via the WireGuard wintun driver.
 package tun
 
 import (
 	"fmt"
 	"log"
 	"net"
+	"os/exec"
+	"strings"
 
-	"golang.zx2c4.com/wireguard/tun"
+	"golang.zz2c4.com/wireguard/tun"
 )
 
 const (
@@ -28,15 +28,6 @@ type Device struct {
 	writePackets  [1][]byte
 }
 
-// Config holds parameters for creating a TUN device.
-type Config struct {
-	VirtualIP  net.IP
-	SubnetMask net.IPMask
-	ServerIP   net.IP
-	MTU        int
-}
-
-// New creates and configures a TUN device on Windows.
 func New(cfg Config) (*Device, error) {
 	if cfg.MTU <= 0 {
 		cfg.MTU = DefaultMTU
@@ -72,86 +63,106 @@ func New(cfg Config) (*Device, error) {
 	return dev, nil
 }
 
-// configure assigns the IP address and brings the interface up via netsh.
+// configure assigns the IP address, sets up routing, and ensures broadcast
+// packets (255.255.255.255) are routed through the TUN interface.
 func (d *Device) configure() error {
 	mask := net.IP(d.subnetMask).String()
 	ip := d.virtualIP.String()
 
-	// netsh interface ip set address "GameTunnel" static 10.10.0.2 255.255.255.0
+	// Step 1: Assign static IP
 	if err := RunCmd("netsh", "interface", "ip", "set", "address",
 		fmt.Sprintf("name=%s", d.name),
 		"static", ip, mask); err != nil {
 		return fmt.Errorf("assign IP: %w", err)
 	}
 
-	// Set interface metric low so 255.255.255.255 broadcasts prefer this interface
-	// This is critical for games like StarCraft that use global broadcast for LAN discovery
+	// Step 2: Disable auto-metric on TUN and force metric=1
+	// This is critical — without disabling auto-metric, Windows overrides the value.
+	if err := RunCmd("netsh", "interface", "ip", "set", "interface",
+		fmt.Sprintf("name=%s", d.name),
+		"metricstore=disabled"); err != nil {
+		log.Printf("[tun] disable auto-metric warning: %v", err)
+	}
 	if err := RunCmd("netsh", "interface", "ip", "set", "interface",
 		fmt.Sprintf("name=%s", d.name),
 		"metric=1"); err != nil {
 		log.Printf("[tun] set interface metric warning: %v", err)
 	}
 
-	// Add subnet route (usually auto-added, but be explicit)
+	// Step 3: Raise metrics on physical NICs so TUN wins broadcast routing
+	raisePhysicalNICMetrics(d.name)
+
+	// Step 4: Add subnet route
 	subnet := d.virtualIP.Mask(d.subnetMask)
 	maskBits, _ := d.subnetMask.Size()
 	subnetStr := fmt.Sprintf("%s/%d", subnet, maskBits)
-
-	// route add 10.10.0.0 mask 255.255.255.0 10.10.0.2
 	if err := RunCmd("route", "add", subnetStr, "mask", mask, ip, "metric", "1"); err != nil {
-		// Not fatal — route may already exist
 		log.Printf("[tun] route add warning: %v", err)
 	}
 
-	// Route global broadcast (255.255.255.255) through TUN
-	// StarCraft and similar games send UDP broadcasts to 255.255.255.255:6112
-	// Without this route, broadcasts go through the physical NIC instead of the tunnel
+	// Step 5: Route global broadcast (255.255.255.255) through TUN
+	// Games like StarCraft send UDP broadcasts to 255.255.255.255:6112 for LAN discovery.
+	// On Windows, limited broadcast bypasses the routing table by default.
+	// With metric=1 on TUN and higher metrics on physical NICs, the OS prefers TUN.
 	if err := RunCmd("route", "add", "255.255.255.255", "mask", "255.255.255.255", ip, "metric", "1"); err != nil {
 		log.Printf("[tun] broadcast route warning: %v", err)
+	}
+
+	// Step 6: Also add subnet broadcast route (e.g., 10.10.0.255)
+	// Some games use directed broadcast instead of limited broadcast.
+	subnetBroadcast := net.IP(make([]byte, 4))
+	for i := 0; i < 4; i++ {
+		subnetBroadcast[i] = subnet[i] | ^d.subnetMask[i]
+	}
+	if err := RunCmd("route", "add", subnetBroadcast.String(), "mask", mask, ip, "metric", "1"); err != nil {
+		log.Printf("[tun] subnet broadcast route warning: %v", err)
 	}
 
 	return nil
 }
 
-// Read reads an IP packet from the TUN device.
-func (d *Device) Read(buf []byte) (int, error) {
-	d.readPackets[0] = buf
-	_, err := d.tunDev.Read(d.readPackets[:], d.readSizes[:], 0)
+// raisePhysicalNICMetrics enumerates active network interfaces and raises
+// their interface metrics so the TUN (metric=1) is preferred for broadcast routing.
+//
+// On Windows, 255.255.255.255 limited broadcasts go out the interface with
+// the lowest metric. By setting physical NICs to metric=100 and TUN to metric=1,
+// all broadcast traffic enters the tunnel.
+//
+// We use PowerShell for reliable enumeration. Failures are non-fatal.
+func raisePhysicalNICMetrics(tunName string) {
+	// Get all UP, non-loopback, non-TUN interfaces
+	ps := `Get-NetAdapter | Where-Object { $_.Status -eq 'Up' -and $_.Name -ne '%s' -and $_.InterfaceDescription -notmatch 'Loopback' } | Select-Object -ExpandProperty Name`
+	ps = fmt.Sprintf(ps, tunName)
+
+	out, err := runCmdOutput("powershell", "-NoProfile", "-Command", ps)
 	if err != nil {
-		return 0, err
+		log.Printf("[tun] enumerate NICs warning: %v", err)
+		return
 	}
-	if d.readSizes[0] == 0 {
-		return 0, fmt.Errorf("zero-length read from TUN")
+
+	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
+		nicName := strings.TrimSpace(line)
+		if nicName == "" || nicName == tunName {
+			continue
+		}
+		// Raise metric to 100. The default gateway route on this NIC keeps
+		// normal internet traffic working, but broadcast routing prefers TUN.
+		if err := RunCmd("netsh", "interface", "ip", "set", "interface",
+			fmt.Sprintf("name=%s", nicName),
+			"metric=100"); err != nil {
+			log.Printf("[tun] raise metric for %q warning: %v", nicName, err)
+		} else {
+			log.Printf("[tun] raised metric for NIC %q to 100", nicName)
+		}
 	}
-	return d.readSizes[0], nil
 }
 
-// Write writes an IP packet to the TUN device.
-func (d *Device) Write(data []byte) (int, error) {
-	d.writePackets[0] = data
-	_, err := d.tunDev.Write(d.writePackets[:], 0)
+// runCmdOutput executes a command and returns its combined stdout as a string.
+func runCmdOutput(name string, args ...string) (string, error) {
+	cmd := exec.Command(name, args...)
+	out, err := cmd.CombinedOutput()
 	if err != nil {
-		return 0, err
+		return string(out), fmt.Errorf("%s %v: %w (%s)", name, args, err, string(out))
 	}
-	return len(data), nil
-}
-
-// Close shuts down the TUN device.
-func (d *Device) Close() error {
-	return d.tunDev.Close()
-}
-
-// Name returns the interface name.
-func (d *Device) Name() string {
-	return d.name
-}
-
-// VirtualIP returns the assigned virtual IP.
-func (d *Device) VirtualIP() net.IP {
-	return d.virtualIP
-}
-
-// MTU returns the configured MTU.
-func (d *Device) MTU() int {
-	return d.mtu
+	return string(out), nil
 }
