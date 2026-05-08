@@ -9,12 +9,20 @@ import (
 	"os/exec"
 	"strings"
 
-	"golang.zz2c4.com/wireguard/tun"
+	"golang.zx2c4.com/wireguard/tun"
 )
 
 const (
 	DefaultMTU = 1400
 )
+
+// Config holds TUN device configuration.
+type Config struct {
+	VirtualIP  net.IP
+	SubnetMask net.IPMask
+	ServerIP   net.IP
+	MTU        int
+}
 
 // Device represents an active TUN device with its virtual IP.
 type Device struct {
@@ -61,6 +69,21 @@ func New(cfg Config) (*Device, error) {
 	}
 
 	return dev, nil
+}
+
+// Name returns the TUN device name (e.g. "GameTunnel").
+func (d *Device) Name() string {
+	return d.name
+}
+
+// Read reads a packet from the TUN device. Satisfies client.TunDevice.
+func (d *Device) Read(buf []byte) (int, error) {
+	return d.tunDev.Read(buf, 0)
+}
+
+// Write writes a packet to the TUN device. Satisfies client.TunDevice.
+func (d *Device) Write(data []byte) (int, error) {
+	return d.tunDev.Write(data, 0)
 }
 
 // configure assigns the IP address, sets up routing, and ensures broadcast
