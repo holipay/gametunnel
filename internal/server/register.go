@@ -23,26 +23,25 @@ func (s *Server) handleRegister(payload []byte, from *net.UDPAddr) {
 
 	// Validate input lengths
 	if len(reg.Username) == 0 || len(reg.Username) > maxUsernameLen {
-		s.sendKick(from, "用户名无效")
+		s.sendKick(from, "用户名不合法")
 		return
 	}
 	if len(reg.RoomID) == 0 || len(reg.RoomID) > maxRoomIDLen {
-		s.sendKick(from, "房间ID无效")
+		s.sendKick(from, "房间ID不合法")
 		return
 	}
 
 	// Per-IP registration rate limit
 	clientIP := from.IP.String()
 	if !s.checkRegRate(clientIP) {
-		s.sendKick(from, "注册过于频繁，请稍后重试")
+		s.sendKick(from, "注册过于频繁，请稍后再试")
 		return
 	}
 
 	s.mu.Lock()
-
 	fromKey := addrToRateKey(from)
 
-	// 防止认证绕过: 待认证中的地址重发 Register 不应放行
+	// Auth in progress: same address already registered and pending auth
 	if existing := s.addrMap[fromKey]; existing != nil && existing.auth == authChallengeSent {
 		s.mu.Unlock()
 		s.sendKick(from, "认证进行中，请等待")
@@ -64,6 +63,21 @@ func (s *Server) handleRegister(payload []byte, from *net.UDPAddr) {
 		s.mu.Unlock()
 		s.sendKick(from, "房间已满")
 		return
+	}
+
+	// ====== Duplicate username detection ======
+	// Reject if any authenticated client in the same room already uses this name.
+	// This prevents confusion when a user accidentally launches a second instance
+	// that somehow bypasses the local single-instance lock (e.g., different binary path).
+	for _, c := range s.clients {
+		if c.auth == authNone || c.auth == authChallengeSent {
+			continue // skip unauthenticated/pending entries
+		}
+		if c.authRoomID == reg.RoomID && c.Username == reg.Username {
+			s.mu.Unlock()
+			s.sendKick(from, "同房间内已存在相同用户名的玩家，请更换用户名")
+			return
+		}
 	}
 
 	// No password required — register immediately
@@ -89,7 +103,7 @@ func (s *Server) registerClientLocked(reg *protocol.RegisterPayload, from *net.U
 	vip := s.nextAvailableIP()
 	if vip == nil {
 		s.mu.Unlock()
-		s.sendKick(from, "IP已耗尽")
+		s.sendKick(from, "IP已分配完")
 		return
 	}
 
@@ -102,7 +116,7 @@ func (s *Server) registerClientLocked(reg *protocol.RegisterPayload, from *net.U
 		LastSeen:   time.Now(),
 		auth:       authNone,
 	}
-	s.clients[ip4Key(vip)] = c
+	s.clients[ipv4Key(vip)] = c
 	s.addrMap[addrToRateKey(from)] = c
 	log.Printf("[+] %s (%s) → %s  [在线: %d]",
 		reg.Username, from, vip, len(s.clients))
@@ -162,7 +176,7 @@ func (s *Server) handleAuthResponse(payload []byte, from *net.UDPAddr) {
 
 	if c == nil || c.auth != authChallengeSent {
 		s.mu.Unlock()
-		s.sendKick(from, "未请求认证")
+		s.sendKick(from, "认证状态异常")
 		return
 	}
 
@@ -195,7 +209,7 @@ func (s *Server) handleAuthResponse(payload []byte, from *net.UDPAddr) {
 	}
 
 	// Auth passed — complete registration
-	log.Printf("[auth] 认证成功: %s (%s)", resp.Username, from)
+	log.Printf("[auth] 认证通过: %s (%s)", resp.Username, from)
 
 	delete(s.addrMap, fromKey)
 	s.pendingAuth--
@@ -204,6 +218,18 @@ func (s *Server) handleAuthResponse(payload []byte, from *net.UDPAddr) {
 		s.mu.Unlock()
 		s.sendKick(from, "房间已满")
 		return
+	}
+
+	// ====== Duplicate username detection (post-auth) ======
+	for _, existing := range s.clients {
+		if existing.auth == authNone || existing.auth == authChallengeSent {
+			continue
+		}
+		if existing.authRoomID == resp.RoomID && existing.Username == resp.Username {
+			s.mu.Unlock()
+			s.sendKick(from, "同房间内已存在相同用户名的玩家，请更换用户名")
+			return
+		}
 	}
 
 	reg := &protocol.RegisterPayload{

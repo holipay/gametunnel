@@ -1,4 +1,4 @@
-// GameTunnel Server — 公网中转服务器
+// GameTunnel Server — 局域网游戏隧道
 //
 // Usage:
 //
@@ -17,6 +17,7 @@ import (
 	"syscall"
 
 	"github.com/holipay/gametunnel/internal/server"
+	"github.com/holipay/gametunnel/internal/singleinstance"
 )
 
 // Version is set at build time via -ldflags.
@@ -27,7 +28,7 @@ func main() {
 	subnetStr := flag.String("subnet", "10.10.0.0/24", "虚拟子网 (CIDR)")
 	maxPlayers := flag.Int("max", 10, "最大玩家数")
 	roomPass := flag.String("password", "", "房间密码（留空=无认证）")
-	statusAddr := flag.String("status-addr", "", "状态页面地址 (HTTP)，如 :4701，留空=禁用")
+	statusAddr := flag.String("status-addr", "", "状态页面地址 (HTTP)，如 :4701")
 	versionFlag := flag.Bool("version", false, "显示版本")
 	flag.Parse()
 
@@ -36,18 +37,25 @@ func main() {
 		os.Exit(0)
 	}
 
+	// ====== Single-instance check ======
+	lock, err := singleinstance.Acquire("GameTunnel-Server")
+	if err != nil {
+		log.Fatalf("检测到已有实例运行中: %v\n请先关闭已有的 GameTunnel 服务端再重试。", err)
+	}
+	defer lock.Close()
+
 	_, subnet, err := net.ParseCIDR(*subnetStr)
 	if err != nil {
-		log.Fatalf("子网无效 %q: %v", *subnetStr, err)
+		log.Fatalf("子网解析失败 %x: %v", *subnetStr, err)
 	}
 
 	s, err := server.New(server.Config{
-		Addr:       *addr,
-		Subnet:     subnet,
-		MaxPlayers: *maxPlayers,
-		RoomPass:   *roomPass,
-		StatusAddr: *statusAddr,
-		Version:    Version,
+		Addr:        *addr,
+		Subnet:      subnet,
+		MaxPlayers:  *maxPlayers,
+		RoomPass:    *roomPass,
+		StatusAddr:  *statusAddr,
+		Version:     Version,
 	})
 	if err != nil {
 		log.Fatalf("启动失败: %v", err)
@@ -70,22 +78,21 @@ func main() {
 	// Print banner
 	authStatus := "无认证"
 	if *roomPass != "" {
-		authStatus = "HMAC 认证 (密钥按房间ID派生)"
+		authStatus = "HMAC 认证 (基于房间ID)"
 	}
-	log.Println("╔═══════════════════════════════════════════╗")
-	log.Println("║       GameTunnel Server 已启动            ║")
-	log.Println("╠═══════════════════════════════════════════╣")
-	log.Printf("║  监听:    %-31s ║", *addr)
-	log.Printf("║  子网:    %-31s ║", subnet.String())
-	log.Printf("║  服务器:  %-31s ║", s.ServerIP())
-	log.Printf("║  上限:    %-31d ║", *maxPlayers)
-	log.Printf("║  认证:    %-31s ║", authStatus)
-	log.Printf("║  版本:    %-31s ║", Version)
+	log.Printf("════════════════════════════════════════════════════════════")
+	log.Printf("▎         GameTunnel Server 局域网游戏隧道                ▎")
+	log.Printf("════════════════════════════════════════════════════════════")
+	log.Printf("▎  地址：   %-31s ▎", *addr)
+	log.Printf("▎  子网：   %-31s ▎", subnet.String())
+	log.Printf("▎  最大玩家：  %-31d ▎", *maxPlayers)
+	log.Printf("▎  认证：   %-31s ▎", authStatus)
+	log.Printf("▎  版本：   %-31s ▎", Version)
 	if *statusAddr != "" {
-		log.Printf("║  状态:    %-31s ║", fmt.Sprintf("http://%s", *statusAddr))
+		log.Printf("▎  状态页：   %-31s ▎", fmt.Sprintf("http://%s", *statusAddr))
 	}
-	log.Println("╚═══════════════════════════════════════════╝")
+	log.Printf("════════════════════════════════════════════════════════════")
 
 	s.Run(ctx)
-	log.Println("Server 已关闭")
+	log.Println("服务器已关闭")
 }

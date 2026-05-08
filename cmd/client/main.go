@@ -21,6 +21,7 @@ import (
 	"golang.org/x/sys/windows"
 
 	"github.com/holipay/gametunnel/internal/client"
+	"github.com/holipay/gametunnel/internal/singleinstance"
 	"github.com/holipay/gametunnel/internal/tun"
 )
 
@@ -63,8 +64,8 @@ func requestAdmin() {
 	verb, _ := windows.UTF16PtrFromString("runas")
 	exePath, _ := windows.UTF16PtrFromString(exe)
 
-	if err := windows.ShellExecute(0, verb, exePath, nil, nil, windows.SW_SHOW); err != nil {
-		fmt.Fprintf(os.Stderr, "  需要管理员权限运行\n")
+	if err := windows.ShellExecute(0, verb, exePath, nil, nil, windows.SW_SHOWNORMAL); err != nil {
+		fmt.Fprintf(os.Stderr, "  无法提升权限: %v\n", err)
 		os.Exit(1)
 	}
 
@@ -74,6 +75,15 @@ func requestAdmin() {
 
 // run contains the main application logic. Returns an error on failure.
 func run() error {
+	// ====== Single-instance check ======
+	lock, err := singleinstance.Acquire("GameTunnel-Client")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "  检测到已有实例运行中: %v\n", err)
+		fmt.Fprintf(os.Stderr, "  请先关闭已有的 GameTunnel 客户端再重试。\n")
+		return fmt.Errorf("single instance: %w", err)
+	}
+	defer lock.Close()
+
 	serverFlag := flag.String("server", "", "服务器地址 (host:port)")
 	nameFlag := flag.String("name", "", "玩家名称")
 	roomFlag := flag.String("room", "", "房间ID")
@@ -87,7 +97,7 @@ func run() error {
 		return nil
 	}
 
-	// Load config (config.ini next to exe > AppData/config.json > defaults)
+	// Load config (config.ini next to exe > %APPDATA%/config.json > defaults)
 	cfg := client.LoadConfig()
 	if *serverFlag != "" {
 		cfg.ServerAddr = *serverFlag
@@ -105,11 +115,11 @@ func run() error {
 	// No server configured — create default config.ini and guide user
 	if cfg.ServerAddr == "" {
 		path := client.CreateDefaultConfig()
-		fmt.Fprintf(os.Stderr, "  首次运行，已创建配置文件:\n")
+		fmt.Fprintf(os.Stderr, "  首次运行，请编辑配置文件：\n")
 		fmt.Fprintf(os.Stderr, "  %s\n\n", path)
-		fmt.Fprintf(os.Stderr, "  请用记事本编辑此文件，填入服务器地址后重新运行。\n")
-		fmt.Fprintf(os.Stderr, "  或使用命令行: gtunnel-client.exe -server 你的服务器IP:4700\n\n")
-		return fmt.Errorf("未配置服务器地址")
+		fmt.Fprintf(os.Stderr, "  填写服务器地址后重新运行。\n")
+		fmt.Fprintf(os.Stderr, "  示例：gtunnel-client.exe -server 你的服务器IP:4700\n\n")
+		return fmt.Errorf("未配置服务器")
 	}
 
 	// Save config so subsequent runs remember CLI overrides
@@ -130,23 +140,23 @@ func run() error {
 
 	go func() {
 		<-sigCh
-		fmt.Fprintln(os.Stderr, "\n  正在断开...")
+		fmt.Fprintf(os.Stderr, "\n  正在断开连接...")
 		cancel()
 		t.Disconnect()
 	}()
 
 	fmt.Printf("  GameTunnel 客户端 %s\n", Version)
-	fmt.Printf("  服务器: %s\n", cfg.ServerAddr)
-	fmt.Printf("  玩家:   %s\n", cfg.PlayerName)
-	fmt.Printf("  房间:   %s\n", cfg.RoomID)
+	fmt.Printf("  服务器：%s\n", cfg.ServerAddr)
+	fmt.Printf("  玩家名：  %s\n", cfg.PlayerName)
+	fmt.Printf("  房间：  %s\n", cfg.RoomID)
 	if cfg.RoomPassword != "" {
-		fmt.Printf("  认证:   HMAC 密码验证\n")
+		fmt.Printf("  认证：  HMAC 认证已启用\n")
 	} else {
-		fmt.Printf("  认证:   无\n")
+		fmt.Printf("  认证：  无\n")
 	}
 	fmt.Printf("\n  正在连接...\n")
 
-	err := t.Connect(ctx, cfg.ServerAddr, *mtuFlag, func(tunCfg client.TunConfig) (client.TunDevice, error) {
+	err = t.Connect(ctx, cfg.ServerAddr, *mtuFlag, func(tunCfg client.TunConfig) (client.TunDevice, error) {
 		dev, err := tun.New(tun.Config{
 			VirtualIP:  tunCfg.VirtualIP,
 			SubnetMask: tunCfg.SubnetMask,
@@ -156,9 +166,9 @@ func run() error {
 		if err == nil {
 			mask, _ := tunCfg.SubnetMask.Size()
 			fmt.Println()
-			fmt.Printf("  ✅ 已连接! 虚拟IP: %s/%d\n", tunCfg.VirtualIP, mask)
-			fmt.Printf("  TUN 设备: %s\n", dev.Name())
-			fmt.Println("  打开游戏进入局域网模式即可联机")
+			fmt.Printf("  ✅ 分配IP：%s/%d\n", tunCfg.VirtualIP, mask)
+			fmt.Printf("  TUN 设备：%s\n", dev.Name())
+			fmt.Printf("  现在可以打开游戏进入局域网模式了\n")
 			fmt.Println()
 		}
 		return dev, err
