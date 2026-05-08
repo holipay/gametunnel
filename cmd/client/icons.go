@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/binary"
 	"image"
 	"image/color"
 	"image/png"
@@ -16,8 +17,8 @@ var iconConnected = generateIcon(color.RGBA{R: 0, G: 200, B: 83, A: 255})
 // iconConnecting is a yellow tunnel icon.
 var iconConnecting = generateIcon(color.RGBA{R: 255, G: 193, B: 7, A: 255})
 
-// generateIcon creates a 16x16 PNG icon with the given color.
-// Draws a simple tunnel/pill shape.
+// generateIcon creates a 16x16 ICO icon with the given accent color.
+// The ICO wraps a PNG image (supported since Windows Vista).
 func generateIcon(c color.RGBA) []byte {
 	img := image.NewRGBA(image.Rect(0, 0, 16, 16))
 
@@ -31,7 +32,6 @@ func generateIcon(c color.RGBA) []byte {
 	// Draw a rounded rectangle (tunnel shape)
 	for y := 2; y < 14; y++ {
 		for x := 2; x < 14; x++ {
-			// Rounded corners
 			if (x < 4 && y < 4) || (x > 11 && y < 4) || (x < 4 && y > 11) || (x > 11 && y > 11) {
 				dx, dy := 0, 0
 				if x < 4 {
@@ -54,17 +54,46 @@ func generateIcon(c color.RGBA) []byte {
 
 	// Draw a white arrow/chevron in the center
 	white := color.RGBA{255, 255, 255, 255}
-	// Horizontal line
 	for x := 5; x < 11; x++ {
 		img.Set(x, 8, white)
 	}
-	// Arrow head
 	img.Set(9, 7, white)
 	img.Set(9, 9, white)
 	img.Set(10, 6, white)
 	img.Set(10, 10, white)
 
+	// Encode as PNG
+	var pngBuf bytes.Buffer
+	png.Encode(&pngBuf, img)
+	pngData := pngBuf.Bytes()
+
+	// Wrap PNG in ICO container
+	// ICO header: reserved(2) + type(2) + count(2)
+	// ICO directory entry: 16 bytes
+	// Followed by the PNG data
 	var buf bytes.Buffer
-	png.Encode(&buf, img)
+
+	// Header
+	binary.Write(&buf, binary.LittleEndian, uint16(0)) // reserved
+	binary.Write(&buf, binary.LittleEndian, uint16(1)) // type: ICO
+	binary.Write(&buf, binary.LittleEndian, uint16(1)) // image count
+
+	// Directory entry
+	const headerSize = 6
+	const dirEntrySize = 16
+	dataOffset := uint32(headerSize + dirEntrySize)
+
+	buf.WriteByte(16)                    // width
+	buf.WriteByte(16)                    // height
+	buf.WriteByte(0)                     // color palette
+	buf.WriteByte(0)                     // reserved
+	binary.Write(&buf, binary.LittleEndian, uint16(1))  // color planes
+	binary.Write(&buf, binary.LittleEndian, uint16(32)) // bits per pixel
+	binary.Write(&buf, binary.LittleEndian, uint32(len(pngData))) // data size
+	binary.Write(&buf, binary.LittleEndian, dataOffset)          // data offset
+
+	// PNG image data
+	buf.Write(pngData)
+
 	return buf.Bytes()
 }
