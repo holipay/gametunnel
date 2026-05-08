@@ -14,9 +14,11 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"log"
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"golang.org/x/sys/windows"
 
@@ -161,27 +163,75 @@ func run() error {
 	}
 	fmt.Printf("\n  正在连接...\n")
 
-	err = t.Connect(ctx, cfg.ServerAddr, *mtuFlag, func(tunCfg client.TunConfig) (client.TunDevice, error) {
-		dev, err := tun.New(tun.Config{
-			VirtualIP:  tunCfg.VirtualIP,
-			SubnetMask: tunCfg.SubnetMask,
-			ServerIP:   tunCfg.ServerIP,
-			MTU:        tunCfg.MTU,
-		})
-		if err == nil {
-			mask, _ := tunCfg.SubnetMask.Size()
-			fmt.Println()
-			fmt.Printf("  ✅ 分配IP：%s/%d\n", tunCfg.VirtualIP, mask)
-			fmt.Printf("  TUN 设备：%s\n", dev.Name())
-			fmt.Printf("  现在可以打开游戏进入局域网模式了\n")
-			fmt.Println()
-		}
-		return dev, err
-	})
-	if err != nil {
-		return fmt.Errorf("连接失败: %w", err)
-	}
+	// ── Reconnect loop ──────────────────────────────────────────────
+	// Retries with exponential backoff on connection loss.
+	// The TUN device is reused if the server assigns the same virtual IP.
+	const (
+		baseDelay = 2 * time.Second
+		maxDelay  = 60 * time.Second
+	)
 
-	fmt.Println("  已断开。")
-	return nil
+	// firstConnect tracks whether we've ever connected successfully.
+	// The first attempt prints a special message; retries print reconnect messages.
+	firstConnect := true
+
+	for attempt := 0; ; attempt++ {
+		// Backoff before retry (skip on first attempt)
+		if attempt > 0 {
+			delay := baseDelay << (attempt - 1)
+			if delay > maxDelay {
+				delay = maxDelay
+			}
+			fmt.Printf("\n  ⏳ %v 后重连 (第%d次)...\n", delay, attempt)
+			select {
+			case <-ctx.Done():
+				t.CloseTUN()
+				return nil
+			case <-time.After(delay):
+			}
+			fmt.Printf("  🔄 正在重连...\n")
+		}
+
+		// The newTUN callback is passed on first attempt; Tunnel caches it
+		// internally for reuse on subsequent reconnects.
+		var tunFactory func(client.TunConfig) (client.TunDevice, error)
+		if firstConnect {
+			tunFactory = func(tunCfg client.TunConfig) (client.TunDevice, error) {
+				dev, err := tun.New(tun.Config{
+					VirtualIP:  tunCfg.VirtualIP,
+					SubnetMask: tunCfg.SubnetMask,
+					ServerIP:   tunCfg.ServerIP,
+					MTU:        tunCfg.MTU,
+				})
+				if err == nil {
+					mask, _ := tunCfg.SubnetMask.Size()
+					fmt.Println()
+					fmt.Printf("  ✅ 分配IP：%s/%d\n", tunCfg.VirtualIP, mask)
+					fmt.Printf("  TUN 设备：%s\n", dev.Name())
+					fmt.Printf("  现在可以打开游戏进入局域网模式了\n")
+					fmt.Println()
+				}
+				return dev, err
+			}
+		}
+
+		err = t.Connect(ctx, cfg.ServerAddr, *mtuFlag, tunFactory)
+
+		// User requested shutdown — exit cleanly.
+		if ctx.Err() != nil {
+			t.CloseTUN()
+			fmt.Println("  已断开。")
+			return nil
+		}
+
+		// Connection error — log and retry.
+		if err != nil {
+			log.Printf("  连接断开: %v", err)
+		} else {
+			log.Printf("  连接断开")
+		}
+
+		firstConnect = false
+		// Loop continues → backoff → reconnect
+	}
 }

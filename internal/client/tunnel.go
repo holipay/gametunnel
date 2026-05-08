@@ -61,6 +61,11 @@ type Tunnel struct {
 	roomPass      string
 	disconnectOnce sync.Once
 	sendErrors     atomic.Int64 // send failure counter
+
+	// TUN reuse state — persists across Connect() calls
+	lastAssignedIP net.IP               // virtual IP from last registration
+	lastMTU        int                  // MTU from last connection
+	newTUNFunc     func(TunConfig) (TunDevice, error) // cached factory
 }
 
 // New creates a new Tunnel. Call Connect to start it.
@@ -73,18 +78,31 @@ func New(cfg *Config) *Tunnel {
 	}
 }
 
-// Connect registers with the server, creates the TUN device via newTUN,
+// Connect registers with the server, creates or reuses the TUN device,
 // and starts the relay loops. It blocks until ctx is cancelled or a
 // goroutine exits due to error (e.g. dead TUN device, lost server connection).
 //
-// The newTUN callback receives TunConfig populated with the virtual IP,
-// subnet mask, and server IP assigned during registration.
+// On subsequent calls (reconnect), if the server assigns the same virtual IP
+// and the TUN device is still functional, it is reused without recreation.
+// This avoids disrupting the game's network interface during transient
+// server disconnections.
+//
+// The newTUN callback is only invoked when a new TUN device is actually needed.
+// It is cached internally for potential reuse across reconnects.
 func (t *Tunnel) Connect(ctx context.Context, serverAddr string, mtu int, newTUN func(TunConfig) (TunDevice, error)) error {
+	// Cache the TUN factory for potential future reconnects.
+	if newTUN != nil {
+		t.newTUNFunc = newTUN
+	}
+
 	sAddr, err := net.ResolveUDPAddr("udp4", serverAddr)
 	if err != nil {
 		return fmt.Errorf("服务器地址无效: %w", err)
 	}
 	t.serverAddr = sAddr
+
+	// Reset disconnectOnce so Disconnect() can send leave packet on each attempt.
+	t.disconnectOnce = sync.Once{}
 
 	conn, err := net.ListenUDP("udp4", &net.UDPAddr{})
 	if err != nil {
@@ -93,28 +111,39 @@ func (t *Tunnel) Connect(ctx context.Context, serverAddr string, mtu int, newTUN
 	t.conn = conn
 
 	if err := t.register(ctx); err != nil {
+		conn.Close()
 		return fmt.Errorf("注册失败: %w", err)
 	}
 
-	tunCfg := TunConfig{
-		VirtualIP:  t.virtualIP,
-		SubnetMask: t.subnetMask,
-		ServerIP:   t.serverIP,
-		MTU:        mtu,
-	}
-	tunDev, err := newTUN(tunCfg)
-	if err != nil {
-		return fmt.Errorf("创建 TUN 失败: %w", err)
-	}
-	t.tunDev = tunDev
-	defer tunDev.Close()
+	// ── TUN device: reuse or create ─────────────────────────────────
+	ipChanged := t.lastAssignedIP != nil && !t.virtualIP.Equal(t.lastAssignedIP)
+	tunAlive := t.tunDev != nil
 
-	// Use a derived context so that when any goroutine exits (due to error),
-	// we cancel all other goroutines and return from Connect.
+	switch {
+	case tunAlive && !ipChanged:
+		// Best case: TUN is alive and IP didn't change — reuse as-is.
+		log.Printf("[tunnel] 复用 TUN 设备 (IP %s 未变)", t.virtualIP)
+
+	case tunAlive && ipChanged:
+		// IP changed — must recreate TUN with new IP/routes.
+		log.Printf("[tunnel] IP 变更 %s → %s，重建 TUN 设备", t.lastAssignedIP, t.virtualIP)
+		t.tunDev.Close()
+		t.tunDev = nil
+		if err := t.createTUN(mtu); err != nil {
+			return err
+		}
+
+	case !tunAlive:
+		// First connection or TUN was lost — create new.
+		if err := t.createTUN(mtu); err != nil {
+			return err
+		}
+	}
+
+	// ── Start relay goroutines ──────────────────────────────────────
 	runCtx, runCancel := context.WithCancel(ctx)
 	defer runCancel()
 
-	// Track goroutine completion. When the first one exits, cancel everyone.
 	var once sync.Once
 	onGoroutineExit := func(name string) {
 		once.Do(func() {
@@ -140,12 +169,28 @@ func (t *Tunnel) Connect(ctx context.Context, serverAddr string, mtu int, newTUN
 		onGoroutineExit("peerDiscoveryLoop")
 	}()
 
-	// Block until either:
-	// - parent ctx cancelled (user requested disconnect)
-	// - runCtx cancelled (a goroutine exited due to error)
 	<-runCtx.Done()
 
 	log.Printf("[tunnel] 断开连接")
+	return nil
+}
+
+// createTUN creates a new TUN device using the cached factory and current
+// virtual IP/subnet/serverIP. Called when TUN doesn't exist or IP changed.
+func (t *Tunnel) createTUN(mtu int) error {
+	tunCfg := TunConfig{
+		VirtualIP:  t.virtualIP,
+		SubnetMask: t.subnetMask,
+		ServerIP:   t.serverIP,
+		MTU:        mtu,
+	}
+	dev, err := t.newTUNFunc(tunCfg)
+	if err != nil {
+		return fmt.Errorf("创建 TUN 失败: %w", err)
+	}
+	t.tunDev = dev
+	t.lastAssignedIP = append(net.IP(nil), t.virtualIP...) // defensive copy
+	t.lastMTU = mtu
 	return nil
 }
 
@@ -162,6 +207,16 @@ func (t *Tunnel) Disconnect() {
 			t.conn.Close()
 		}
 	})
+}
+
+// CloseTUN closes the TUN device if open. Call this when exiting the program
+// (not on every reconnect — the TUN should survive transient disconnections).
+func (t *Tunnel) CloseTUN() {
+	if t.tunDev != nil {
+		t.tunDev.Close()
+		t.tunDev = nil
+		t.lastAssignedIP = nil
+	}
 }
 
 // VirtualIP returns the assigned virtual IP (valid after Connect).
