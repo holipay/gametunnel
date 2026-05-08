@@ -15,8 +15,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/holipay/gametunnel/internal/auth"
-	"github.com/holipay/gametunnel/internal/protocol"
+	"github.com/holipay/gametunnel-protocol/auth"
+	"github.com/holipay/gametunnel-protocol/protocol"
 )
 
 // ── Auth State ─────────────────────────────────────────────────

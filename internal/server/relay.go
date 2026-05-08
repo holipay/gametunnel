@@ -3,7 +3,7 @@ package server
 import (
 	"net"
 
-	"github.com/holipay/gametunnel/internal/protocol"
+	"github.com/holipay/gametunnel-protocol/protocol"
 )
 
 // handleRelay forwards a data packet. For broadcast and multicast, it forwards

@@ -9,7 +9,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/holipay/gametunnel/internal/protocol"
+	"github.com/holipay/gametunnel-protocol/protocol"
 )
 
 // ip4Key converts a 4-byte IPv4 address to a [4]byte map key.

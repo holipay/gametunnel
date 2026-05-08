@@ -3,7 +3,7 @@ package client
 import (
 	"net"
 
-	"github.com/holipay/gametunnel/internal/protocol"
+	"github.com/holipay/gametunnel-protocol/protocol"
 )
 
 // routePacket determines how to route an outgoing IP packet.

@@ -6,7 +6,7 @@ import (
 	"net"
 	"time"
 
-	"github.com/holipay/gametunnel/internal/protocol"
+	"github.com/holipay/gametunnel-protocol/protocol"
 )
 
 const (
