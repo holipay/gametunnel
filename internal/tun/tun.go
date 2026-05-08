@@ -89,6 +89,11 @@ func (d *Device) Read(buf []byte) (int, error) {
 	return d.readSizes[0], nil
 }
 
+// Close closes the TUN device and releases resources. Satisfies client.TunDevice.
+func (d *Device) Close() error {
+	return d.tunDev.Close()
+}
+
 // Write writes a packet to the TUN device. Satisfies client.TunDevice.
 func (d *Device) Write(data []byte) (int, error) {
 	d.writePackets[0] = data
