@@ -11,7 +11,7 @@ func (t *Tunnel) routePacket(pkt []byte, srcIP, dstIP net.IP) {
 	// Broadcast (255.255.255.255, subnet broadcast) and multicast (224.0.0.0/4)
 	// are relayed to all peers via the server.
 	if t.cachedSubnet != nil && protocol.IsRelayTarget(dstIP, t.cachedSubnet) {
-		t.relayBroadcast(pkt, srcIP)
+		t.relayBroadcast(pkt, srcIP, dstIP)
 		return
 	}
 	if ip4Key(dstIP) == t.serverIP4 {
@@ -33,10 +33,11 @@ func (t *Tunnel) routePacket(pkt []byte, srcIP, dstIP net.IP) {
 
 // relayBroadcast sends a broadcast/multicast packet to the server for relay.
 // Server forwards to all peers in the room.
-func (t *Tunnel) relayBroadcast(pkt []byte, srcIP net.IP) {
+// Preserves the original dstIP (255.255.255.255, subnet broadcast, or multicast).
+func (t *Tunnel) relayBroadcast(pkt []byte, srcIP, dstIP net.IP) {
 	dp := &protocol.DataPayload{
 		SrcIP: srcIP,
-		DstIP: net.IPv4(255, 255, 255, 255),
+		DstIP: dstIP, // preserve original broadcast/multicast destination
 		Data:  pkt,
 	}
 	encoded := protocol.EncodeChecked(protocol.TypeData, dp.Marshal())

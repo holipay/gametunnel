@@ -74,7 +74,9 @@ func New(cfg *Config) *Tunnel {
 }
 
 // Connect registers with the server, creates the TUN device via newTUN,
-// and starts the relay loops. It blocks until ctx is cancelled.
+// and starts the relay loops. It blocks until ctx is cancelled or a
+// goroutine exits due to error (e.g. dead TUN device, lost server connection).
+//
 // The newTUN callback receives TunConfig populated with the virtual IP,
 // subnet mask, and server IP assigned during registration.
 func (t *Tunnel) Connect(ctx context.Context, serverAddr string, mtu int, newTUN func(TunConfig) (TunDevice, error)) error {
@@ -107,12 +109,42 @@ func (t *Tunnel) Connect(ctx context.Context, serverAddr string, mtu int, newTUN
 	t.tunDev = tunDev
 	defer tunDev.Close()
 
-	go t.receiveFromServer(ctx)
-	go t.receiveFromTUN(ctx)
-	go t.keepaliveLoop(ctx)
-	go t.peerDiscoveryLoop(ctx)
+	// Use a derived context so that when any goroutine exits (due to error),
+	// we cancel all other goroutines and return from Connect.
+	runCtx, runCancel := context.WithCancel(ctx)
+	defer runCancel()
 
-	<-ctx.Done()
+	// Track goroutine completion. When the first one exits, cancel everyone.
+	var once sync.Once
+	onGoroutineExit := func(name string) {
+		once.Do(func() {
+			log.Printf("[tunnel] %s 退出，断开连接", name)
+			runCancel()
+		})
+	}
+
+	go func() {
+		t.receiveFromServer(runCtx)
+		onGoroutineExit("receiveFromServer")
+	}()
+	go func() {
+		t.receiveFromTUN(runCtx)
+		onGoroutineExit("receiveFromTUN")
+	}()
+	go func() {
+		t.keepaliveLoop(runCtx)
+		onGoroutineExit("keepaliveLoop")
+	}()
+	go func() {
+		t.peerDiscoveryLoop(runCtx)
+		onGoroutineExit("peerDiscoveryLoop")
+	}()
+
+	// Block until either:
+	// - parent ctx cancelled (user requested disconnect)
+	// - runCtx cancelled (a goroutine exited due to error)
+	<-runCtx.Done()
+
 	log.Printf("[tunnel] 断开连接")
 	return nil
 }

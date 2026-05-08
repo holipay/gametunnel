@@ -4,13 +4,25 @@ import (
 	"context"
 	"log"
 	"net"
+	"time"
 
 	"github.com/holipay/gametunnel/internal/protocol"
 )
 
+// maxConsecutiveErrors is the number of consecutive read errors before
+// a goroutine gives up. Prevents CPU spin on dead TUN/UDP devices.
+const maxConsecutiveErrors = 10
+
+// errorBackoff is the sleep duration between consecutive read errors.
+// Chosen to be long enough to break a spin loop but short enough that
+// a transient glitch recovers quickly.
+const errorBackoff = 100 * time.Millisecond
+
 // receiveFromServer handles packets from the server.
 func (t *Tunnel) receiveFromServer(ctx context.Context) {
 	buf := make([]byte, 65535)
+	consecutiveErrors := 0
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -24,9 +36,22 @@ func (t *Tunnel) receiveFromServer(ctx context.Context) {
 			case <-ctx.Done():
 				return
 			default:
-				continue
 			}
+
+			consecutiveErrors++
+			if consecutiveErrors > maxConsecutiveErrors {
+				log.Printf("[tunnel] 服务端连接读取连续失败 %d 次，退出: %v", consecutiveErrors, err)
+				return
+			}
+
+			// Backoff to avoid CPU spin on persistent errors.
+			// Also gives ctx a chance to be checked.
+			time.Sleep(errorBackoff)
+			continue
 		}
+
+		// Successful read — reset error counter.
+		consecutiveErrors = 0
 
 		msg, err := protocol.DecodeChecked(buf[:n])
 		if err != nil {
@@ -104,6 +129,8 @@ func (t *Tunnel) handleDataFromServer(payload []byte) {
 // receiveFromTUN reads IP packets from the TUN device and routes them.
 func (t *Tunnel) receiveFromTUN(ctx context.Context) {
 	buf := make([]byte, 65535)
+	consecutiveErrors := 0
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -117,9 +144,20 @@ func (t *Tunnel) receiveFromTUN(ctx context.Context) {
 			case <-ctx.Done():
 				return
 			default:
-				continue
 			}
+
+			consecutiveErrors++
+			if consecutiveErrors > maxConsecutiveErrors {
+				log.Printf("[tunnel] TUN 设备读取连续失败 %d 次，退出: %v", consecutiveErrors, err)
+				return
+			}
+
+			time.Sleep(errorBackoff)
+			continue
 		}
+
+		consecutiveErrors = 0
+
 		if n < 20 {
 			continue
 		}
