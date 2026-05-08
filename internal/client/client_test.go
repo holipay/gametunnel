@@ -2,6 +2,7 @@ package client
 
 import (
 	"bytes"
+	"context"
 	"net"
 	"os"
 	"path/filepath"
@@ -348,7 +349,7 @@ func TestHandlePeerInfo_NewPlayer(t *testing.T) {
 		},
 	}
 
-	tunnel.handlePeerInfo(payload.Marshal())
+	tunnel.handlePeerInfo(context.Background(), payload.Marshal())
 
 	tunnel.mu.RLock()
 	peer, ok := tunnel.peers[ip4Key(peerIP)]
@@ -397,7 +398,7 @@ func TestHandlePeerInfo_UpdatePlayer(t *testing.T) {
 		},
 	}
 
-	tunnel.handlePeerInfo(payload.Marshal())
+	tunnel.handlePeerInfo(context.Background(), payload.Marshal())
 
 	tunnel.mu.RLock()
 	peer, ok := tunnel.peers[ip4Key(peerIP)]
@@ -445,7 +446,7 @@ func TestHandlePeerInfo_PlayerLeaving(t *testing.T) {
 		},
 	}
 
-	tunnel.handlePeerInfo(payload.Marshal())
+	tunnel.handlePeerInfo(context.Background(), payload.Marshal())
 
 	tunnel.mu.RLock()
 	_, hasPeer1 := tunnel.peers[ip4Key(peer1IP)]
@@ -474,7 +475,7 @@ func TestHandlePeerInfo_EmptyList(t *testing.T) {
 
 	// Server sends empty peer list
 	payload := &protocol.PeerInfoPayload{Peers: []protocol.PeerInfoEntry{}}
-	tunnel.handlePeerInfo(payload.Marshal())
+	tunnel.handlePeerInfo(context.Background(), payload.Marshal())
 
 	tunnel.mu.RLock()
 	count := len(tunnel.peers)

@@ -35,20 +35,21 @@ func (t *Tunnel) receiveFromServer(ctx context.Context) {
 
 		switch msg.Type {
 		case protocol.TypePeerInfo:
-			t.handlePeerInfo(msg.Payload)
+			t.handlePeerInfo(ctx, msg.Payload)
 		case protocol.TypeData:
 			t.handleDataFromServer(msg.Payload)
 		case protocol.TypePing:
 			// Echo ping back as pong for RTT measurement
 			t.sendUDP(protocol.EncodeChecked(protocol.TypePong, msg.Payload), t.serverAddr)
 		case protocol.TypeHolePunch:
-			// NAT mapping established
+			// Bidirectional punch: respond immediately to create our NAT mapping
+			t.handleHolePunchReceived(msg.Payload)
 		}
 	}
 }
 
 // handlePeerInfo updates the peer list from the server.
-func (t *Tunnel) handlePeerInfo(payload []byte) {
+func (t *Tunnel) handlePeerInfo(ctx context.Context, payload []byte) {
 	info, err := protocol.UnmarshalPeerInfo(payload)
 	if err != nil {
 		return
@@ -75,7 +76,7 @@ func (t *Tunnel) handlePeerInfo(payload []byte) {
 				Username:   entry.Username,
 			}
 			log.Printf("[tunnel] 新玩家: %s (%s)", entry.Username, entry.VirtualIP)
-			go t.startHolePunch(entry.VirtualIP)
+			go t.startHolePunch(ctx, entry.VirtualIP)
 		}
 	}
 	// Log removed peers
@@ -94,6 +95,8 @@ func (t *Tunnel) handleDataFromServer(payload []byte) {
 		return
 	}
 	if len(dp.Data) > 0 && t.tunDev != nil {
+		// Track direct peer traffic for P2P path detection
+		markDirectPeerTraffic(dp.SrcIP)
 		t.tunDev.Write(dp.Data)
 	}
 }

@@ -24,6 +24,7 @@ type Peer struct {
 	VirtualIP  net.IP
 	PublicAddr *net.UDPAddr
 	Username   string
+	DirectReach atomic.Bool // true if P2P direct path has been confirmed
 }
 
 // TunDevice abstracts the TUN device for testability and platform independence.
