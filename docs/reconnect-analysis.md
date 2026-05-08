@@ -206,23 +206,29 @@ for attempt := 0; ; attempt++ {
 }
 ```
 
-### 层面 3：TUN 设备复用
+### 层面 3：TUN 设备复用 ✅ 已实现 (commit 26bff2c)
 
-将 TUN 生命周期从 `Connect()` 剥离：
+TUN 生命周期从 `Connect()` 剥离，跨重连持久化：
 
 ```go
 type Tunnel struct {
-    tunDev     TunDevice
-    lastVIP    net.IP  // 上次分配的虚拟 IP
+    tunDev        TunDevice
+    lastAssignedIP net.IP  // 上次分配的虚拟 IP
+    newTUNFunc     func(TunConfig) (TunDevice, error) // 缓存的工厂函数
 }
 
 // Connect 内部：
-if t.tunDev != nil && t.virtualIP.Equal(t.lastVIP) {
-    // IP 没变，复用 TUN，零中断
-} else {
-    // IP 变了或首次连接，创建 TUN
+switch {
+case tunAlive && !ipChanged:
+    // 复用 TUN，零中断
+case tunAlive && ipChanged:
+    // IP 变了，重建 TUN
+case !tunAlive:
+    // 首次连接，创建 TUN
 }
 ```
+
+重连循环在 `cmd/client/main.go` 中实现，指数 backoff (2s→4s→8s→...→60s)。
 
 ---
 
@@ -299,10 +305,11 @@ relayBroadcast() → DataPayload{src=10.10.0.2, dst=255.255.255.255}
 | 文件 | 改动 | Commit |
 |------|------|--------|
 | `internal/client/recv.go` | 错误计数+backoff；srcIP 验证 | d24a329, 338bee8 |
-| `internal/client/tunnel.go` | Connect() 用 runCtx 管理 goroutine 生命周期 | d24a329 |
+| `internal/client/tunnel.go` | goroutine 生命周期管理；TUN 设备复用 | d24a329, 26bff2c |
 | `internal/client/route.go` | relayBroadcast 保留原始 dstIP | d24a329 |
+| `cmd/client/main.go` | 重连循环 + 指数 backoff | 26bff2c |
+| `docs/reconnect-analysis.md` | 分析与修复文档 | 4370d51 |
 | `internal/client/keepalive.go` | 待改：新增 serverWatchdog | — |
-| `cmd/client/main.go` | 待改：重连循环 + backoff | — |
 | `internal/client/config.go` | 待改：新增重连配置项 | — |
 
 服务端代码不需要改动。
