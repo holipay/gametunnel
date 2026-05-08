@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"log"
 	"net"
-	"net/http"
 	"sync"
 	"time"
 
@@ -15,22 +14,19 @@ import (
 
 // App wraps the tunnel with HTTP API and status tracking.
 type App struct {
-	cfg       *client.Config
-	cfgPath   string
-	tunnel    *client.Tunnel
-	mu        sync.RWMutex
+	cfg        *client.Config
+	tunnel     *client.Tunnel
+	mu         sync.RWMutex
 	connecting bool
-	lastErr   string
+	lastErr    string
 
-	// Status
-	connected   bool
-	virtualIP   net.IP
-	subnetMask  net.IPMask
-	serverIP    net.IP
-	peers       []PeerStatus
-	rtt         time.Duration
-	uptime      time.Time
-	connCount   int
+	// Status (updated by statusLoop polling tunnel.Status())
+	connected  bool
+	virtualIP  net.IP
+	subnetMask net.IPMask
+	serverIP   net.IP
+	peerCount  int
+	uptime     time.Time
 
 	// TUN factory (set by platform-specific main)
 	newTUN func(client.TunConfig) (client.TunDevice, error)
@@ -49,18 +45,17 @@ type PeerStatus struct {
 
 // StatusResponse is the SSE status payload.
 type StatusResponse struct {
-	Connected  bool         `json:"connected"`
-	Connecting bool         `json:"connecting"`
-	LastError  string       `json:"last_error,omitempty"`
-	VirtualIP  string       `json:"virtual_ip,omitempty"`
-	Subnet     string       `json:"subnet,omitempty"`
-	ServerIP   string       `json:"server_ip,omitempty"`
-	RTT        int64        `json:"rtt,omitempty"`
-	Uptime     string       `json:"uptime,omitempty"`
-	Peers      []PeerStatus `json:"peers"`
-	PlayerName string       `json:"player_name"`
-	RoomID     string       `json:"room_id"`
-	ServerAddr string       `json:"server_addr"`
+	Connected  bool   `json:"connected"`
+	Connecting bool   `json:"connecting"`
+	LastError  string `json:"last_error,omitempty"`
+	VirtualIP  string `json:"virtual_ip,omitempty"`
+	Subnet     string `json:"subnet,omitempty"`
+	ServerIP   string `json:"server_ip,omitempty"`
+	PeerCount  int    `json:"peer_count"`
+	Uptime     string `json:"uptime,omitempty"`
+	PlayerName string `json:"player_name"`
+	RoomID     string `json:"room_id"`
+	ServerAddr string `json:"server_addr"`
 }
 
 // NewApp creates a new App.
@@ -91,7 +86,7 @@ func (a *App) GetStatus() StatusResponse {
 		PlayerName: a.cfg.PlayerName,
 		RoomID:     a.cfg.RoomID,
 		ServerAddr: a.cfg.ServerAddr,
-		Peers:      a.peers,
+		PeerCount:  a.peerCount,
 	}
 
 	if a.connected {
@@ -101,9 +96,6 @@ func (a *App) GetStatus() StatusResponse {
 			s.Subnet = fmt.Sprintf("%s/%d", a.virtualIP.Mask(a.subnetMask), ones)
 		}
 		s.ServerIP = a.serverIP.String()
-		if a.rtt > 0 {
-			s.RTT = a.rtt.Milliseconds()
-		}
 		if !a.uptime.IsZero() {
 			s.Uptime = formatDuration(time.Since(a.uptime))
 		}
@@ -123,10 +115,19 @@ func (a *App) Connect(cfg *client.Config) {
 	a.lastErr = ""
 	a.mu.Unlock()
 
-	// Update config
+	// Clean up old tunnel before creating new one
+	a.cancel()
+	a.tunnel.Disconnect()
+	a.tunnel.CloseTUN()
+
+	// Update config and create new tunnel
 	a.cfg = cfg
 	a.tunnel = client.New(cfg)
-	client.SaveConfig(cfg)
+	a.ctx, a.cancel = context.WithCancel(context.Background())
+
+	if err := client.SaveConfig(cfg); err != nil {
+		log.Printf("[app] 保存配置失败: %v", err)
+	}
 
 	go a.connectLoop()
 }
@@ -135,19 +136,68 @@ func (a *App) Connect(cfg *client.Config) {
 func (a *App) Disconnect() {
 	a.cancel()
 	a.tunnel.Disconnect()
+	a.tunnel.CloseTUN()
 
 	a.mu.Lock()
 	a.connected = false
 	a.connecting = false
-	a.peers = nil
+	a.peerCount = 0
 	a.mu.Unlock()
 
 	// Reset context for next connection
 	a.ctx, a.cancel = context.WithCancel(context.Background())
 }
 
+// statusLoop polls tunnel.Status() and syncs to App fields.
+func (a *App) statusLoop(ctx context.Context) {
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+
+		// Read tunnel pointer under lock to avoid race with Connect()
+		a.mu.RLock()
+		tun := a.tunnel
+		a.mu.RUnlock()
+
+		if tun == nil {
+			continue
+		}
+
+		ts := tun.Status()
+
+		a.mu.Lock()
+		if ts.Connected {
+			wasConnected := a.connected
+			a.connected = true
+			a.virtualIP = ts.VirtualIP
+			a.subnetMask = ts.SubnetMask
+			a.serverIP = ts.ServerIP
+			a.peerCount = ts.PeerCount
+			if !wasConnected {
+				a.uptime = time.Now()
+			}
+		} else if a.connected {
+			// Was connected, now disconnected
+			a.connected = false
+			a.peerCount = 0
+		}
+		a.mu.Unlock()
+	}
+}
+
 // connectLoop handles connection with auto-reconnect.
 func (a *App) connectLoop() {
+	// Start status polling for this connection session
+	pollCtx, pollCancel := context.WithCancel(a.ctx)
+	defer pollCancel()
+	go a.statusLoop(pollCtx)
+
 	defer func() {
 		a.mu.Lock()
 		a.connecting = false
@@ -191,42 +241,6 @@ func (a *App) connectLoop() {
 			log.Printf("[app] 连接断开")
 		}
 	}
-}
-
-// updateStatus is called by the tunnel callbacks to refresh status.
-func (a *App) updateStatus(connected bool, vip net.IP, mask net.IPMask, serverIP net.IP) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-
-	wasConnected := a.connected
-	a.connected = connected
-
-	if connected {
-		a.virtualIP = vip
-		a.subnetMask = mask
-		a.serverIP = serverIP
-		if !wasConnected {
-			a.uptime = time.Now()
-			a.connCount++
-		}
-	} else {
-		a.peers = nil
-		a.rtt = 0
-	}
-}
-
-// updatePeers refreshes the peer list.
-func (a *App) updatePeers(peers []PeerStatus) {
-	a.mu.Lock()
-	a.peers = peers
-	a.mu.Unlock()
-}
-
-// updateRTT updates the latency measurement.
-func (a *App) updateRTT(d time.Duration) {
-	a.mu.Lock()
-	a.rtt = d
-	a.mu.Unlock()
 }
 
 func formatDuration(d time.Duration) string {

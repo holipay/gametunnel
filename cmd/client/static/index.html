@@ -306,9 +306,16 @@
   <!-- Peers Card -->
   <div class="card" id="peersCard" style="display:none">
     <div class="card-title">👥 在线玩家</div>
-    <ul class="peer-list" id="peerList">
-      <li class="empty-hint">暂无其他玩家</li>
-    </ul>
+    <div class="stats-grid">
+      <div class="stat-item">
+        <div class="stat-value" id="statPeers">0</div>
+        <div class="stat-label">在线人数</div>
+      </div>
+      <div class="stat-item">
+        <div class="stat-value" id="statRoom">--</div>
+        <div class="stat-label">房间</div>
+      </div>
+    </div>
   </div>
 
   <div class="footer">GameTunnel · 局域网游戏隧道</div>
@@ -398,20 +405,12 @@ function updateUI(s) {
 
   // Peers
   const peersCard = $('peersCard');
-  const peerList = $('peerList');
-  if (s.peers && s.peers.length > 0) {
+  if (s.connected) {
     peersCard.style.display = '';
-    peerList.innerHTML = s.peers.map(p => {
-      const rttClass = p.rtt ? (parseInt(p.rtt) < 50 ? 'good' : parseInt(p.rtt) < 100 ? 'mid' : 'bad') : '';
-      return `<li class="peer-item">
-        <span class="peer-name">👤 ${esc(p.username)}</span>
-        <span class="peer-ip">${esc(p.virtual_ip)}</span>
-        <span class="peer-rtt ${rttClass}">${p.rtt || '--'}</span>
-      </li>`;
-    }).join('');
+    $('statPeers').textContent = s.peer_count || 0;
+    $('statRoom').textContent = s.room_id || '--';
   } else {
-    peersCard.style.display = s.connected ? '' : 'none';
-    peerList.innerHTML = '<li class="empty-hint">暂无其他玩家</li>';
+    peersCard.style.display = 'none';
   }
 
   // Config fields (only update if not focused)

@@ -68,7 +68,7 @@ func (t *Tray) setup() {
 
 			case <-t.mDisconnect.ClickedCh:
 				t.app.Disconnect()
-				t.updateTray(false, "", 0, 0)
+				t.updateTray(false, "", 0)
 
 			case <-mLog.ClickedCh:
 				openLogFile()
@@ -103,13 +103,10 @@ func (t *Tray) updateTrayConnecting() {
 	t.mDisconnect.Enable()
 }
 
-func (t *Tray) updateTray(connected bool, ip string, peers int, rttMs int64) {
+func (t *Tray) updateTray(connected bool, ip string, peers int) {
 	if connected {
 		systray.SetIcon(iconConnected)
 		tooltip := fmt.Sprintf("GameTunnel - %s · %d人在线", ip, peers)
-		if rttMs > 0 {
-			tooltip += fmt.Sprintf(" · %dms", rttMs)
-		}
 		systray.SetTooltip(tooltip)
 		t.mStatus.SetTitle(fmt.Sprintf("🟢 %s · %d人", ip, peers))
 		t.mConnect.Disable()
@@ -130,7 +127,7 @@ func (t *Tray) statusLoop() {
 		if status.Connecting {
 			t.updateTrayConnecting()
 		} else {
-			t.updateTray(status.Connected, status.VirtualIP, len(status.Peers), status.RTT)
+			t.updateTray(status.Connected, status.VirtualIP, status.PeerCount)
 		}
 
 		select {

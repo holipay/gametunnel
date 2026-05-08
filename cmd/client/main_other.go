@@ -5,8 +5,6 @@ package main
 import (
 	"fmt"
 	"os"
-
-	"github.com/holipay/gametunnel/internal/client"
 )
 
 func main() {
@@ -16,7 +14,4 @@ func main() {
 	fmt.Println("  如需在 Linux 上运行客户端 GUI，请使用:")
 	fmt.Println("  GOOS=windows go build -o gtunnel-client.exe ./cmd/client")
 	os.Exit(1)
-
-	// Suppress unused import
-	_ = client.Config{}
 }

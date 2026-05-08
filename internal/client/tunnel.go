@@ -224,6 +224,28 @@ func (t *Tunnel) VirtualIP() net.IP {
 	return t.virtualIP
 }
 
+// TunnelStatus is a point-in-time snapshot of the tunnel state.
+type TunnelStatus struct {
+	Connected  bool
+	VirtualIP  net.IP
+	SubnetMask net.IPMask
+	ServerIP   net.IP
+	PeerCount  int
+}
+
+// Status returns a snapshot of the current tunnel state.
+func (t *Tunnel) Status() TunnelStatus {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	return TunnelStatus{
+		Connected:  t.tunDev != nil && t.virtualIP != nil,
+		VirtualIP:  t.virtualIP,
+		SubnetMask: t.subnetMask,
+		ServerIP:   t.serverIP,
+		PeerCount:  len(t.peers),
+	}
+}
+
 // sendUDP is a thread-safe UDP write.
 func (t *Tunnel) sendUDP(data []byte, addr *net.UDPAddr) {
 	t.connMu.Lock()
