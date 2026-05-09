@@ -15,6 +15,8 @@ import (
 	"log"
 	"syscall"
 	"unsafe"
+
+	"golang.org/x/sys/windows"
 )
 
 var (
@@ -154,7 +156,7 @@ func findAdapter(name string) (ifIndex uint32, luid uint64, err error) {
 
 	p := (*ipAdapterAddresses)(unsafe.Pointer(&buf[0]))
 	for p != nil {
-		if syscall.UTF16PtrToString(p.FriendlyName) == name {
+		if windows.UTF16PtrToString(p.FriendlyName) == name {
 			row := mibIPInterfaceRow{}
 			row.Family = syscall.AF_INET
 			row.InterfaceIndex = p.IfIndex
@@ -204,7 +206,7 @@ func disableAllPhysicalAutoMetric(tunName string) {
 
 	p := (*ipAdapterAddresses)(unsafe.Pointer(&buf[0]))
 	for p != nil {
-		nicName := syscall.UTF16PtrToString(p.FriendlyName)
+		nicName := windows.UTF16PtrToString(p.FriendlyName)
 		// 跳过 TUN、未启用、回环 (IF_TYPE_SOFTWARE_LOOPBACK = 24)
 		if nicName != tunName && p.OperStatus == 1 && p.IfType != 24 {
 			if err := setMetricAPI(p.IfIndex, 0); err != nil {
