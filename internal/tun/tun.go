@@ -4,12 +4,8 @@ package tun
 
 import (
 	"fmt"
-	"log"
 	"net"
 	"os/exec"
-	"strconv"
-	"strings"
-	"time"
 
 	"golang.zx2c4.com/wireguard/tun"
 )
@@ -107,140 +103,6 @@ func (d *Device) Write(data []byte) (int, error) {
 		return 0, nil
 	}
 	return len(data), nil
-}
-
-// configure assigns the IP address, sets up routing, and ensures broadcast
-// packets (255.255.255.255) are routed through the TUN interface.
-func (d *Device) configure() error {
-	mask := net.IP(d.subnetMask).String()
-	ip := d.virtualIP.String()
-
-	// Step 1: Assign static IP
-	if err := RunCmd("netsh", "interface", "ip", "set", "address",
-		fmt.Sprintf("name=%s", d.name),
-		"static", ip, mask); err != nil {
-		return fmt.Errorf("assign IP: %w", err)
-	}
-
-	// Step 2: Disable auto-metric on TUN and force metric=1
-	// This is critical — without disabling auto-metric, Windows overrides the value.
-	// Note: netsh "metricstore=disabled" is not a valid parameter on Windows 10/11
-	// and silently fails. Use PowerShell Set-NetIPInterface instead.
-	psMetric := fmt.Sprintf(
-		"Set-NetIPInterface -InterfaceAlias '%s' -AutomaticMetric Disabled -InterfaceMetric 1 -ErrorAction SilentlyContinue",
-		d.name)
-	if err := RunCmd("powershell", "-NoProfile", "-Command", psMetric); err != nil {
-		log.Printf("[tun] set TUN metric warning: %v", err)
-	}
-	// Verify metric was applied; retry once after short delay if not.
-	// wintun driver may briefly report stale interface state right after creation.
-	if !d.verifyMetric(1) {
-		time.Sleep(500 * time.Millisecond)
-		if err := RunCmd("powershell", "-NoProfile", "-Command", psMetric); err != nil {
-			log.Printf("[tun] set TUN metric retry warning: %v", err)
-		}
-		if d.verifyMetric(1) {
-			log.Printf("[tun] TUN metric set to 1 (retry succeeded)")
-		} else {
-			log.Printf("[tun] WARNING: TUN metric could not be set to 1, broadcast routing may be affected")
-		}
-	}
-
-	// Step 3: Raise metrics on physical NICs so TUN wins broadcast routing
-	raisePhysicalNICMetrics(d.name)
-
-	// Step 4: Add subnet route
-	subnet := d.virtualIP.Mask(d.subnetMask)
-	maskBits, _ := d.subnetMask.Size()
-	subnetStr := fmt.Sprintf("%s/%d", subnet, maskBits)
-	if err := RunCmd("route", "add", subnetStr, "mask", mask, ip, "metric", "1"); err != nil {
-		log.Printf("[tun] route add warning: %v", err)
-	}
-
-	// Step 5: Route global broadcast (255.255.255.255) through TUN
-	// Games like StarCraft send UDP broadcasts to 255.255.255.255:6112 for LAN discovery.
-	// On Windows, limited broadcast bypasses the routing table by default.
-	// With metric=1 on TUN and higher metrics on physical NICs, the OS prefers TUN.
-	if err := RunCmd("route", "add", "255.255.255.255", "mask", "255.255.255.255", ip, "metric", "1"); err != nil {
-		log.Printf("[tun] broadcast route warning: %v", err)
-	}
-
-	// Step 6: Also add subnet broadcast route (e.g., 10.10.0.255)
-	// Some games use directed broadcast instead of limited broadcast.
-	subnetBroadcast := net.IP(make([]byte, 4))
-	for i := 0; i < 4; i++ {
-		subnetBroadcast[i] = subnet[i] | ^d.subnetMask[i]
-	}
-	if err := RunCmd("route", "add", subnetBroadcast.String(), "mask", mask, ip, "metric", "1"); err != nil {
-		log.Printf("[tun] subnet broadcast route warning: %v", err)
-	}
-
-	// Step 7: Route mDNS multicast (224.0.0.251) through TUN
-	// StarCraft 1 and other games use mDNS for LAN discovery.
-	// Without this route, multicast goes to the physical NIC.
-	if err := RunCmd("route", "add", "224.0.0.251", "mask", "255.255.255.255", ip, "metric", "1"); err != nil {
-		log.Printf("[tun] mDNS route warning: %v", err)
-	}
-
-	// Step 8: Set network profile to Private so Windows Firewall inbound rules apply.
-	// By default, Windows classifies new interfaces as Public, which blocks inbound
-	// connections even when explicit Allow rules exist.
-	if err := RunCmd("powershell", "-NoProfile", "-Command",
-		fmt.Sprintf("Set-NetConnectionProfile -InterfaceAlias '%s' -NetworkCategory Private", d.name)); err != nil {
-		log.Printf("[tun] set network category warning: %v", err)
-	}
-
-	return nil
-}
-
-// verifyMetric checks if the TUN interface has the expected IPv4 metric value.
-func (d *Device) verifyMetric(expected int) bool {
-	out, err := runCmdOutput("powershell", "-NoProfile", "-Command",
-		fmt.Sprintf("(Get-NetIPInterface -InterfaceAlias '%s' -AddressFamily IPv4 -ErrorAction SilentlyContinue).InterfaceMetric", d.name))
-	if err != nil {
-		return false
-	}
-	got, err := strconv.Atoi(strings.TrimSpace(out))
-	if err != nil {
-		return false
-	}
-	return got == expected
-}
-
-// raisePhysicalNICMetrics enumerates active network interfaces and raises
-// their interface metrics so the TUN (metric=1) is preferred for broadcast routing.
-//
-// On Windows, 255.255.255.255 limited broadcasts go out the interface with
-// the lowest metric. By setting physical NICs to metric=100 and TUN to metric=1,
-// all broadcast traffic enters the tunnel.
-//
-// We use PowerShell for reliable enumeration. Failures are non-fatal.
-func raisePhysicalNICMetrics(tunName string) {
-	// Get all UP, non-loopback, non-TUN interfaces
-	ps := `Get-NetAdapter | Where-Object { $_.Status -eq 'Up' -and $_.Name -ne '%s' -and $_.InterfaceDescription -notmatch 'Loopback' } | Select-Object -ExpandProperty Name`
-	ps = fmt.Sprintf(ps, tunName)
-
-	out, err := runCmdOutput("powershell", "-NoProfile", "-Command", ps)
-	if err != nil {
-		log.Printf("[tun] enumerate NICs warning: %v", err)
-		return
-	}
-
-	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
-		nicName := strings.TrimSpace(line)
-		if nicName == "" || nicName == tunName {
-			continue
-		}
-		// Disable auto-metric and raise metric to 100.
-		// netsh "metric=X" doesn't stick when AutomaticMetric is Enabled;
-		// must disable automatic metric first via PowerShell.
-		psSet := fmt.Sprintf("Set-NetIPInterface -InterfaceAlias '%s' -AutomaticMetric Disabled -InterfaceMetric 100 -ErrorAction SilentlyContinue", nicName)
-		if err := RunCmd("powershell", "-NoProfile", "-Command", psSet); err != nil {
-			log.Printf("[tun] raise metric for %q warning: %v", nicName, err)
-		} else {
-			log.Printf("[tun] raised metric for NIC %q to 100", nicName)
-		}
-	}
 }
 
 // runCmdOutput executes a command and returns its combined stdout as a string.
