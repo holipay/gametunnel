@@ -24,7 +24,9 @@ type Peer struct {
 	VirtualIP  net.IP
 	PublicAddr *net.UDPAddr
 	Username   string
-	DirectReach atomic.Bool // true if P2P direct path has been confirmed
+	DirectReach   atomic.Bool              // true if P2P direct path has been confirmed
+	lastSeen      atomic.Pointer[time.Time] // last time server reported this peer
+	lastPunchBack atomic.Pointer[time.Time] // rate limit for hole punch responses
 }
 
 // TunDevice abstracts the TUN device for testability and platform independence.
@@ -61,6 +63,9 @@ type Tunnel struct {
 	roomPass      string
 	disconnectOnce sync.Once
 	sendErrors     atomic.Int64 // send failure counter
+
+	// Server liveness tracking — updated by handleServerData
+	lastServerResponse atomic.Pointer[time.Time]
 
 	// TUN reuse state — persists across Connect() calls
 	lastAssignedIP net.IP               // virtual IP from last registration
@@ -167,6 +172,14 @@ func (t *Tunnel) Connect(ctx context.Context, serverAddr string, mtu int, newTUN
 	go func() {
 		t.peerDiscoveryLoop(runCtx)
 		onGoroutineExit("peerDiscoveryLoop")
+	}()
+	go func() {
+		t.stalePeerCleanupLoop(runCtx)
+		onGoroutineExit("stalePeerCleanupLoop")
+	}()
+	go func() {
+		t.holePunchRetryLoop(runCtx)
+		onGoroutineExit("holePunchRetryLoop")
 	}()
 
 	<-runCtx.Done()

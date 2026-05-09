@@ -21,6 +21,22 @@ var holePunchIntervals = []time.Duration{
 
 const holePunchBurstPerPhase = 5
 
+// holePunchRetryInterval is how often we retry hole punching for peers
+// that haven't achieved DirectReach. NAT mappings can expire or change,
+// so periodic retries improve reliability.
+const holePunchRetryInterval = 60 * time.Second
+
+// stalePeerGracePeriod is how long a peer can be absent from the server's
+// peer list before we consider it stale and remove it.
+const stalePeerGracePeriod = 90 * time.Second
+
+// stalePeerCheckInterval is how often we check for stale peers.
+const stalePeerCheckInterval = 30 * time.Second
+
+// holePunchBackoff limits how often we respond to hole punch requests
+// from the same peer. Prevents amplification attacks.
+const holePunchBackoff = 5 * time.Second
+
 // startHolePunch initiates a multi-phase hole punch to a peer.
 // It runs until all phases complete or the context is cancelled.
 func (t *Tunnel) startHolePunch(ctx context.Context, peerIP net.IP) {
@@ -61,6 +77,9 @@ func (t *Tunnel) startHolePunch(ctx context.Context, peerIP net.IP) {
 // handleHolePunchReceived processes an incoming hole punch request (bidirectional).
 // When A punches B, B receives A's public address from the server and immediately
 // punches back. This creates NAT mappings on BOTH sides simultaneously.
+//
+// Rate-limited: responds at most once per peer per holePunchBackoff interval
+// to prevent amplification attacks.
 func (t *Tunnel) handleHolePunchReceived(payload []byte) {
 	if len(payload) < 4 {
 		return
@@ -74,8 +93,15 @@ func (t *Tunnel) handleHolePunchReceived(payload []byte) {
 		return
 	}
 
+	// Rate limit: check if we recently punched back to this peer
+	now := time.Now()
+	lastPunch := peer.lastPunchBack.Load()
+	if lastPunch != nil && now.Sub(*lastPunch) < holePunchBackoff {
+		return
+	}
+	peer.lastPunchBack.Store(&now)
+
 	// Punch back in a goroutine — don't block the receive loop.
-	// The 5×50ms burst takes 250ms, during which we'd drop incoming packets.
 	go func() {
 		punchPayload := make([]byte, 4)
 		copy(punchPayload, t.virtualIP.To4())
@@ -99,17 +125,31 @@ func (t *Tunnel) hasDirectPeerTraffic(peerIP net.IP) bool {
 	return peer.DirectReach.Load()
 }
 
-// keepaliveLoop sends periodic keepalive packets to the server.
+// keepaliveLoop sends periodic keepalive packets to the server and
+// tracks the last time we received any data from the server (pong, peer info, etc.).
+// If the server appears dead for too long, the tunnel context is cancelled
+// to trigger a reconnect.
 func (t *Tunnel) keepaliveLoop(ctx context.Context) {
+	const serverTimeout = 45 * time.Second // 3 missed keepalives
+
 	ticker := time.NewTicker(10 * time.Second)
 	defer ticker.Stop()
 	packet := protocol.EncodeChecked(protocol.TypeKeepAlive, nil)
+
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
 			t.sendUDP(packet, t.serverAddr)
+
+			// Check if server is still alive
+			lastSeen := t.lastServerResponse.Load()
+			if lastSeen != nil && time.Since(*lastSeen) > serverTimeout {
+				log.Printf("[tunnel] 服务器无响应超过 %v，连接可能已断开", serverTimeout)
+				// Don't cancel ctx here — let the outer connectLoop handle reconnection.
+				// The ReadFromUDP goroutine will eventually fail and exit.
+			}
 		}
 	}
 }
@@ -127,4 +167,83 @@ func (t *Tunnel) peerDiscoveryLoop(ctx context.Context) {
 			t.sendUDP(packet, t.serverAddr)
 		}
 	}
+}
+
+// stalePeerCleanupLoop removes peers that haven't been seen in the server's
+// peer list for too long. This handles cases where a peer disconnects
+// ungracefully (crash, network drop) without sending a proper leave.
+func (t *Tunnel) stalePeerCleanupLoop(ctx context.Context) {
+	ticker := time.NewTicker(stalePeerCheckInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			t.cleanStalePeers()
+		}
+	}
+}
+
+// cleanStalePeers removes peers whose lastSeen timestamp is too old.
+func (t *Tunnel) cleanStalePeers() {
+	now := time.Now()
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	for key, peer := range t.peers {
+		lastSeen := peer.lastSeen.Load()
+		if lastSeen != nil && now.Sub(*lastSeen) > stalePeerGracePeriod {
+			log.Printf("[tunnel] 清理过期玩家: %s (%s) — 超过 %v 未响应",
+				peer.Username, peer.VirtualIP, stalePeerGracePeriod)
+			delete(t.peers, key)
+		}
+	}
+}
+
+// holePunchRetryLoop periodically retries hole punching for peers that
+// haven't achieved DirectReach. NAT mappings can expire, and peers behind
+// symmetric NATs may need periodic re-punching.
+func (t *Tunnel) holePunchRetryLoop(ctx context.Context) {
+	ticker := time.NewTicker(holePunchRetryInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			t.retryFailedHolePunches(ctx)
+		}
+	}
+}
+
+// retryFailedHolePunches re-initiates hole punching for all peers that have
+// a public address but haven't confirmed DirectReach.
+func (t *Tunnel) retryFailedHolePunches(ctx context.Context) {
+	t.mu.RLock()
+	var retryPeers []net.IP
+	for _, peer := range t.peers {
+		if peer.PublicAddr != nil && !peer.DirectReach.Load() {
+			retryPeers = append(retryPeers, peer.VirtualIP)
+		}
+	}
+	t.mu.RUnlock()
+
+	if len(retryPeers) == 0 {
+		return
+	}
+
+	log.Printf("[tunnel] 重试打洞: %d 个未直通的玩家", len(retryPeers))
+	for _, peerIP := range retryPeers {
+		go t.startHolePunch(ctx, peerIP)
+	}
+}
+
+// markServerResponse records that we received data from the server.
+// Called from handleServerData to keep the liveness tracker updated.
+func (t *Tunnel) markServerResponse() {
+	now := time.Now()
+	t.lastServerResponse.Store(&now)
 }

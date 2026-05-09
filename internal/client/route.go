@@ -23,10 +23,16 @@ func (t *Tunnel) routePacket(pkt []byte, srcIP, dstIP net.IP) {
 	peer, ok := t.peers[ip4Key(dstIP)]
 	t.mu.RUnlock()
 
-	if ok && peer.PublicAddr != nil {
+	if ok && peer.PublicAddr != nil && peer.DirectReach.Load() {
+		// P2P direct path confirmed — send directly for low latency.
 		dp := &protocol.DataPayload{SrcIP: srcIP, DstIP: dstIP, Data: pkt}
 		t.sendUDP(protocol.EncodeChecked(protocol.TypeData, dp.Marshal()), peer.PublicAddr)
 	} else {
+		// Fallback: peer unknown, no public address, or P2P not confirmed.
+		// Relay through server. This covers:
+		//   - Hole punch in progress (PublicAddr set but DirectReach false)
+		//   - Hole punch failed (PublicAddr nil)
+		//   - Peer behind symmetric NAT (always relay)
 		t.sendToServer(pkt, srcIP, dstIP)
 	}
 }

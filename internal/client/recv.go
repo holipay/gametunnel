@@ -79,6 +79,9 @@ func (t *Tunnel) receiveFromServer(ctx context.Context) {
 
 // handleServerData dispatches server-relayed protocol messages.
 func (t *Tunnel) handleServerData(ctx context.Context, msg *protocol.Message) {
+	// Any data from the server confirms it's alive
+	t.markServerResponse()
+
 	switch msg.Type {
 	case protocol.TypePeerInfo:
 		t.handlePeerInfo(ctx, msg.Payload)
@@ -114,8 +117,8 @@ func (t *Tunnel) handleDirectData(from *net.UDPAddr, msg *protocol.Message) {
 		return
 	}
 
-	// Verify the packet actually came from this peer's public address
-	if peer.PublicAddr == nil || !from.IP.Equal(peer.PublicAddr.IP) {
+	// Verify the packet actually came from this peer's public address (IP + port)
+	if peer.PublicAddr == nil || !from.IP.Equal(peer.PublicAddr.IP) || from.Port != peer.PublicAddr.Port {
 		return
 	}
 
@@ -135,6 +138,8 @@ func (t *Tunnel) handlePeerInfo(ctx context.Context, payload []byte) {
 	}
 
 	var newPeerIPs []net.IP // peers that need hole punching
+	var changedPeerIPs []net.IP // peers whose public address changed (need re-punch)
+	now := time.Now()
 
 	t.mu.Lock()
 
@@ -146,15 +151,26 @@ func (t *Tunnel) handlePeerInfo(ctx context.Context, payload []byte) {
 		}
 		key := ip4Key(entry.VirtualIP)
 		if existing, ok := t.peers[key]; ok {
+			// Check if peer's public address changed (NAT rebinding)
+			addrChanged := existing.PublicAddr != nil && entry.PublicAddr != nil &&
+				(!existing.PublicAddr.IP.Equal(entry.PublicAddr.IP) || existing.PublicAddr.Port != entry.PublicAddr.Port)
+			if addrChanged {
+				log.Printf("[tunnel] 玩家地址变更: %s (%s) %s → %s", entry.Username, entry.VirtualIP, existing.PublicAddr, entry.PublicAddr)
+				existing.DirectReach.Store(false) // reset P2P status, need re-punch
+				changedPeerIPs = append(changedPeerIPs, entry.VirtualIP)
+			}
 			existing.PublicAddr = entry.PublicAddr
 			existing.Username = entry.Username
+			existing.lastSeen.Store(&now)
 			newPeers[key] = existing
 		} else {
-			newPeers[key] = &Peer{
+			p := &Peer{
 				VirtualIP:  entry.VirtualIP,
 				PublicAddr: entry.PublicAddr,
 				Username:   entry.Username,
 			}
+			p.lastSeen.Store(&now)
+			newPeers[key] = p
 			log.Printf("[tunnel] 新玩家: %s (%s)", entry.Username, entry.VirtualIP)
 			newPeerIPs = append(newPeerIPs, entry.VirtualIP)
 		}
@@ -171,6 +187,10 @@ func (t *Tunnel) handlePeerInfo(ctx context.Context, payload []byte) {
 
 	// Launch hole punches outside the lock to avoid holding it during goroutine creation
 	for _, peerIP := range newPeerIPs {
+		go t.startHolePunch(ctx, peerIP)
+	}
+	// Re-punch peers whose address changed (NAT rebinding)
+	for _, peerIP := range changedPeerIPs {
 		go t.startHolePunch(ctx, peerIP)
 	}
 }
