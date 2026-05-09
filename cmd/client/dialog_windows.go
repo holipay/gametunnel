@@ -53,6 +53,9 @@ const (
 	SS_LEFT         = 0x00000000
 	BS_PUSHBUTTON   = 0x00000000
 	BS_DEFPUSHBUTTON = 0x00000001
+
+	IDOK     = 1
+	IDCANCEL = 2
 )
 
 var hFont uintptr
@@ -141,7 +144,7 @@ func buildDialogTemplate(statusText string) []byte {
 	var buf bytes.Buffer
 
 	// ── DLGTEMPLATE header ──
-	writeInt32(&buf, int32(DS_MODALFRAME|WS_POPUP|WS_CAPTION|WS_SYSMENU|DS_CENTER))
+	writeInt32(&buf, uint32(DS_MODALFRAME|WS_POPUP|WS_CAPTION|WS_SYSMENU|DS_CENTER))
 	writeInt32(&buf, 0)   // dwExtendedStyle
 	writeInt16(&buf, 11)  // cdit: 4 labels + 4 edits + 1 status = 9? No: 4 labels + 4 edits + 1 status label + 2 buttons = 11. Actually: 4*2 + 1 + 2 = 11
 	writeInt16(&buf, 50)  // x
@@ -208,24 +211,24 @@ func addItem(buf *bytes.Buffer, x, y, cx, cy int16, id uint16, classAtom uint16,
 		buf.WriteByte(0)
 	}
 
-	writeInt32(&buf, 0)              // dwExtendedStyle
-	writeInt32(&buf, int32(style))   // style
-	writeInt16(&buf, x)
-	writeInt16(&buf, y)
-	writeInt16(&buf, cx)
-	writeInt16(&buf, cy)
-	writeInt16(&buf, int16(id))
+	writeInt32(buf, 0)              // dwExtendedStyle
+	writeInt32(buf, style)          // style
+	writeInt16(buf, x)
+	writeInt16(buf, y)
+	writeInt16(buf, cx)
+	writeInt16(buf, cy)
+	writeInt16(buf, int16(id))
 	buf.Write([]byte{0xFF, 0xFF})    // class: predefined
-	writeInt16(&buf, int16(classAtom))
-	writeUTF16(&buf, text)
-	writeInt16(&buf, 0)              // cbData (no extra creation data)
+	writeInt16(buf, int16(classAtom))
+	writeUTF16(buf, text)
+	writeInt16(buf, 0)              // cbData (no extra creation data)
 }
 
 func writeInt16(buf *bytes.Buffer, v int16) {
 	binary.Write(buf, binary.LittleEndian, v)
 }
 
-func writeInt32(buf *bytes.Buffer, v int32) {
+func writeInt32(buf *bytes.Buffer, v uint32) {
 	binary.Write(buf, binary.LittleEndian, v)
 }
 

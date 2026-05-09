@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"syscall"
-	"unsafe"
 
 	"golang.org/x/sys/windows"
 
