@@ -169,6 +169,14 @@ func (d *Device) configure() error {
 		log.Printf("[tun] mDNS route warning: %v", err)
 	}
 
+	// Step 8: Set network profile to Private so Windows Firewall inbound rules apply.
+	// By default, Windows classifies new interfaces as Public, which blocks inbound
+	// connections even when explicit Allow rules exist.
+	if err := RunCmd("powershell", "-NoProfile", "-Command",
+		fmt.Sprintf("Set-NetConnectionProfile -InterfaceAlias '%s' -NetworkCategory Private", d.name)); err != nil {
+		log.Printf("[tun] set network category warning: %v", err)
+	}
+
 	return nil
 }
 
