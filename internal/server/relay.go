@@ -16,7 +16,7 @@ func (s *Server) handleRelay(payload []byte, from *net.UDPAddr) {
 	srcIP := net.IP(payload[0:4])
 	dstIP := net.IP(payload[4:8])
 
-	// Single RLock acquisition for sender lookup, validation, and forwarding
+	// Phase 1: validate and collect targets under RLock
 	s.mu.RLock()
 	sender := s.addrMap[addrToRateKey(from)]
 	if sender == nil {
@@ -30,33 +30,31 @@ func (s *Server) handleRelay(payload []byte, from *net.UDPAddr) {
 		return
 	}
 
-	// Encode AFTER validation — avoids wasting CPU on spoofed packets
-	encoded := protocol.EncodeChecked(protocol.TypeData, payload)
+	isBroadcast := protocol.IsRelayTarget(dstIP, s.subnet)
+	fromKey := addrToRateKey(from)
 
-	// Broadcast/multicast: snapshot targets under RLock, send after releasing lock
-	// Covers: 255.255.255.255, subnet broadcast, and multicast (224.0.0.0/4)
-	if protocol.IsRelayTarget(dstIP, s.subnet) {
-		fromKey := addrToRateKey(from)
-		var targets []*net.UDPAddr
+	var targets []*net.UDPAddr
+	if isBroadcast {
 		for _, c := range s.clients {
 			if addrToRateKey(c.PublicAddr) != fromKey {
 				targets = append(targets, c.PublicAddr)
 			}
 		}
-		s.mu.RUnlock()
-		for _, addr := range targets {
-			s.sendCheckedRaw(encoded, addr)
+	} else {
+		if dst, ok := s.clients[ip4Key(dstIP)]; ok {
+			targets = append(targets, dst.PublicAddr)
 		}
-		return
 	}
-
-	// Unicast
-	dst, ok := s.clients[ip4Key(dstIP)]
 	s.mu.RUnlock()
-	if !ok {
+
+	// Phase 2: encode and send outside the lock
+	if len(targets) == 0 {
 		return
 	}
-	s.sendCheckedRaw(encoded, dst.PublicAddr)
+	encoded := protocol.EncodeChecked(protocol.TypeData, payload)
+	for _, addr := range targets {
+		s.sendCheckedRaw(encoded, addr)
+	}
 }
 
 // handleHolePunch forwards a NAT hole punch packet to the target peer.

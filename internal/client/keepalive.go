@@ -74,21 +74,18 @@ func (t *Tunnel) handleHolePunchReceived(payload []byte) {
 		return
 	}
 
-	// Mark that we've seen direct traffic from this peer
-	t.markDirectPeerTraffic(peerIP)
+	// Punch back in a goroutine — don't block the receive loop.
+	// The 5×50ms burst takes 250ms, during which we'd drop incoming packets.
+	go func() {
+		punchPayload := make([]byte, 4)
+		copy(punchPayload, t.virtualIP.To4())
+		packet := protocol.EncodeChecked(protocol.TypeHolePunch, punchPayload)
 
-	// Punch back: sends OUR VirtualIP to the peer's public address.
-	// This creates a NAT mapping on our side for the peer's packets.
-	punchPayload := make([]byte, 4)
-	copy(punchPayload, t.virtualIP.To4())
-	packet := protocol.EncodeChecked(protocol.TypeHolePunch, punchPayload)
-
-	// Send immediately — no delay, no goroutine. The peer is actively
-	// punching us right now so their NAT mapping is fresh.
-	for i := 0; i < holePunchBurstPerPhase; i++ {
-		t.sendUDP(packet, peer.PublicAddr)
-		time.Sleep(50 * time.Millisecond) // tight burst for back-punch
-	}
+		for i := 0; i < holePunchBurstPerPhase; i++ {
+			t.sendUDP(packet, peer.PublicAddr)
+			time.Sleep(50 * time.Millisecond)
+		}
+	}()
 }
 
 // hasDirectPeerTraffic checks if we've received direct P2P traffic from a peer.
@@ -100,18 +97,6 @@ func (t *Tunnel) hasDirectPeerTraffic(peerIP net.IP) bool {
 		return false
 	}
 	return peer.DirectReach.Load()
-}
-
-// markDirectPeerTraffic records that we've received direct traffic from a peer.
-// Sets the Peer.DirectReach atomic flag so startHolePunch can detect P2P success.
-func (t *Tunnel) markDirectPeerTraffic(peerIP net.IP) {
-	key := ip4Key(peerIP)
-	t.mu.RLock()
-	peer, ok := t.peers[key]
-	t.mu.RUnlock()
-	if ok {
-		peer.DirectReach.Store(true)
-	}
 }
 
 // keepaliveLoop sends periodic keepalive packets to the server.
