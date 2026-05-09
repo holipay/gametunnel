@@ -5,6 +5,8 @@ package main
 import (
 	"fmt"
 	"os"
+	"syscall"
+	"unsafe"
 
 	"golang.org/x/sys/windows"
 
@@ -12,9 +14,17 @@ import (
 	"github.com/holipay/gametunnel/internal/tun"
 )
 
+var (
+	kernel32          = syscall.NewLazyDLL("kernel32.dll")
+	procGetConsoleWindow = kernel32.NewProc("GetConsoleWindow")
+	procShowWindow       = user32.NewProc("ShowWindow")
+)
+
 func main() {
-	// Set console to UTF-8
 	windows.SetConsoleOutputCP(65001)
+
+	// Hide the console window (we only use the tray icon)
+	hideConsole()
 
 	// Request admin rights if not elevated
 	requestAdmin()
@@ -32,8 +42,15 @@ func main() {
 		})
 	}
 
-	// Run the application
 	run(cfg, tunFactory)
+}
+
+// hideConsole hides the console window.
+func hideConsole() {
+	hwnd, _, _ := procGetConsoleWindow.Call()
+	if hwnd != 0 {
+		procShowWindow.Call(hwnd, 0) // SW_HIDE = 0
+	}
 }
 
 // requestAdmin checks if the process is running with admin rights.
@@ -57,6 +74,5 @@ func requestAdmin() {
 		os.Exit(1)
 	}
 
-	// Exit the non-elevated process
 	os.Exit(0)
 }

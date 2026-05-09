@@ -3,33 +3,27 @@ package main
 import (
 	"fmt"
 	"log"
-	"os/exec"
-	"runtime"
 	"time"
 
 	"github.com/getlantern/systray"
+
+	"github.com/holipay/gametunnel/internal/client"
 )
 
-// Tray manages the system tray icon and menu.
 type Tray struct {
-	app    *App
-	httpSrv *HTTPServer
+	app *App
 
-	// Menu items (updated dynamically)
-	mStatus    *systray.MenuItem
-	mConnect   *systray.MenuItem
+	mStatus     *systray.MenuItem
+	mConnect    *systray.MenuItem
 	mDisconnect *systray.MenuItem
-	mDashboard *systray.MenuItem
 }
 
-// RunTray starts the system tray. Blocks until quit.
-func RunTray(app *App, httpSrv *HTTPServer) {
+func RunTray(app *App) {
 	systray.Run(func() {
-		tray := &Tray{app: app, httpSrv: httpSrv}
+		tray := &Tray{app: app}
 		tray.setup()
 	}, func() {
 		app.Disconnect()
-		httpSrv.Stop()
 	})
 }
 
@@ -38,30 +32,38 @@ func (t *Tray) setup() {
 	systray.SetTitle("GameTunnel")
 	systray.SetTooltip("GameTunnel - 未连接")
 
-	// Status display (disabled, just for showing info)
 	t.mStatus = systray.AddMenuItem("🔴 未连接", "")
 	t.mStatus.Disable()
 
 	systray.AddSeparator()
 
-	// Actions
-	t.mDashboard = systray.AddMenuItem("📊 打开面板", "打开 Web 控制面板")
-	t.mConnect = systray.AddMenuItem("⚡ 一键加入", "连接到服务器")
-	t.mDisconnect = systray.AddMenuItem("🔌 断开连接", "断开当前连接")
+	t.mConnect = systray.AddMenuItem("⚡ 连接", "连接到服务器")
+	t.mDisconnect = systray.AddMenuItem("🔌 断开", "断开当前连接")
 	t.mDisconnect.Disable()
 
 	systray.AddSeparator()
 
-	// Utility
+	mSettings := systray.AddMenuItem("⚙ 设置...", "配置服务器和玩家信息")
 	mLog := systray.AddMenuItem("📄 查看日志", "打开日志文件")
 	mQuit := systray.AddMenuItem("❌ 退出", "退出 GameTunnel")
 
-	// Event loop
 	go func() {
 		for {
 			select {
-			case <-t.mDashboard.ClickedCh:
-				openBrowser(fmt.Sprintf("http://127.0.0.1%s", t.httpSrv.addr))
+			case <-mSettings.ClickedCh:
+				go func() {
+					status := t.app.GetStatus()
+					statusText := "未连接"
+					if status.Connected {
+						statusText = fmt.Sprintf("已连接 · %s · %d人在线", status.VirtualIP, status.PeerCount)
+					}
+					if showConfigDialog(statusText) {
+						// Config changed, reload
+						cfg := client.LoadConfig()
+						t.app.cfg = cfg
+						log.Printf("[tray] 配置已更新")
+					}
+				}()
 
 			case <-t.mConnect.ClickedCh:
 				go t.doConnect()
@@ -75,20 +77,26 @@ func (t *Tray) setup() {
 
 			case <-mQuit.ClickedCh:
 				t.app.Disconnect()
-				t.httpSrv.Stop()
 				systray.Quit()
 				return
 			}
 		}
 	}()
 
-	// Periodic tray status update
 	go t.statusLoop()
 }
 
 func (t *Tray) doConnect() {
 	if t.app.cfg.ServerAddr == "" {
-		openBrowser(fmt.Sprintf("http://127.0.0.1%s", t.httpSrv.addr))
+		// No server configured, show settings
+		statusText := "请先配置服务器地址"
+		if showConfigDialog(statusText) {
+			cfg := client.LoadConfig()
+			t.app.cfg = cfg
+			if cfg.ServerAddr != "" {
+				t.app.Connect(cfg)
+			}
+		}
 		return
 	}
 	t.app.Connect(t.app.cfg)
@@ -106,8 +114,7 @@ func (t *Tray) updateTrayConnecting() {
 func (t *Tray) updateTray(connected bool, ip string, peers int) {
 	if connected {
 		systray.SetIcon(iconConnected)
-		tooltip := fmt.Sprintf("GameTunnel - %s · %d人在线", ip, peers)
-		systray.SetTooltip(tooltip)
+		systray.SetTooltip(fmt.Sprintf("GameTunnel - %s · %d人在线", ip, peers))
 		t.mStatus.SetTitle(fmt.Sprintf("🟢 %s · %d人", ip, peers))
 		t.mConnect.Disable()
 		t.mDisconnect.Enable()
@@ -120,7 +127,6 @@ func (t *Tray) updateTray(connected bool, ip string, peers int) {
 	}
 }
 
-// statusLoop polls the app status and updates the tray icon.
 func (t *Tray) statusLoop() {
 	for {
 		status := t.app.GetStatus()
@@ -140,17 +146,3 @@ func (t *Tray) statusLoop() {
 	}
 }
 
-func openBrowser(url string) {
-	var cmd *exec.Cmd
-	switch runtime.GOOS {
-	case "windows":
-		cmd = exec.Command("rundll32", "url.dll,FileProtocolHandler", url)
-	case "darwin":
-		cmd = exec.Command("open", url)
-	default:
-		cmd = exec.Command("xdg-open", url)
-	}
-	if err := cmd.Start(); err != nil {
-		log.Printf("[tray] 打开浏览器失败: %v", err)
-	}
-}
