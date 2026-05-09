@@ -2,15 +2,13 @@
 
 // metric_windows.go — 使用 Windows IP Helper API 直接管理网卡 metric。
 //
-// 核心改进（vs 当前 PowerShell 方案）：
-//   - 速度：~5ms/次 vs PowerShell 200-500ms/次
-//   - 可靠：直接系统调用，不受 PowerShell 执行策略限制
-//   - 全面：同时禁用 TUN + 物理网卡的 AutomaticMetric，防止 Windows NLA 回退
-//   - 兼容：API 失败时自动回退 PowerShell
+// 改用原始字节缓冲区操作 MIB_IPINTERFACE_ROW，避免 Go 结构体
+// 与 Windows SDK 结构体因字段对齐、版本差异导致的布局不匹配。
 
 package tun
 
 import (
+	"encoding/binary"
 	"fmt"
 	"log"
 	"syscall"
@@ -35,57 +33,17 @@ const (
 	gaaFlagSkipFriendlyName = 0x0020
 )
 
-// mibIPInterfaceRow 定义 IPv4 接口行。
+// MIB_IPINTERFACE_ROW 相关偏移量（Windows 10+ 通用）。
 //
-// 字段顺序严格匹配 Windows 10 SDK (10.0.26100) netioapi.h 中的
-// MIB_IPINTERFACE_ROW 结构体。
-//
-// 重要：不要随意调整字段顺序或删减字段，否则偏移量错误会导致
-// SetIpInterfaceEntry 写坏内存。
-type mibIPInterfaceRow struct {
-	Family              uint16   // 0
-	_                   [6]byte  // padding → 8
-	InterfaceLuid       uint64   // 8
-	InterfaceIndex      uint32   // 16
-	MaxReassemblySize   uint32   // 20
-	InterfaceIdentifier uint64   // 24 (aligned to 8)
-	MinRouterAdvInt     uint32   // 32
-	MaxRouterAdvInt     uint32   // 36
-	AdvertisingEnabled  int32    // 40
-	ForwardingEnabled   int32    // 44
-	WeakHostSend        int32    // 48
-	WeakHostReceive     int32    // 52
-	UseAutomaticMetric  int32    // 56 ← 关键：0=手动 1=自动
-	UseDefaultUnicast   int32    // 60
-	UseDefaultMcast     int32    // 64
-	Connected           int32    // 68
-
-	// 以下字段在不同 Windows 版本有变化，但偏移量固定。
-	// 我们只 Get→修改→Set，不关心这些值。
-	SupportsWakeUp        int32    // 72
-	SupportsNeighborDisc  int32    // 76
-	SupportsRouterDisc    int32    // 80
-	ReachableTime         uint32   // 84
-	TransmitOffload       [20]byte // 88
-	ReceiveOffload        [20]byte // 108
-	DadTransmits          uint32   // 128
-	_                     [4]byte  // 132
-	ConnectedState        uint32   // 136
-	_                     [4]byte  // 140
-	_                     [20]byte // 144 — padding / version-dependent fields
-	ZoneIndices           [16]uint32 // 164
-
-	// Windows 10 1709+ 新增字段
-	_                     [4]byte  // 228
-	InterfaceLuid2        uint64   // 232
-	_                     [4]byte  // 240
-	AutomaticMetric       int32    // 244
-	_                     [4]byte  // 248
-	NlMtu                 uint32   // 252
-
-	// 安全余量（实际结构体可能更大）
-	_                     [256]byte
-}
+// 来源: Windows SDK 10.0.26100.0 netioapi.h
+// 这些偏移量在 Windows 10/11 所有版本中保持稳定。
+const (
+	mibRowSize            = 416  // sizeof(MIB_IPINTERFACE_ROW) — Windows 10 1709+
+	offsetFamily          = 0    // ADDRESS_FAMILY (uint16)
+	offsetInterfaceLuid   = 8    // NET_LUID (uint64)
+	offsetInterfaceIndex  = 16   // NET_IFINDEX (uint32)
+	offsetUseAutoMetric   = 56   // ULONG UseAutomaticMetric
+)
 
 // ipAdapterAddresses 最小布局，用于枚举网卡。
 type ipAdapterAddresses struct {
@@ -110,22 +68,31 @@ type ipAdapterAddresses struct {
 
 // setMetricAPI 通过 IP Helper API 禁用指定网卡的 AutomaticMetric。
 //
-// 原理：GetIpInterfaceEntry 填充整行 → 修改 UseAutomaticMetric=0
-// → SetIpInterfaceEntry 写回。系统保留其他字段不变。
+// 使用原始字节缓冲区代替 Go 结构体，确保字段偏移量与 Windows SDK 完全一致。
 func setMetricAPI(ifIndex uint32, luid uint64) error {
-	row := mibIPInterfaceRow{}
-	row.Family = syscall.AF_INET
-	row.InterfaceLuid = luid
-	row.InterfaceIndex = ifIndex
+	// 分配足够大的缓冲区
+	row := make([]byte, mibRowSize)
 
-	r1, _, e1 := procGetIpInterfaceEntry.Call(uintptr(unsafe.Pointer(&row)))
+	// 设置 Family = AF_INET (2)
+	binary.LittleEndian.PutUint16(row[offsetFamily:], syscall.AF_INET)
+
+	// 设置 InterfaceLuid
+	binary.LittleEndian.PutUint64(row[offsetInterfaceLuid:], luid)
+
+	// 设置 InterfaceIndex
+	binary.LittleEndian.PutUint32(row[offsetInterfaceIndex:], ifIndex)
+
+	// GetIpInterfaceEntry 填充整行
+	r1, _, e1 := procGetIpInterfaceEntry.Call(uintptr(unsafe.Pointer(&row[0])))
 	if r1 != 0 {
 		return fmt.Errorf("GetIpInterfaceEntry(idx=%d): ret=%d err=%v", ifIndex, r1, e1)
 	}
 
-	row.UseAutomaticMetric = 0 // 禁用自动 metric
+	// 修改 UseAutomaticMetric = 0 (禁用自动 metric)
+	binary.LittleEndian.PutUint32(row[offsetUseAutoMetric:], 0)
 
-	r1, _, e1 = procSetIpInterfaceEntry.Call(uintptr(unsafe.Pointer(&row)))
+	// SetIpInterfaceEntry 写回
+	r1, _, e1 = procSetIpInterfaceEntry.Call(uintptr(unsafe.Pointer(&row[0])))
 	if r1 != 0 {
 		return fmt.Errorf("SetIpInterfaceEntry(idx=%d): ret=%d err=%v", ifIndex, r1, e1)
 	}
@@ -157,12 +124,14 @@ func findAdapter(name string) (ifIndex uint32, luid uint64, err error) {
 	p := (*ipAdapterAddresses)(unsafe.Pointer(&buf[0]))
 	for p != nil {
 		if windows.UTF16PtrToString(p.FriendlyName) == name {
-			row := mibIPInterfaceRow{}
-			row.Family = syscall.AF_INET
-			row.InterfaceIndex = p.IfIndex
-			r1, _, _ := procGetIpInterfaceEntry.Call(uintptr(unsafe.Pointer(&row)))
+			// 用 raw buffer 读取 LUID
+			row := make([]byte, mibRowSize)
+			binary.LittleEndian.PutUint16(row[offsetFamily:], syscall.AF_INET)
+			binary.LittleEndian.PutUint32(row[offsetInterfaceIndex:], p.IfIndex)
+			r1, _, _ := procGetIpInterfaceEntry.Call(uintptr(unsafe.Pointer(&row[0])))
 			if r1 == 0 {
-				return p.IfIndex, row.InterfaceLuid, nil
+				luid = binary.LittleEndian.Uint64(row[offsetInterfaceLuid:])
+				return p.IfIndex, luid, nil
 			}
 			return p.IfIndex, 0, nil
 		}
@@ -177,17 +146,18 @@ func checkAutoMetricDisabled(name string) bool {
 	if err != nil {
 		return false
 	}
-	row := mibIPInterfaceRow{}
-	row.Family = syscall.AF_INET
-	row.InterfaceLuid = luid
-	row.InterfaceIndex = idx
-	r1, _, _ := procGetIpInterfaceEntry.Call(uintptr(unsafe.Pointer(&row)))
-	return r1 == 0 && row.UseAutomaticMetric == 0
+	row := make([]byte, mibRowSize)
+	binary.LittleEndian.PutUint16(row[offsetFamily:], syscall.AF_INET)
+	binary.LittleEndian.PutUint64(row[offsetInterfaceLuid:], luid)
+	binary.LittleEndian.PutUint32(row[offsetInterfaceIndex:], idx)
+	r1, _, _ := procGetIpInterfaceEntry.Call(uintptr(unsafe.Pointer(&row[0])))
+	if r1 != 0 {
+		return false
+	}
+	return binary.LittleEndian.Uint32(row[offsetUseAutoMetric:]) == 0
 }
 
 // disableAllPhysicalAutoMetric 枚举所有活跃物理网卡并禁用其 AutomaticMetric。
-// 这是当前代码遗漏的关键步骤——只设了 TUN 的 metric，物理 NIC 的 AutomaticMetric
-// 会被 Windows NLA 服务在几秒内重新启用，导致 metric 回退。
 func disableAllPhysicalAutoMetric(tunName string) {
 	var bufLen uint32 = 15000
 	buf := make([]byte, bufLen)

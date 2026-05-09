@@ -3,9 +3,9 @@
 package main
 
 import (
-	"bytes"
 	"encoding/binary"
 	"log"
+	"runtime"
 	"syscall"
 	"unsafe"
 
@@ -33,26 +33,27 @@ const (
 	IDC_PASSWORD     = 1004
 	IDC_STATUS_LABEL = 1005
 
-	WM_INITDIALOG  = 0x0110
-	WM_COMMAND      = 0x0111
-	WM_CLOSE        = 0x0010
-	WM_SETFONT      = 0x0030
+	WM_INITDIALOG = 0x0110
+	WM_COMMAND     = 0x0111
+	WM_CLOSE       = 0x0010
+	WM_SETFONT     = 0x0030
 
-	WS_POPUP        = 0x80000000
-	WS_CAPTION      = 0x00C00000
-	WS_SYSMENU      = 0x00080000
-	WS_VISIBLE      = 0x10000000
-	WS_CHILD        = 0x40000000
-	WS_TABSTOP      = 0x00010000
-	WS_GROUP        = 0x00020000
-	WS_BORDER       = 0x00800000
-	DS_MODALFRAME   = 0x0080
-	DS_SETFONT      = 0x0040
-	DS_CENTER       = 0x0800
-	ES_AUTOHSCROLL  = 0x0080
-	ES_PASSWORD     = 0x0020
-	SS_LEFT         = 0x00000000
-	BS_PUSHBUTTON   = 0x00000000
+	WS_POPUP       = 0x80000000
+	WS_CAPTION     = 0x00C00000
+	WS_SYSMENU     = 0x00080000
+	WS_VISIBLE     = 0x10000000
+	WS_CHILD       = 0x40000000
+	WS_TABSTOP     = 0x00010000
+	WS_GROUP       = 0x00020000
+	WS_BORDER      = 0x00800000
+	DS_MODALFRAME  = 0x0080
+	DS_SETFONT     = 0x0040
+	DS_SHELLFONT   = 0x0048
+	DS_CENTER      = 0x0800
+	ES_AUTOHSCROLL = 0x0080
+	ES_PASSWORD    = 0x0020
+	SS_LEFT        = 0x00000000
+	BS_PUSHBUTTON  = 0x00000000
 	BS_DEFPUSHBUTTON = 0x00000001
 
 	IDOK     = 1
@@ -64,17 +65,26 @@ var hFont uintptr
 // showConfigDialog shows the Win32 native config dialog.
 // Returns true if user clicked OK.
 func showConfigDialog(statusText string) bool {
+	// Lock this goroutine to the current OS thread — required for Win32 dialogs.
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+
 	cfg := client.LoadConfig()
 	tmpl := buildDialogTemplate(statusText)
 
-	ret, _, _ := procDialogBoxIndirectParam.Call(
+	// Prevent GC from collecting the template while Win32 reads it.
+	defer runtime.KeepAlive(tmpl)
+
+	log.Printf("[dialog] template size: %d bytes", len(tmpl))
+
+	ret, _, err := procDialogBoxIndirectParam.Call(
 		0,
 		uintptr(unsafe.Pointer(&tmpl[0])),
 		0,
 		syscall.NewCallback(configDialogProc(cfg)),
 	)
 	if ret == 0 {
-		log.Printf("[dialog] DialogBoxIndirectParam 返回 0（创建失败或用户取消）")
+		log.Printf("[dialog] DialogBoxIndirectParam returned 0 (user cancel or creation failed: %v)", err)
 	}
 	return ret == 1
 }
@@ -83,6 +93,7 @@ func configDialogProc(cfg *client.Config) func(uintptr, uint32, uintptr, uintptr
 	return func(hwnd uintptr, msg uint32, wParam, lParam uintptr) uintptr {
 		switch msg {
 		case WM_INITDIALOG:
+			log.Printf("[dialog] WM_INITDIALOG hwnd=%x", hwnd)
 			if hFont != 0 {
 				for _, id := range []int{IDC_SERVER, IDC_NAME, IDC_ROOM, IDC_PASSWORD, IDC_STATUS_LABEL, IDOK, IDCANCEL} {
 					hctl, _, _ := procGetDlgItem.Call(hwnd, uintptr(id))
@@ -137,29 +148,31 @@ func setEditText(hwnd uintptr, id int, text string) {
 
 // buildDialogTemplate creates a Win32 DLGTEMPLATE + DLGITEMTEMPLATE byte buffer.
 //
-// Layout (260×140 DLU):
-//   服务器地址: [____________________________]
-//   玩家名称:   [____________________________]
-//   房间 ID:    [____________________________]
-//   密码:       [____________________________]
-//   [状态文字                                    ]
-//           [ 确定 ]      [ 取消 ]
+// Layout (260×180 DLU):
+//
+//	服务器地址: [____________________________]
+//	玩家名称:   [____________________________]
+//	房间 ID:    [____________________________]
+//	密码:       [____________________________]
+//	[状态文字                                    ]
+//	        [ 确定 ]      [ 取消 ]
 func buildDialogTemplate(statusText string) []byte {
-	var buf bytes.Buffer
+	var buf leBuffer
 
 	// ── DLGTEMPLATE header ──
-	writeInt32(&buf, uint32(DS_MODALFRAME|DS_SETFONT|WS_POPUP|WS_CAPTION|WS_SYSMENU|DS_CENTER))
-	writeInt32(&buf, 0)   // dwExtendedStyle
-	writeInt16(&buf, 11)  // cdit: 4 labels + 4 edits + 1 status label + 2 buttons = 11
-	writeInt16(&buf, 50)  // x
-	writeInt16(&buf, 30)  // y
-	writeInt16(&buf, 260) // cx
-	writeInt16(&buf, 180) // cy
-	buf.Write([]byte{0, 0}) // menu: none
-	buf.Write([]byte{0, 0}) // class: none
-	writeUTF16(&buf, "GameTunnel 设置")
-	writeInt16(&buf, 9)   // font size
-	writeUTF16(&buf, "Microsoft YaHei UI")
+	// DS_SHELLFONT = DS_SETFONT|DS_FIXEDSYS — uses MS Shell Dlg (universal)
+	buf.writeUint32(uint32(DS_SHELLFONT | DS_MODALFRAME | WS_POPUP | WS_CAPTION | WS_SYSMENU | DS_CENTER))
+	buf.writeUint32(0)    // dwExtendedStyle
+	buf.writeUint16(11)   // cdit: 4 labels + 4 edits + 1 status label + 2 buttons
+	buf.writeInt16(50)    // x
+	buf.writeInt16(30)    // y
+	buf.writeInt16(260)   // cx
+	buf.writeInt16(180)   // cy
+	buf.writeUint16(0)    // menu: none
+	buf.writeUint16(0)    // class: none
+	buf.writeWStr("GameTunnel 设置") // title (null-terminated UTF-16)
+	buf.writeUint16(9)    // font size (pt)
+	buf.writeWStr("MS Shell Dlg")    // font name — always available on Windows
 
 	// ── Row 1: 服务器地址 ──
 	addStatic(&buf, 7, 15, 50, 10, 0, "服务器地址:")
@@ -184,23 +197,59 @@ func buildDialogTemplate(statusText string) []byte {
 	addButton(&buf, 85, 118, 40, 14, IDOK, "确定", true)
 	addButton(&buf, 135, 118, 40, 14, IDCANCEL, "取消", false)
 
-	return buf.Bytes()
+	return buf.bytes()
 }
 
-func addStatic(buf *bytes.Buffer, x, y, cx, cy int16, id uint16, text string) {
-	addItem(buf, x, y, cx, cy, id, 0x82, WS_VISIBLE|SS_LEFT, text)
+// ── leBuffer: little-endian byte buffer with DWORD alignment ──
+
+type leBuffer struct {
+	data []byte
 }
 
-func addEdit(buf *bytes.Buffer, x, y, cx, cy int16, id uint16, password bool) {
-	style := uint32(WS_CHILD|WS_VISIBLE|WS_TABSTOP|WS_BORDER|ES_AUTOHSCROLL)
+func (b *leBuffer) writeUint16(v uint16) {
+	b.data = append(b.data, byte(v), byte(v>>8))
+}
+
+func (b *leBuffer) writeInt16(v int16) {
+	b.writeUint16(uint16(v))
+}
+
+func (b *leBuffer) writeUint32(v uint32) {
+	b.data = append(b.data, byte(v), byte(v>>8), byte(v>>16), byte(v>>24))
+}
+
+// writeWStr writes a null-terminated UTF-16LE string.
+func (b *leBuffer) writeWStr(s string) {
+	for _, c := range syscall.StringToUTF16(s) {
+		b.writeUint16(c)
+	}
+}
+
+// align4 pads to the next DWORD boundary.
+func (b *leBuffer) align4() {
+	for len(b.data)%4 != 0 {
+		b.data = append(b.data, 0)
+	}
+}
+
+func (b *leBuffer) bytes() []byte { return b.data }
+
+// ── Control builders ──
+
+func addStatic(buf *leBuffer, x, y, cx, cy int16, id uint16, text string) {
+	addItem(buf, x, y, cx, cy, id, 0x82, WS_VISIBLE|WS_CHILD|SS_LEFT, text)
+}
+
+func addEdit(buf *leBuffer, x, y, cx, cy int16, id uint16, password bool) {
+	style := uint32(WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_BORDER | ES_AUTOHSCROLL)
 	if password {
 		style |= ES_PASSWORD
 	}
 	addItem(buf, x, y, cx, cy, id, 0x81, style, "")
 }
 
-func addButton(buf *bytes.Buffer, x, y, cx, cy int16, id uint16, text string, isDefault bool) {
-	style := uint32(WS_CHILD|WS_VISIBLE|WS_TABSTOP|BS_PUSHBUTTON)
+func addButton(buf *leBuffer, x, y, cx, cy int16, id uint16, text string, isDefault bool) {
+	style := uint32(WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON)
 	if isDefault {
 		style |= BS_DEFPUSHBUTTON
 	}
@@ -209,35 +258,18 @@ func addButton(buf *bytes.Buffer, x, y, cx, cy int16, id uint16, text string, is
 
 // addItem writes a DLGITEMTEMPLATE entry.
 // classAtom: 0x80=BUTTON, 0x81=EDIT, 0x82=STATIC
-func addItem(buf *bytes.Buffer, x, y, cx, cy int16, id uint16, classAtom uint16, style uint32, text string) {
-	// Align to DWORD boundary
-	for buf.Len()%4 != 0 {
-		buf.WriteByte(0)
-	}
+func addItem(buf *leBuffer, x, y, cx, cy int16, id uint16, classAtom uint16, style uint32, text string) {
+	buf.align4()
 
-	writeInt32(buf, 0)              // dwExtendedStyle
-	writeInt32(buf, style)          // style
-	writeInt16(buf, x)
-	writeInt16(buf, y)
-	writeInt16(buf, cx)
-	writeInt16(buf, cy)
-	writeInt16(buf, int16(id))
-	buf.Write([]byte{0xFF, 0xFF})    // class: predefined
-	writeInt16(buf, int16(classAtom))
-	writeUTF16(buf, text)
-	writeInt16(buf, 0)              // cbData (no extra creation data)
-}
-
-func writeInt16(buf *bytes.Buffer, v int16) {
-	binary.Write(buf, binary.LittleEndian, v)
-}
-
-func writeInt32(buf *bytes.Buffer, v uint32) {
-	binary.Write(buf, binary.LittleEndian, v)
-}
-
-func writeUTF16(buf *bytes.Buffer, s string) {
-	for _, c := range syscall.StringToUTF16(s) {
-		binary.Write(buf, binary.LittleEndian, c)
-	}
+	buf.writeUint32(0)             // dwExtendedStyle
+	buf.writeUint32(style)         // style
+	buf.writeInt16(x)
+	buf.writeInt16(y)
+	buf.writeInt16(cx)
+	buf.writeInt16(cy)
+	buf.writeInt16(int16(id))
+	buf.writeUint16(0xFFFF)        // class: predefined atom marker
+	buf.writeUint16(classAtom)     // class atom
+	buf.writeWStr(text)            // title (null-terminated)
+	buf.writeUint16(0)             // cbData (no extra creation data)
 }

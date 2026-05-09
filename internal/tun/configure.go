@@ -82,14 +82,14 @@ func (d *Device) configure() error {
 
 	// ── Step 8: 隧道服务器排除路由 ──
 	// 隧道服务器必须走物理网卡，否则 UDP 封装的隧道流量会回环进 TUN。
-	// 添加 /32 主机路由指向物理网关，metric=0 确保优先于默认路由。
+	// 添加 /32 主机路由指向物理网关，metric=1 确保优先于默认路由。
 	if d.serverPublicIP != nil {
 		gw := d.detectPhysicalGateway()
 		if gw != "" {
 			d.physicalGateway = gw
 			serverIP := d.serverPublicIP.String()
 			if err := RunCmd("route", "add",
-				serverIP, "mask", "255.255.255.255", gw, "metric", "0"); err != nil {
+				serverIP, "mask", "255.255.255.255", gw, "metric", "1"); err != nil {
 				log.Printf("[tun] server exclusion route warning: %v", err)
 			} else {
 				log.Printf("[tun] server exclusion: %s → %s (physical NIC)", serverIP, gw)
