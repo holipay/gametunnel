@@ -47,6 +47,7 @@ const (
 	WS_GROUP        = 0x00020000
 	WS_BORDER       = 0x00800000
 	DS_MODALFRAME   = 0x0080
+	DS_SETFONT      = 0x0040
 	DS_CENTER       = 0x0800
 	ES_AUTOHSCROLL  = 0x0080
 	ES_PASSWORD     = 0x0020
@@ -72,6 +73,9 @@ func showConfigDialog(statusText string) bool {
 		0,
 		syscall.NewCallback(configDialogProc(cfg)),
 	)
+	if ret == 0 {
+		log.Printf("[dialog] DialogBoxIndirectParam 返回 0（创建失败或用户取消）")
+	}
 	return ret == 1
 }
 
@@ -144,7 +148,7 @@ func buildDialogTemplate(statusText string) []byte {
 	var buf bytes.Buffer
 
 	// ── DLGTEMPLATE header ──
-	writeInt32(&buf, uint32(DS_MODALFRAME|WS_POPUP|WS_CAPTION|WS_SYSMENU|DS_CENTER))
+	writeInt32(&buf, uint32(DS_MODALFRAME|DS_SETFONT|WS_POPUP|WS_CAPTION|WS_SYSMENU|DS_CENTER))
 	writeInt32(&buf, 0)   // dwExtendedStyle
 	writeInt16(&buf, 11)  // cdit: 4 labels + 4 edits + 1 status = 9? No: 4 labels + 4 edits + 1 status label + 2 buttons = 11. Actually: 4*2 + 1 + 2 = 11
 	writeInt16(&buf, 50)  // x
