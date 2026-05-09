@@ -62,6 +62,9 @@ func (t *Tray) setup() {
 						cfg := client.LoadConfig()
 						t.app.cfg = cfg
 						log.Printf("[tray] 配置已更新")
+					} else {
+						// Dialog failed or user cancelled — open config.ini as fallback
+						openConfigFile()
 					}
 				}()
 

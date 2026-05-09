@@ -5,6 +5,8 @@ package main
 import (
 	"os/exec"
 	"runtime"
+
+	"github.com/holipay/gametunnel/internal/client"
 )
 
 // openLogFile opens the log file with the default text editor.
@@ -17,6 +19,13 @@ func openLogFile() {
 	default:
 		cmd = exec.Command("xdg-open", logPath)
 	}
+	cmd.Start()
+}
+
+// openConfigFile opens config.ini in the default text editor.
+func openConfigFile() {
+	path := client.PortableConfigPath()
+	cmd := exec.Command("xdg-open", path)
 	cmd.Start()
 }
 
