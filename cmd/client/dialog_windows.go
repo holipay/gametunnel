@@ -150,7 +150,7 @@ func buildDialogTemplate(statusText string) []byte {
 	// ── DLGTEMPLATE header ──
 	writeInt32(&buf, uint32(DS_MODALFRAME|DS_SETFONT|WS_POPUP|WS_CAPTION|WS_SYSMENU|DS_CENTER))
 	writeInt32(&buf, 0)   // dwExtendedStyle
-	writeInt16(&buf, 9)   // cdit: 4 labels + 4 edits + 1 status label + 2 buttons = 9
+	writeInt16(&buf, 11)  // cdit: 4 labels + 4 edits + 1 status label + 2 buttons = 11
 	writeInt16(&buf, 50)  // x
 	writeInt16(&buf, 30)  // y
 	writeInt16(&buf, 260) // cx
