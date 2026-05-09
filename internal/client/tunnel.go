@@ -252,8 +252,9 @@ func (t *Tunnel) sendUDP(data []byte, addr *net.UDPAddr) {
 	defer t.connMu.Unlock()
 	if t.conn != nil {
 		if _, err := t.conn.WriteToUDP(data, addr); err != nil {
-			if t.sendErrors.Add(1) == 1 {
-				log.Printf("[tunnel] 发送失败: %v", err)
+			n := t.sendErrors.Add(1)
+			if n == 1 || n%100 == 0 {
+				log.Printf("[tunnel] 发送失败 (累计%d次): %v", n, err)
 			}
 		}
 	}

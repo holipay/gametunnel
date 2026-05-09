@@ -18,9 +18,13 @@ const maxConsecutiveErrors = 10
 // a transient glitch recovers quickly.
 const errorBackoff = 100 * time.Millisecond
 
+// readBufSize is the buffer size for UDP and TUN reads.
+// 4096 covers typical MTU (1400) + protocol overhead with headroom.
+const readBufSize = 4096
+
 // receiveFromServer handles packets from the server.
 func (t *Tunnel) receiveFromServer(ctx context.Context) {
-	buf := make([]byte, 65535)
+	buf := make([]byte, readBufSize)
 	consecutiveErrors := 0
 
 	for {
@@ -140,13 +144,13 @@ func (t *Tunnel) handleDataFromServer(payload []byte) {
 	}
 
 	// Track direct peer traffic for P2P path detection
-	markDirectPeerTraffic(dp.SrcIP)
+	t.markDirectPeerTraffic(dp.SrcIP)
 	t.tunDev.Write(dp.Data)
 }
 
 // receiveFromTUN reads IP packets from the TUN device and routes them.
 func (t *Tunnel) receiveFromTUN(ctx context.Context) {
-	buf := make([]byte, 65535)
+	buf := make([]byte, readBufSize)
 	consecutiveErrors := 0
 
 	for {
@@ -191,6 +195,11 @@ func (t *Tunnel) receiveFromTUN(ctx context.Context) {
 
 		srcIP := net.IP(buf[12:16])
 		dstIP := net.IP(buf[16:20])
-		t.routePacket(buf[:n], srcIP, dstIP)
+		// Copy packet data before passing to routePacket.
+		// The buffer is reused on the next Read, and sendUDP may not
+		// complete before the next iteration overwrites it.
+		pkt := make([]byte, n)
+		copy(pkt, buf[:n])
+		t.routePacket(pkt, srcIP, dstIP)
 	}
 }

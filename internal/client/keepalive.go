@@ -75,7 +75,7 @@ func (t *Tunnel) handleHolePunchReceived(payload []byte) {
 	}
 
 	// Mark that we've seen direct traffic from this peer
-	markDirectPeerTraffic(peerIP)
+	t.markDirectPeerTraffic(peerIP)
 
 	// Punch back: sends OUR VirtualIP to the peer's public address.
 	// This creates a NAT mapping on our side for the peer's packets.
@@ -102,18 +102,16 @@ func (t *Tunnel) hasDirectPeerTraffic(peerIP net.IP) bool {
 	return peer.DirectReach.Load()
 }
 
-// directPeerTrafficMap tracks peers from which we've received direct traffic.
-// Key is the peer's virtual IP as [4]byte.
-// This is a package-level variable for simplicity; in production you might
-// prefer it on the Tunnel struct.
-var directPeerTrafficMap = make(map[[4]byte]bool)
-
 // markDirectPeerTraffic records that we've received direct traffic from a peer.
-func markDirectPeerTraffic(peerIP net.IP) {
+// Sets the Peer.DirectReach atomic flag so startHolePunch can detect P2P success.
+func (t *Tunnel) markDirectPeerTraffic(peerIP net.IP) {
 	key := ip4Key(peerIP)
-	// Also update the Peer struct if it exists
-	// (the Peer might not be populated yet during rapid join)
-	directPeerTrafficMap[key] = true
+	t.mu.RLock()
+	peer, ok := t.peers[key]
+	t.mu.RUnlock()
+	if ok {
+		peer.DirectReach.Store(true)
+	}
 }
 
 // keepaliveLoop sends periodic keepalive packets to the server.
