@@ -7,7 +7,9 @@ import (
 	"log"
 	"net"
 	"os/exec"
+	"strconv"
 	"strings"
+	"time"
 
 	"golang.zx2c4.com/wireguard/tun"
 )
@@ -26,14 +28,14 @@ type Config struct {
 
 // Device represents an active TUN device with its virtual IP.
 type Device struct {
-	tunDev        tun.Device
-	name          string
-	virtualIP     net.IP
-	subnetMask    net.IPMask
-	mtu           int
-	readSizes     [1]int
-	readPackets   [1][]byte
-	writePackets  [1][]byte
+	tunDev       tun.Device
+	name         string
+	virtualIP    net.IP
+	subnetMask   net.IPMask
+	mtu          int
+	readSizes    [1]int
+	readPackets  [1][]byte
+	writePackets [1][]byte
 }
 
 func New(cfg Config) (*Device, error) {
@@ -122,15 +124,26 @@ func (d *Device) configure() error {
 
 	// Step 2: Disable auto-metric on TUN and force metric=1
 	// This is critical — without disabling auto-metric, Windows overrides the value.
-	if err := RunCmd("netsh", "interface", "ip", "set", "interface",
-		fmt.Sprintf("name=%s", d.name),
-		"metricstore=disabled"); err != nil {
-		log.Printf("[tun] disable auto-metric warning: %v", err)
+	// Note: netsh "metricstore=disabled" is not a valid parameter on Windows 10/11
+	// and silently fails. Use PowerShell Set-NetIPInterface instead.
+	psMetric := fmt.Sprintf(
+		"Set-NetIPInterface -InterfaceAlias '%s' -AutomaticMetric Disabled -InterfaceMetric 1 -ErrorAction SilentlyContinue",
+		d.name)
+	if err := RunCmd("powershell", "-NoProfile", "-Command", psMetric); err != nil {
+		log.Printf("[tun] set TUN metric warning: %v", err)
 	}
-	if err := RunCmd("netsh", "interface", "ip", "set", "interface",
-		fmt.Sprintf("name=%s", d.name),
-		"metric=1"); err != nil {
-		log.Printf("[tun] set interface metric warning: %v", err)
+	// Verify metric was applied; retry once after short delay if not.
+	// wintun driver may briefly report stale interface state right after creation.
+	if !d.verifyMetric(1) {
+		time.Sleep(500 * time.Millisecond)
+		if err := RunCmd("powershell", "-NoProfile", "-Command", psMetric); err != nil {
+			log.Printf("[tun] set TUN metric retry warning: %v", err)
+		}
+		if d.verifyMetric(1) {
+			log.Printf("[tun] TUN metric set to 1 (retry succeeded)")
+		} else {
+			log.Printf("[tun] WARNING: TUN metric could not be set to 1, broadcast routing may be affected")
+		}
 	}
 
 	// Step 3: Raise metrics on physical NICs so TUN wins broadcast routing
@@ -180,6 +193,20 @@ func (d *Device) configure() error {
 	return nil
 }
 
+// verifyMetric checks if the TUN interface has the expected IPv4 metric value.
+func (d *Device) verifyMetric(expected int) bool {
+	out, err := runCmdOutput("powershell", "-NoProfile", "-Command",
+		fmt.Sprintf("(Get-NetIPInterface -InterfaceAlias '%s' -AddressFamily IPv4 -ErrorAction SilentlyContinue).InterfaceMetric", d.name))
+	if err != nil {
+		return false
+	}
+	got, err := strconv.Atoi(strings.TrimSpace(out))
+	if err != nil {
+		return false
+	}
+	return got == expected
+}
+
 // raisePhysicalNICMetrics enumerates active network interfaces and raises
 // their interface metrics so the TUN (metric=1) is preferred for broadcast routing.
 //
@@ -204,11 +231,11 @@ func raisePhysicalNICMetrics(tunName string) {
 		if nicName == "" || nicName == tunName {
 			continue
 		}
-		// Raise metric to 100. The default gateway route on this NIC keeps
-		// normal internet traffic working, but broadcast routing prefers TUN.
-		if err := RunCmd("netsh", "interface", "ip", "set", "interface",
-			fmt.Sprintf("name=%s", nicName),
-			"metric=100"); err != nil {
+		// Disable auto-metric and raise metric to 100.
+		// netsh "metric=X" doesn't stick when AutomaticMetric is Enabled;
+		// must disable automatic metric first via PowerShell.
+		psSet := fmt.Sprintf("Set-NetIPInterface -InterfaceAlias '%s' -AutomaticMetric Disabled -InterfaceMetric 100 -ErrorAction SilentlyContinue", nicName)
+		if err := RunCmd("powershell", "-NoProfile", "-Command", psSet); err != nil {
 			log.Printf("[tun] raise metric for %q warning: %v", nicName, err)
 		} else {
 			log.Printf("[tun] raised metric for NIC %q to 100", nicName)
