@@ -80,7 +80,37 @@ func (d *Device) configure() error {
 		log.Printf("[tun] mDNS route warning: %v", err)
 	}
 
-	// ── Step 8: 网络配置文件设为 Private ──
+	// ── Step 8: 隧道服务器排除路由 ──
+	// 隧道服务器必须走物理网卡，否则 UDP 封装的隧道流量会回环进 TUN。
+	// 添加 /32 主机路由指向物理网关，metric=0 确保优先于默认路由。
+	if d.serverPublicIP != nil {
+		gw := d.detectPhysicalGateway()
+		if gw != "" {
+			d.physicalGateway = gw
+			serverIP := d.serverPublicIP.String()
+			if err := RunCmd("route", "add",
+				serverIP, "mask", "255.255.255.255", gw, "metric", "0"); err != nil {
+				log.Printf("[tun] server exclusion route warning: %v", err)
+			} else {
+				log.Printf("[tun] server exclusion: %s → %s (physical NIC)", serverIP, gw)
+			}
+		} else {
+			log.Printf("[tun] WARNING: cannot detect physical gateway, server route exclusion skipped")
+		}
+	}
+
+	// ── Step 9: 默认路由走 TUN ──
+	// 所有非子网流量（包括游戏服务器）通过 TUN，由客户端决定走 P2P 还是中继。
+	// metric=1 确保优先于物理网卡（其 metric 通常 ≥ 10）。
+	// 必须在 Step 8 之后添加，确保服务器排除路由先生效。
+	if err := RunCmd("route", "add",
+		"0.0.0.0", "mask", "0.0.0.0", ip, "metric", "1"); err != nil {
+		log.Printf("[tun] default route warning: %v", err)
+	} else {
+		log.Printf("[tun] default route added: 0.0.0.0/0 → %s (TUN)", ip)
+	}
+
+	// ── Step 10: 网络配置文件设为 Private ──
 	if err := RunCmd("powershell", "-NoProfile", "-Command",
 		fmt.Sprintf("Set-NetConnectionProfile -InterfaceAlias '%s' -NetworkCategory Private", d.name)); err != nil {
 		log.Printf("[tun] network category warning: %v", err)
@@ -131,4 +161,54 @@ func (d *Device) applyMetricPowerShell() {
 		RunCmd("powershell", "-NoProfile", "-Command",
 			fmt.Sprintf("Set-NetIPInterface -InterfaceAlias '%s' -AutomaticMetric Disabled -InterfaceMetric 100 -ErrorAction SilentlyContinue", nic))
 	}
+}
+
+// detectPhysicalGateway finds the default gateway of the physical NIC
+// (the one currently handling 0.0.0.0 traffic before TUN takes over).
+func (d *Device) detectPhysicalGateway() string {
+	// PowerShell: find the default gateway on any adapter except TUN
+	out, err := runCmdOutput("powershell", "-NoProfile", "-Command",
+		fmt.Sprintf(
+			"Get-NetRoute -DestinationPrefix '0.0.0.0/0' | Where-Object { $_.InterfaceAlias -ne '%s' } | Sort-Object RouteMetric | Select-Object -First 1 -ExpandProperty NextHop",
+			d.name))
+	if err != nil {
+		log.Printf("[tun] gateway detection failed: %v", err)
+		return ""
+	}
+	gw := strings.TrimSpace(out)
+	if gw != "" {
+		log.Printf("[tun] detected physical gateway: %s", gw)
+		return gw
+	}
+	return ""
+}
+
+// CleanupRoutes removes routes added by configure().
+// Called when the TUN device is being destroyed.
+func (d *Device) CleanupRoutes() {
+	// Remove default route
+	RunCmd("route", "delete", "0.0.0.0")
+
+	// Remove server exclusion route
+	if d.serverPublicIP != nil && d.physicalGateway != "" {
+		RunCmd("route", "delete", d.serverPublicIP.String())
+	}
+
+	// Remove broadcast routes
+	RunCmd("route", "delete", "255.255.255.255")
+	RunCmd("route", "delete", "224.0.0.251")
+
+	// Remove subnet route
+	subnet := d.virtualIP.Mask(d.subnetMask)
+	maskBits, _ := d.subnetMask.Size()
+	RunCmd("route", "delete", fmt.Sprintf("%s/%d", subnet, maskBits))
+
+	// Remove subnet broadcast
+	subnetBroadcast := net.IP(make([]byte, 4))
+	for i := 0; i < 4; i++ {
+		subnetBroadcast[i] = subnet[i] | ^d.subnetMask[i]
+	}
+	RunCmd("route", "delete", subnetBroadcast.String())
+
+	log.Printf("[tun] routes cleaned up")
 }

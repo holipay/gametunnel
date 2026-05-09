@@ -16,22 +16,25 @@ const (
 
 // Config holds TUN device configuration.
 type Config struct {
-	VirtualIP  net.IP
-	SubnetMask net.IPMask
-	ServerIP   net.IP
-	MTU        int
+	VirtualIP      net.IP
+	SubnetMask     net.IPMask
+	ServerIP       net.IP   // server's virtual IP on tunnel subnet
+	ServerPublicIP net.IP   // server's public IP (for route exclusion)
+	MTU            int
 }
 
 // Device represents an active TUN device with its virtual IP.
 type Device struct {
-	tunDev       tun.Device
-	name         string
-	virtualIP    net.IP
-	subnetMask   net.IPMask
-	mtu          int
-	readSizes    [1]int
-	readPackets  [1][]byte
-	writePackets [1][]byte
+	tunDev           tun.Device
+	name             string
+	virtualIP        net.IP
+	subnetMask       net.IPMask
+	serverPublicIP   net.IP // server's public IP (route exclusion)
+	mtu              int
+	readSizes        [1]int
+	readPackets      [1][]byte
+	writePackets     [1][]byte
+	physicalGateway  string // saved for route cleanup
 }
 
 func New(cfg Config) (*Device, error) {
@@ -54,11 +57,12 @@ func New(cfg Config) (*Device, error) {
 	}
 
 	dev := &Device{
-		tunDev:     tunDev,
-		name:       name,
-		virtualIP:  cfg.VirtualIP.To4(),
-		subnetMask: cfg.SubnetMask,
-		mtu:        cfg.MTU,
+		tunDev:         tunDev,
+		name:           name,
+		virtualIP:      cfg.VirtualIP.To4(),
+		subnetMask:     cfg.SubnetMask,
+		serverPublicIP: cfg.ServerPublicIP,
+		mtu:            cfg.MTU,
 	}
 
 	if err := dev.configure(); err != nil {
@@ -89,6 +93,7 @@ func (d *Device) Read(buf []byte) (int, error) {
 
 // Close closes the TUN device and releases resources. Satisfies client.TunDevice.
 func (d *Device) Close() error {
+	d.CleanupRoutes()
 	return d.tunDev.Close()
 }
 

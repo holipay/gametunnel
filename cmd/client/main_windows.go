@@ -4,6 +4,7 @@ package main
 
 import (
 	"fmt"
+	"net"
 	"os"
 	"syscall"
 
@@ -31,13 +32,17 @@ func main() {
 	// Load config
 	cfg := client.LoadConfig()
 
+	// Parse server public IP for route exclusion
+	serverPublicIP := parseHostIP(cfg.ServerAddr)
+
 	// Setup TUN factory for Windows
 	tunFactory := func(tunCfg client.TunConfig) (client.TunDevice, error) {
 		return tun.New(tun.Config{
-			VirtualIP:  tunCfg.VirtualIP,
-			SubnetMask: tunCfg.SubnetMask,
-			ServerIP:   tunCfg.ServerIP,
-			MTU:        tunCfg.MTU,
+			VirtualIP:      tunCfg.VirtualIP,
+			SubnetMask:     tunCfg.SubnetMask,
+			ServerIP:       tunCfg.ServerIP,
+			ServerPublicIP: serverPublicIP,
+			MTU:            tunCfg.MTU,
 		})
 	}
 
@@ -74,4 +79,15 @@ func requestAdmin() {
 	}
 
 	os.Exit(0)
+}
+
+// parseHostIP extracts the IP from a "host:port" address string.
+// Returns nil if parsing fails.
+func parseHostIP(addr string) net.IP {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		// Try as bare IP
+		return net.ParseIP(addr)
+	}
+	return net.ParseIP(host)
 }
