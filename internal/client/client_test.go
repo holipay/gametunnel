@@ -203,12 +203,14 @@ func TestRoutePacket_PeerP2P(t *testing.T) {
 
 	peerIP := net.IPv4(10, 0, 0, 3).To4()
 	peerAddr := peerConn.LocalAddr().(*net.UDPAddr)
-	tunnel.peers = map[[4]byte]*Peer{
-		ip4Key(peerIP): {
+	peer := &Peer{
 			VirtualIP:  peerIP,
 			PublicAddr: peerAddr,
 			Username:   "peer1",
-		},
+		}
+	peer.DirectReach.Store(true)
+	tunnel.peers = map[[4]byte]*Peer{
+		ip4Key(peerIP): peer,
 	}
 
 	pkt := []byte{0x45, 0, 0, 20}
@@ -710,6 +712,10 @@ func TestLoadConfig_FallbackToJSON(t *testing.T) {
 
 func TestHandleDataFromServer(t *testing.T) {
 	tunnel, _ := newTestTunnel(t)
+
+	serverIP := net.IPv4(10, 0, 0, 1).To4()
+	tunnel.serverIP = serverIP
+	tunnel.serverIP4 = ip4Key(serverIP)
 
 	mock := &mockTunDevice{}
 	tunnel.tunDev = mock
