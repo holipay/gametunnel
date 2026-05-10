@@ -3,6 +3,7 @@
 package tun
 
 import (
+	"bytes"
 	"fmt"
 	"net"
 	"os"
@@ -11,6 +12,8 @@ import (
 
 	"golang.org/x/sys/unix"
 )
+
+const SYSPROTO_CONTROL = 2
 
 // Device represents an active TUN device (macOS utun).
 type Device struct {
@@ -31,7 +34,7 @@ func New(cfg Config) (*Device, error) {
 	}
 
 	// Create a utun socket pair
-	fd, err := unix.Socket(unix.AF_SYSTEM, unix.SOCK_DGRAM, unix.SYSPROTO_CONTROL)
+	fd, err := unix.Socket(unix.AF_SYSTEM, unix.SOCK_DGRAM, SYSPROTO_CONTROL)
 	if err != nil {
 		return nil, fmt.Errorf("create utun socket: %w", err)
 	}
@@ -60,14 +63,18 @@ func New(cfg Config) (*Device, error) {
 	var ifName [16]byte
 	nameLen := uint32(len(ifName))
 	_, _, errno = unix.Syscall6(unix.SYS_GETSOCKOPT, uintptr(fd),
-		unix.SYSPROTO_CONTROL, 2, // UTUN_OPT_IFNAME
+		SYSPROTO_CONTROL, 2, // UTUN_OPT_IFNAME
 		uintptr(unsafe.Pointer(&ifName[0])), uintptr(unsafe.Pointer(&nameLen)), 0)
 	if errno != 0 {
 		unix.Close(fd)
 		return nil, fmt.Errorf("get utun name: %v", errno)
 	}
 
-	name := unix.ByteToString(ifName[:])
+	n := bytes.IndexByte(ifName[:], 0)
+	if n < 0 {
+		n = len(ifName)
+	}
+	name := string(ifName[:n])
 
 	dev := &Device{
 		fd:            fd,
