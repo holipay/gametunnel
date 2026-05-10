@@ -7,6 +7,7 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"bytes"
 	"unsafe"
 
 	"golang.org/x/sys/unix"
@@ -53,7 +54,12 @@ func New(cfg Config) (*Device, error) {
 		return nil, fmt.Errorf("TUNSETIFF: %v", errno)
 	}
 
-	name := unix.ByteToString(ifr.Name[:])
+
+	n := bytes.IndexByte(ifr.Name[:], 0)
+	if n < 0 {
+		n = len(ifr.Name)
+	}
+	name := string(ifr.Name[:n])
 
 	dev := &Device{
 		file:           fd,
