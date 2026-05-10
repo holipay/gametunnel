@@ -25,7 +25,13 @@ func openLogFile() {
 // openConfigFile opens config.ini in the default text editor.
 func openConfigFile() {
 	path := client.PortableConfigPath()
-	cmd := exec.Command("xdg-open", path)
+	var cmd *exec.Cmd
+	switch runtime.GOOS {
+	case "darwin":
+		cmd = exec.Command("open", path)
+	default:
+		cmd = exec.Command("xdg-open", path)
+	}
 	cmd.Start()
 }
 

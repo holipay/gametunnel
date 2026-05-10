@@ -10,31 +10,18 @@ import (
 	"golang.zx2c4.com/wireguard/tun"
 )
 
-const (
-	DefaultMTU = 1400
-)
-
-// Config holds TUN device configuration.
-type Config struct {
-	VirtualIP      net.IP
-	SubnetMask     net.IPMask
-	ServerIP       net.IP   // server's virtual IP on tunnel subnet
-	ServerPublicIP net.IP   // server's public IP (for route exclusion)
-	MTU            int
-}
-
-// Device represents an active TUN device with its virtual IP.
+// Device represents an active TUN device with its virtual IP (Windows).
 type Device struct {
-	tunDev           tun.Device
-	name             string
-	virtualIP        net.IP
-	subnetMask       net.IPMask
-	serverPublicIP   net.IP // server's public IP (route exclusion)
-	mtu              int
-	readSizes        [1]int
-	readPackets      [1][]byte
-	writePackets     [1][]byte
-	physicalGateway  string // saved for route cleanup
+	tunDev          tun.Device
+	name            string
+	virtualIP       net.IP
+	subnetMask      net.IPMask
+	serverPublicIP  net.IP
+	mtu             int
+	readSizes       [1]int
+	readPackets     [1][]byte
+	writePackets    [1][]byte
+	physicalGateway string
 }
 
 func New(cfg Config) (*Device, error) {
@@ -73,12 +60,8 @@ func New(cfg Config) (*Device, error) {
 	return dev, nil
 }
 
-// Name returns the TUN device name (e.g. "GameTunnel").
-func (d *Device) Name() string {
-	return d.name
-}
+func (d *Device) Name() string { return d.name }
 
-// Read reads a packet from the TUN device. Satisfies client.TunDevice.
 func (d *Device) Read(buf []byte) (int, error) {
 	d.readPackets[0] = buf
 	n, err := d.tunDev.Read(d.readPackets[:], d.readSizes[:], 0)
@@ -91,13 +74,11 @@ func (d *Device) Read(buf []byte) (int, error) {
 	return d.readSizes[0], nil
 }
 
-// Close closes the TUN device and releases resources. Satisfies client.TunDevice.
 func (d *Device) Close() error {
 	d.CleanupRoutes()
 	return d.tunDev.Close()
 }
 
-// Write writes a packet to the TUN device. Satisfies client.TunDevice.
 func (d *Device) Write(data []byte) (int, error) {
 	d.writePackets[0] = data
 	n, err := d.tunDev.Write(d.writePackets[:], 0)
@@ -110,7 +91,6 @@ func (d *Device) Write(data []byte) (int, error) {
 	return len(data), nil
 }
 
-// runCmdOutput executes a command and returns its combined stdout as a string.
 func runCmdOutput(name string, args ...string) (string, error) {
 	cmd := exec.Command(name, args...)
 	out, err := cmd.CombinedOutput()
