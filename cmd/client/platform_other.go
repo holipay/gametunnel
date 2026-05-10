@@ -33,3 +33,10 @@ func openConfigFile() {
 func setupFirewallPlatform() (func(), error) {
 	return func() {}, nil
 }
+
+// showSettingsDialog is the platform-specific settings dialog.
+// On non-Windows platforms, opens config.ini in the default editor.
+func showSettingsDialog(statusText string) bool {
+	openConfigFile()
+	return false
+}

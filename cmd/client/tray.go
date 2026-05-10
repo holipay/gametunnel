@@ -57,7 +57,7 @@ func (t *Tray) setup() {
 					if status.Connected {
 						statusText = fmt.Sprintf("已连接 · %s · %d人在线", status.VirtualIP, status.PeerCount)
 					}
-					if showConfigDialog(statusText) {
+					if showSettingsDialog(statusText) {
 						// Config changed, reload
 						cfg := client.LoadConfig()
 						t.app.cfg = cfg
@@ -93,7 +93,7 @@ func (t *Tray) doConnect() {
 	if t.app.cfg.ServerAddr == "" {
 		// No server configured, show settings
 		statusText := "请先配置服务器地址"
-		if showConfigDialog(statusText) {
+		if showSettingsDialog(statusText) {
 			cfg := client.LoadConfig()
 			t.app.cfg = cfg
 			if cfg.ServerAddr != "" {
@@ -148,4 +148,3 @@ func (t *Tray) statusLoop() {
 		time.Sleep(2 * time.Second)
 	}
 }
-

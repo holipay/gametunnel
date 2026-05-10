@@ -337,3 +337,9 @@ func (b *leBuffer) writeWStr(s string) {
 }
 
 func (b *leBuffer) bytes() []byte { return b.data }
+
+// showSettingsDialog is the platform-specific settings dialog.
+// On Windows, it delegates to the Win32 native dialog.
+func showSettingsDialog(statusText string) bool {
+	return showConfigDialog(statusText)
+}
