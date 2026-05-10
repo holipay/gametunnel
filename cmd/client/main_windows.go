@@ -17,6 +17,7 @@ import (
 var (
 	kernel32          = syscall.NewLazyDLL("kernel32.dll")
 	procGetConsoleWindow = kernel32.NewProc("GetConsoleWindow")
+	user32               = syscall.NewLazyDLL("user32.dll")
 	procShowWindow       = user32.NewProc("ShowWindow")
 )
 

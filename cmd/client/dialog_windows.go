@@ -14,7 +14,6 @@ import (
 )
 
 var (
-	user32 = syscall.NewLazyDLL("user32.dll")
 
 	procCreateWindowEx         = user32.NewProc("CreateWindowExW")
 	procGetDlgItemText         = user32.NewProc("GetDlgItemTextW")
