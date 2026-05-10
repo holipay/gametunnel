@@ -17,21 +17,21 @@ jobs:
           go-version: "1.25"
       - run: go test -race ./internal/...
 
-  release:
+  # ── Server (Linux, CGO_ENABLED=0) ──────────────────────────
+
+  release-server:
     needs: test
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0 # needed for git describe
+          fetch-depth: 0
       - uses: actions/setup-go@v5
         with:
           go-version: "1.25"
 
       - name: Set version
         run: echo "VERSION=${GITHUB_REF_NAME}" >> $GITHUB_ENV
-
-      # ── Server ────────────────────────────────────────────────
 
       - name: Build server (amd64)
         run: CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags "-s -w -X main.Version=${VERSION}" -o gtunnel-server ./cmd/server
@@ -46,12 +46,33 @@ jobs:
         run: |
           mv gtunnel-server-arm64 gtunnel-server
           tar czf GameTunnel-Server-linux-arm64.tar.gz gtunnel-server
-          rm gtunnel-server
 
-      # ── Client ────────────────────────────────────────────────
+      - uses: actions/upload-artifact@v4
+        with:
+          name: server
+          path: GameTunnel-Server-*.tar.gz
+
+  # ── Windows Client (交叉编译, CGO_ENABLED=0) ────────────────
+
+  release-client-windows:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+
+      - name: Set version
+        run: echo "VERSION=${GITHUB_REF_NAME}" >> $GITHUB_ENV
 
       - name: Build client (amd64)
         run: GOOS=windows GOARCH=amd64 go build -ldflags "-s -w -X main.Version=${VERSION}" -o gtunnel-client.exe ./cmd/client
+
+      - name: Build client (arm64)
+        run: GOOS=windows GOARCH=arm64 go build -ldflags "-s -w -X main.Version=${VERSION}" -o gtunnel-client-arm64.exe ./cmd/client
 
       - name: Download wintun.dll
         run: |
@@ -60,12 +81,94 @@ jobs:
           mv wintun/bin/amd64/wintun.dll wintun.dll
           rm -rf wintun wintun.zip
 
-      - name: Package client
+      - name: Package client (amd64)
         run: |
           cp configs/config.ini .
           zip GameTunnel-Client-windows-amd64.zip gtunnel-client.exe wintun.dll config.ini
 
-      # ── Create Release ────────────────────────────────────────
+      - name: Package client (arm64)
+        run: |
+          cp configs/config.ini .
+          zip GameTunnel-Client-windows-arm64.zip gtunnel-client-arm64.exe config.ini
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: client-windows
+          path: GameTunnel-Client-windows-*.zip
+
+  # ── Linux Client (需要 gtk3 CGO) ──────────────────────────
+
+  release-client-linux:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+
+      - name: Install dependencies
+        run: sudo apt-get update && sudo apt-get install -y gcc libgtk-3-dev libayatana-appindicator3-dev
+
+      - name: Set version
+        run: echo "VERSION=${GITHUB_REF_NAME}" >> $GITHUB_ENV
+
+      - name: Build client (amd64)
+        run: CGO_ENABLED=1 GOOS=linux GOARCH=amd64 go build -ldflags "-s -w -X main.Version=${VERSION}" -o gtunnel-client ./cmd/client
+
+      - name: Package client (amd64)
+        run: |
+          cp configs/config.ini .
+          tar czf GameTunnel-Client-linux-amd64.tar.gz gtunnel-client config.ini
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: client-linux
+          path: GameTunnel-Client-linux-*.tar.gz
+
+  # ── macOS Client (需要 macos CGO) ─────────────────────────
+
+  release-client-darwin:
+    needs: test
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+
+      - name: Set version
+        run: echo "VERSION=${GITHUB_REF_NAME}" >> $GITHUB_ENV
+
+      - name: Build client (amd64)
+        run: CGO_ENABLED=1 GOOS=darwin GOARCH=amd64 go build -ldflags "-s -w -X main.Version=${VERSION}" -o gtunnel-client ./cmd/client
+
+      - name: Build client (arm64)
+        run: CGO_ENABLED=1 GOOS=darwin GOARCH=arm64 go build -ldflags "-s -w -X main.Version=${VERSION}" -o gtunnel-client-arm64 ./cmd/client
+
+      - name: Package client
+        run: |
+          cp configs/config.ini .
+          tar czf GameTunnel-Client-darwin.tar.gz gtunnel-client gtunnel-client-arm64 config.ini
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: client-darwin
+          path: GameTunnel-Client-darwin-*.tar.gz
+
+  # ── Create GitHub Release ─────────────────────────────────
+
+  publish:
+    needs: [release-server, release-client-windows, release-client-linux, release-client-darwin]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
@@ -75,3 +178,6 @@ jobs:
             GameTunnel-Server-linux-amd64.tar.gz
             GameTunnel-Server-linux-arm64.tar.gz
             GameTunnel-Client-windows-amd64.zip
+            GameTunnel-Client-windows-arm64.zip
+            GameTunnel-Client-linux-amd64.tar.gz
+            GameTunnel-Client-darwin.tar.gz
