@@ -3,10 +3,7 @@
 package main
 
 import (
-	"fmt"
-	"log"
 	"net"
-	"os"
 
 	"github.com/holipay/gametunnel/internal/client"
 	"github.com/holipay/gametunnel/internal/tun"
