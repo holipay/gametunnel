@@ -28,7 +28,7 @@ func RunTray(app *App) {
 }
 
 func (t *Tray) setup() {
-	systray.SetIcon(iconDisconnected)
+	setTrayIcon(iconDisconnected)
 	systray.SetTitle("GameTunnel")
 	systray.SetTooltip("GameTunnel - 未连接")
 
@@ -107,7 +107,7 @@ func (t *Tray) doConnect() {
 }
 
 func (t *Tray) updateTrayConnecting() {
-	systray.SetIcon(iconConnecting)
+	setTrayIcon(iconConnecting)
 	systray.SetTooltip("GameTunnel - 连接中...")
 	t.mStatus.SetTitle("🟡 连接中...")
 	t.mConnect.Disable()
@@ -116,13 +116,13 @@ func (t *Tray) updateTrayConnecting() {
 
 func (t *Tray) updateTray(connected bool, ip string, peers int) {
 	if connected {
-		systray.SetIcon(iconConnected)
+		setTrayIcon(iconConnected)
 		systray.SetTooltip(fmt.Sprintf("GameTunnel - %s · %d人在线", ip, peers))
 		t.mStatus.SetTitle(fmt.Sprintf("🟢 %s · %d人", ip, peers))
 		t.mConnect.Disable()
 		t.mDisconnect.Enable()
 	} else {
-		systray.SetIcon(iconDisconnected)
+		setTrayIcon(iconDisconnected)
 		systray.SetTooltip("GameTunnel - 未连接")
 		t.mStatus.SetTitle("🔴 未连接")
 		t.mConnect.Enable()
