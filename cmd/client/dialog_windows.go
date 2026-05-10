@@ -22,7 +22,6 @@ var (
 	procGetWindowTextLength    = user32.NewProc("GetWindowTextLengthW")
 	procSendMessage            = user32.NewProc("SendMessageW")
 	procSetFocus               = user32.NewProc("SetFocus")
-	procShowWindow             = user32.NewProc("ShowWindow")
 	procDialogBoxIndirectParam = user32.NewProc("DialogBoxIndirectParamW")
 	procEndDialog              = user32.NewProc("EndDialog")
 	procGetDlgItem             = user32.NewProc("GetDlgItem")
@@ -147,7 +146,7 @@ func showConfigDialog(statusText string) bool {
 		0,
 		uintptr(unsafe.Pointer(&tmpl[0])),
 		0,
-		syscall.NewCallback(configDialogProc(cfg, hFont)),
+		syscall.NewCallback(configDialogProc(cfg, hFont, statusText)),
 	)
 	if hFont != 0 {
 		procDeleteObject.Call(hFont)
@@ -157,7 +156,7 @@ func showConfigDialog(statusText string) bool {
 	return ret == 1
 }
 
-func configDialogProc(cfg *client.Config, hFont uintptr) func(uintptr, uint32, uintptr, uintptr) uintptr {
+func configDialogProc(cfg *client.Config, hFont uintptr, statusText string) func(uintptr, uint32, uintptr, uintptr) uintptr {
 	return func(hwnd uintptr, msg uint32, wParam, lParam uintptr) uintptr {
 		switch msg {
 		case WM_INITDIALOG:
