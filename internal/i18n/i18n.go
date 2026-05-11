@@ -71,6 +71,9 @@ type Strings struct {
 	TrayTooltipOnline string // "GameTunnel - %s · %d人在线"
 	TrayCfgUpdated    string // "[tray] 配置已更新"
 	TrayNoServer      string // "请先配置服务器地址"
+	TrayStatusError   string // "🔴 连接失败"
+	TrayEditConfig    string // "📝 编辑配置文件"
+	TrayEditConfigDesc string // "用记事本打开配置文件"
 
 	// ── Client Dialog ──
 	DlgTitle       string // "GameTunnel 设置"
@@ -82,6 +85,10 @@ type Strings struct {
 	DlgCancel      string // "取消"
 	DlgStatusIdle  string // "未连接"
 	DlgStatusConn  string // "已连接 · %s · %d人在线"
+	DlgFirstRun    string // "首次设置 - GameTunnel"
+	DlgConnect     string // "连接"
+	DlgShowPass    string // "显示密码"
+	DlgInvalidAddr string // "服务器地址格式不正确，应为 IP:端口"
 
 	// ── Client App ──
 	AppAutoConnect string // "[app] 自动连接到 %s"
@@ -209,6 +216,9 @@ var zhStrings = &Strings{
 	TrayTooltipOnline:  "GameTunnel - %s · %d人在线",
 	TrayCfgUpdated:     "[tray] 配置已更新",
 	TrayNoServer:       "请先配置服务器地址",
+	TrayStatusError:    "🔴 连接失败",
+	TrayEditConfig:     "📝 编辑配置文件",
+	TrayEditConfigDesc: "用记事本打开配置文件",
 
 	DlgTitle:      "GameTunnel 设置",
 	DlgServerAddr: "服务器地址:",
@@ -219,6 +229,10 @@ var zhStrings = &Strings{
 	DlgCancel:     "取消",
 	DlgStatusIdle: "未连接",
 	DlgStatusConn: "已连接 · %s · %d人在线",
+	DlgFirstRun:   "首次设置 - GameTunnel",
+	DlgConnect:    "连接",
+	DlgShowPass:   "显示密码",
+	DlgInvalidAddr: "服务器地址格式不正确，应为 IP:端口",
 
 	AppAutoConnect:   "[app] 自动连接到 %s",
 	AppSaveFail:      "[app] 保存配置失败: %v",
@@ -341,6 +355,9 @@ var enStrings = &Strings{
 	TrayTooltipOnline:  "GameTunnel - %s · %d online",
 	TrayCfgUpdated:     "[tray] Config updated",
 	TrayNoServer:       "Please configure server address first",
+	TrayStatusError:    "🔴 Connection failed",
+	TrayEditConfig:     "📝 Edit Config",
+	TrayEditConfigDesc: "Open config file in Notepad",
 
 	DlgTitle:      "GameTunnel Settings",
 	DlgServerAddr: "Server:",
@@ -351,6 +368,10 @@ var enStrings = &Strings{
 	DlgCancel:     "Cancel",
 	DlgStatusIdle: "Disconnected",
 	DlgStatusConn: "Connected · %s · %d online",
+	DlgFirstRun:   "First-Time Setup - GameTunnel",
+	DlgConnect:    "Connect",
+	DlgShowPass:   "Show password",
+	DlgInvalidAddr: "Invalid server address, should be IP:port",
 
 	AppAutoConnect:   "[app] Auto-connecting to %s",
 	AppSaveFail:      "[app] Failed to save config: %v",

@@ -46,8 +46,27 @@ func (tr *Tray) setup() {
 	systray.AddSeparator()
 
 	mSettings := systray.AddMenuItem(s.TraySettings, s.TraySettingsDesc)
+	mEditConfig := systray.AddMenuItem(s.TrayEditConfig, s.TrayEditConfigDesc)
 	mLog := systray.AddMenuItem(s.TrayViewLog, s.TrayOpenLogFile)
 	mQuit := systray.AddMenuItem(s.TrayQuit, s.TrayQuitDesc)
+
+	// First run: auto-open settings if no server configured
+	if tr.app.cfg.ServerAddr == "" {
+		go func() {
+			time.Sleep(500 * time.Millisecond)
+			statusText := i18n.T().TrayNoServer
+			if showSettingsDialog(statusText) {
+				cfg := client.LoadConfig()
+				tr.app.cfg = cfg
+				if cfg.Lang != "" {
+					i18n.Set(i18n.ParseLang(cfg.Lang))
+				}
+				if cfg.ServerAddr != "" {
+					tr.app.Connect(cfg)
+				}
+			}
+		}()
+	}
 
 	go func() {
 		for {
@@ -68,6 +87,9 @@ func (tr *Tray) setup() {
 						log.Printf(i18n.T().TrayCfgUpdated)
 					}
 				}()
+
+			case <-mEditConfig.ClickedCh:
+				openConfigFile()
 
 			case <-tr.mConnect.ClickedCh:
 				go tr.doConnect()
@@ -135,13 +157,26 @@ func (tr *Tray) updateTray(connected bool, ip string, peers int) {
 	}
 }
 
+func (tr *Tray) updateTrayError(errMsg string) {
+	s := i18n.T()
+	setTrayIcon(iconDisconnected)
+	systray.SetTooltip(s.TrayStatusError)
+	tr.mStatus.SetTitle(fmt.Sprintf("%s: %s", s.TrayStatusError, errMsg))
+	tr.mConnect.Enable()
+	tr.mDisconnect.Disable()
+}
+
 func (tr *Tray) statusLoop() {
 	for {
 		status := tr.app.GetStatus()
 		if status.Connecting {
 			tr.updateTrayConnecting()
+		} else if status.Connected {
+			tr.updateTray(true, status.VirtualIP, status.PeerCount)
+		} else if status.LastError != "" {
+			tr.updateTrayError(status.LastError)
 		} else {
-			tr.updateTray(status.Connected, status.VirtualIP, status.PeerCount)
+			tr.updateTray(false, "", 0)
 		}
 
 		select {

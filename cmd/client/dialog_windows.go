@@ -4,7 +4,9 @@ package main
 
 import (
 	"log"
+	"net"
 	"runtime"
+	"strings"
 	"syscall"
 	"unsafe"
 
@@ -41,6 +43,7 @@ const (
 	IDC_ROOM         = 1003
 	IDC_PASSWORD     = 1004
 	IDC_STATUS_LABEL = 1005
+	IDC_SHOW_PASS    = 1006
 
 	WM_INITDIALOG = 0x0110
 	WM_COMMAND    = 0x0111
@@ -63,6 +66,7 @@ const (
 	ES_PASSWORD    = 0x0020
 	BS_PUSHBUTTON   = 0x00000000
 	BS_DEFPUSHBUTTON = 0x00000001
+	BS_AUTOCHECKBOX  = 0x00000003
 	IDOK     = 1
 	IDCANCEL = 2
 )
@@ -131,7 +135,11 @@ func showConfigDialog(statusText string) bool {
 	// Build a minimal DLGTEMPLATE with zero controls.
 	// All child controls are created via CreateWindowEx in WM_INITDIALOG,
 	// which avoids all template-parsing compatibility issues.
-	tmpl := buildDialogTemplate(260, 180, i18n.T().DlgTitle)
+	dlgTitle := i18n.T().DlgTitle
+	if cfg.ServerAddr == "" {
+		dlgTitle = i18n.T().DlgFirstRun
+	}
+	tmpl := buildDialogTemplate(260, 180, dlgTitle)
 	defer runtime.KeepAlive(tmpl)
 
 	ret, _, err := procDialogBoxIndirectParam.Call(
@@ -181,23 +189,30 @@ func configDialogProc(cfg *client.Config, hFont uintptr, statusText string) func
 			// Row 4: Password
 			y4 := y3 + rowH + gap
 			makeCtl("STATIC", s.DlgPassword, 0, margin, y4, labelW, rowH, hwnd, 0)
-			makeCtl("EDIT", "", WS_TABSTOP|WS_BORDER|ES_AUTOHSCROLL|ES_PASSWORD, editX, y4, editW, rowH, hwnd, IDC_PASSWORD)
+			makeCtl("EDIT", "", WS_TABSTOP|WS_BORDER|ES_AUTOHSCROLL|ES_PASSWORD, editX, y4, editW-50, rowH, hwnd, IDC_PASSWORD)
+
+			// Show password checkbox (next to password field)
+			makeCtl("BUTTON", s.DlgShowPass, BS_AUTOCHECKBOX|WS_TABSTOP, editX+editW-48, y4, 48, rowH, hwnd, IDC_SHOW_PASS)
 
 			// Status label
 			yStatus := y4 + rowH + gap + 4
 			makeCtl("STATIC", statusText, 0, margin, yStatus, 260-2*margin, 12, hwnd, IDC_STATUS_LABEL)
 
-			// Buttons
+			// Buttons — use "Connect" text for first run, "OK" otherwise
 			btnY := yStatus + 12 + gap + 6
 			btnW := 40
 			btnGap := 10
 			btnX := (260 - btnW*2 - btnGap) / 2
-			makeCtl("BUTTON", s.DlgOK, BS_DEFPUSHBUTTON|WS_TABSTOP, btnX, btnY, btnW, 14, hwnd, IDOK)
+			okText := s.DlgOK
+			if cfg.ServerAddr == "" {
+				okText = s.DlgConnect
+			}
+			makeCtl("BUTTON", okText, BS_DEFPUSHBUTTON|WS_TABSTOP, btnX, btnY, btnW, 14, hwnd, IDOK)
 			makeCtl("BUTTON", s.DlgCancel, BS_PUSHBUTTON|WS_TABSTOP, btnX+btnW+btnGap, btnY, btnW, 14, hwnd, IDCANCEL)
 
 			// Apply font to every control.
 			if hFont != 0 {
-				for _, id := range []uintptr{IDC_SERVER, IDC_NAME, IDC_ROOM, IDC_PASSWORD, IDC_STATUS_LABEL, IDOK, IDCANCEL} {
+				for _, id := range []uintptr{IDC_SERVER, IDC_NAME, IDC_ROOM, IDC_PASSWORD, IDC_SHOW_PASS, IDC_STATUS_LABEL, IDOK, IDCANCEL} {
 					hctl, _, _ := procGetDlgItem.Call(hwnd, id)
 					if hctl != 0 {
 						procSendMessage.Call(hctl, WM_SETFONT, hFont, 1)
@@ -218,10 +233,55 @@ func configDialogProc(cfg *client.Config, hFont uintptr, statusText string) func
 
 		case WM_COMMAND:
 			switch wParam & 0xFFFF {
+			case IDC_SHOW_PASS:
+				// Toggle password visibility
+				hPass, _, _ := procGetDlgItem.Call(hwnd, IDC_PASSWORD)
+				if hPass != 0 {
+					style, _, _ := procSendMessage.Call(hPass, 0x00F0 /* EM_GETPASSWORDCHAR */, 0, 0) // EM_GETSEL workaround
+					// Check checkbox state
+					hCheck, _, _ := procGetDlgItem.Call(hwnd, IDC_SHOW_PASS)
+					checked, _, _ := procSendMessage.Call(hCheck, 0x00F0 /* BM_GETCHECK */, 0, 0)
+					if checked == 1 {
+						// Checked → show password (remove ES_PASSWORD by setting password char to 0)
+						procSendMessage.Call(hPass, 0x00CC /* EM_SETPASSWORDCHAR */, 0, 0)
+					} else {
+						// Unchecked → hide password (set password char back to bullet)
+						procSendMessage.Call(hPass, 0x00CC /* EM_SETPASSWORDCHAR */, uintptr(0x2022), 0)
+					}
+					// Redraw the edit control
+					procSendMessage.Call(hPass, 0x000F /* WM_PAINT */, 0, 0)
+					_ = style
+				}
+				return 1
+
 			case IDOK:
-				cfg.ServerAddr = getEditText(hwnd, IDC_SERVER)
-				cfg.PlayerName = getEditText(hwnd, IDC_NAME)
-				cfg.RoomID = getEditText(hwnd, IDC_ROOM)
+				// ── Input validation ──
+				serverAddr := getEditText(hwnd, IDC_SERVER)
+				playerName := getEditText(hwnd, IDC_NAME)
+				roomID := getEditText(hwnd, IDC_ROOM)
+
+				if serverAddr == "" || (!containsPort(serverAddr) && net.ParseIP(serverAddr) == nil) {
+					// Show validation error in status label
+					setStatusText(hwnd, IDC_STATUS_LABEL, i18n.T().DlgInvalidAddr)
+					// Focus server field
+					hctl, _, _ := procGetDlgItem.Call(hwnd, uintptr(IDC_SERVER))
+					procSetFocus.Call(hctl)
+					return 1
+				}
+				if playerName == "" {
+					setStatusText(hwnd, IDC_STATUS_LABEL, "玩家名称不能为空")
+					hctl, _, _ := procGetDlgItem.Call(hwnd, uintptr(IDC_NAME))
+					procSetFocus.Call(hctl)
+					return 1
+				}
+				if roomID == "" {
+					roomID = "default"
+					setEditText(hwnd, IDC_ROOM, roomID)
+				}
+
+				cfg.ServerAddr = serverAddr
+				cfg.PlayerName = playerName
+				cfg.RoomID = roomID
 				cfg.RoomPassword = getEditText(hwnd, IDC_PASSWORD)
 				if err := client.SaveConfig(cfg); err != nil {
 					log.Printf("[dialog] save config: %v", err)
@@ -331,6 +391,17 @@ func (b *leBuffer) writeWStr(s string) {
 }
 
 func (b *leBuffer) bytes() []byte { return b.data }
+
+// containsPort checks if an address string contains a port (has ':').
+func containsPort(addr string) bool {
+	return strings.Contains(addr, ":")
+}
+
+// setStatusText updates the text of a control by ID.
+func setStatusText(hwnd uintptr, id uintptr, text string) {
+	p, _ := windows.UTF16PtrFromString(text)
+	procSetDlgItemText.Call(hwnd, id, uintptr(unsafe.Pointer(p)))
+}
 
 // showSettingsDialog is the platform-specific settings dialog.
 // On Windows, it delegates to the Win32 native dialog.
