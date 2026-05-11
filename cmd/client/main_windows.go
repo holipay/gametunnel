@@ -81,7 +81,7 @@ func requestAdmin() {
 	exePath, _ := windows.UTF16PtrFromString(exe)
 
 	if err := windows.ShellExecute(0, verb, exePath, nil, nil, windows.SW_SHOWNORMAL); err != nil {
-		fmt.Fprintf(os.Stderr, "  Failed to elevate: %v\n", err)
+		fmt.Fprintf(os.Stderr, i18n.T().ErrElevateFailed, err)
 		os.Exit(1)
 	}
 
@@ -91,7 +91,7 @@ func requestAdmin() {
 // parseHostIP extracts the IP from a "host:port" address string.
 // Returns nil if parsing fails.
 func parseHostIP(addr string) net.IP {
-	host, err := net.SplitHostPort(addr)
+	host, _, err := net.SplitHostPort(addr)
 	if err != nil {
 		// Try as bare IP
 		return net.ParseIP(addr)

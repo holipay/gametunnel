@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/holipay/gametunnel/internal/i18n"
 )
 
 // Config holds client configuration.
@@ -67,15 +69,16 @@ func LoadConfig() *Config {
 // SaveConfig writes the config to config.ini next to the exe.
 func SaveConfig(cfg *Config) error {
 	path := PortableConfigPath()
+	t := i18n.T()
 	var b strings.Builder
-	fmt.Fprintln(&b, "# GameTunnel Configuration")
-	fmt.Fprintln(&b, "# Server address (required, e.g. 1.2.3.4:4700)")
+	fmt.Fprintln(&b, t.CfgHeader)
+	fmt.Fprintln(&b, t.CfgServerHint)
 	fmt.Fprintf(&b, "server=%s\n", cfg.ServerAddr)
-	fmt.Fprintln(&b, "# Player name (default: computer name)")
+	fmt.Fprintln(&b, t.CfgNameHint)
 	fmt.Fprintf(&b, "name=%s\n", cfg.PlayerName)
-	fmt.Fprintln(&b, "# Room ID (default: default)")
+	fmt.Fprintln(&b, t.CfgRoomHint)
 	fmt.Fprintf(&b, "room=%s\n", cfg.RoomID)
-	fmt.Fprintln(&b, "# Password (leave empty if none)")
+	fmt.Fprintln(&b, t.CfgPassHint)
 	fmt.Fprintf(&b, "password=%s\n", cfg.RoomPassword)
 	fmt.Fprintln(&b, "# Language (zh or en)")
 	fmt.Fprintf(&b, "lang=%s\n", cfg.Lang)
