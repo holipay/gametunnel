@@ -6,6 +6,7 @@ import (
 	"net"
 	"time"
 
+	"github.com/holipay/gametunnel/internal/i18n"
 	"github.com/holipay/gametunnel-protocol/protocol"
 )
 
@@ -46,7 +47,7 @@ func (t *Tunnel) receiveFromServer(ctx context.Context) {
 
 			consecutiveErrors++
 			if consecutiveErrors > maxConsecutiveErrors {
-				log.Printf("[tunnel] 服务端连接读取连续失败 %d 次，退出: %v", consecutiveErrors, err)
+				log.Printf(i18n.T().LogReadConsecFail, consecutiveErrors, err)
 				return
 			}
 
@@ -126,7 +127,7 @@ func (t *Tunnel) handleDirectData(from *net.UDPAddr, msg *protocol.Message) {
 	peer.DirectReach.Store(true)
 
 	if _, err := t.tunDev.Write(dp.Data); err != nil {
-		log.Printf("[tunnel] TUN 写入失败: %v", err)
+		log.Printf(i18n.T().LogTUNWriteFail, err)
 	}
 }
 
@@ -155,7 +156,7 @@ func (t *Tunnel) handlePeerInfo(ctx context.Context, payload []byte) {
 			addrChanged := existing.PublicAddr != nil && entry.PublicAddr != nil &&
 				(!existing.PublicAddr.IP.Equal(entry.PublicAddr.IP) || existing.PublicAddr.Port != entry.PublicAddr.Port)
 			if addrChanged {
-				log.Printf("[tunnel] 玩家地址变更: %s (%s) %s → %s", entry.Username, entry.VirtualIP, existing.PublicAddr, entry.PublicAddr)
+				log.Printf(i18n.T().LogPeerAddrChange, entry.Username, entry.VirtualIP, existing.PublicAddr, entry.PublicAddr)
 				existing.DirectReach.Store(false) // reset P2P status, need re-punch
 				changedPeerIPs = append(changedPeerIPs, entry.VirtualIP)
 			}
@@ -171,14 +172,14 @@ func (t *Tunnel) handlePeerInfo(ctx context.Context, payload []byte) {
 			}
 			p.lastSeen.Store(&now)
 			newPeers[key] = p
-			log.Printf("[tunnel] 新玩家: %s (%s)", entry.Username, entry.VirtualIP)
+			log.Printf(i18n.T().LogNewPeer, entry.Username, entry.VirtualIP)
 			newPeerIPs = append(newPeerIPs, entry.VirtualIP)
 		}
 	}
 	// Log removed peers
 	for key, peer := range t.peers {
 		if _, ok := newPeers[key]; !ok {
-			log.Printf("[tunnel] 玩家离开: %s (%s)", peer.Username, peer.VirtualIP)
+			log.Printf(i18n.T().LogPeerLeave2, peer.Username, peer.VirtualIP)
 		}
 	}
 	t.peers = newPeers
@@ -221,7 +222,7 @@ func (t *Tunnel) handleDataFromServer(payload []byte) {
 	}
 
 	if _, err := t.tunDev.Write(dp.Data); err != nil {
-		log.Printf("[tunnel] TUN 写入失败: %v", err)
+		log.Printf(i18n.T().LogTUNWriteFail, err)
 	}
 }
 
@@ -247,7 +248,7 @@ func (t *Tunnel) receiveFromTUN(ctx context.Context) {
 
 			consecutiveErrors++
 			if consecutiveErrors > maxConsecutiveErrors {
-				log.Printf("[tunnel] TUN 设备读取连续失败 %d 次，退出: %v", consecutiveErrors, err)
+				log.Printf(i18n.T().LogTUNConsecFail, consecutiveErrors, err)
 				return
 			}
 

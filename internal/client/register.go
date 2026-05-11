@@ -7,6 +7,7 @@ import (
 	"net"
 	"time"
 
+	"github.com/holipay/gametunnel/internal/i18n"
 	"github.com/holipay/gametunnel-protocol/auth"
 	"github.com/holipay/gametunnel-protocol/protocol"
 )
@@ -47,9 +48,9 @@ func (t *Tunnel) register(ctx context.Context) error {
 			if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
 				retries++
 				if retries > maxRetries {
-					return fmt.Errorf("注册失败（重试%d次）", maxRetries)
+					return fmt.Errorf(i18n.T().LogRegFailed, maxRetries)
 				}
-				log.Printf("[tunnel] 注册超时，重试 %d/%d...", retries, maxRetries)
+				log.Printf(i18n.T().LogRegTimeout, retries, maxRetries)
 				t.sendUDP(packet, t.serverAddr)
 				t.conn.SetReadDeadline(time.Now().Add(deadline))
 				continue
@@ -63,7 +64,7 @@ func (t *Tunnel) register(ctx context.Context) error {
 		case protocol.TypeAuthChallenge:
 			authRounds++
 			if authRounds > maxAuthRounds {
-				return fmt.Errorf("认证失败：服务器发送了过多的认证请求")
+				return fmt.Errorf(i18n.T().ErrTooManyAuth)
 			}
 			if err := t.handleAuthChallenge(msg.Payload); err != nil {
 				return err
@@ -72,7 +73,7 @@ func (t *Tunnel) register(ctx context.Context) error {
 			continue
 		case protocol.TypeKick:
 			kick, _ := protocol.UnmarshalKick(msg.Payload)
-			return fmt.Errorf("被拒绝: %s", kick.Reason)
+			return fmt.Errorf(i18n.T().ErrRejected, kick.Reason)
 		}
 	}
 }
@@ -94,7 +95,7 @@ func (t *Tunnel) readResponse(ctx context.Context, buf []byte) (*protocol.Messag
 
 		msg, err := protocol.DecodeChecked(buf[:n])
 		if err != nil {
-			return nil, fmt.Errorf("解码响应失败: %w", err)
+			return nil, fmt.Errorf(i18n.T().ErrDecodeFailed, err)
 		}
 		return msg, nil
 	}
@@ -104,7 +105,7 @@ func (t *Tunnel) readResponse(ctx context.Context, buf []byte) (*protocol.Messag
 func (t *Tunnel) handleAssignIP(payload []byte) error {
 	assign, err := protocol.UnmarshalAssignIP(payload)
 	if err != nil {
-		return fmt.Errorf("解析IP分配失败: %w", err)
+		return fmt.Errorf(i18n.T().ErrParseIPFailed, err)
 	}
 	t.virtualIP = assign.VirtualIP
 	t.serverIP = assign.ServerIP
@@ -121,17 +122,17 @@ func (t *Tunnel) handleAssignIP(payload []byte) error {
 // handleAuthChallenge responds to the server's HMAC authentication challenge.
 func (t *Tunnel) handleAuthChallenge(payload []byte) error {
 	if t.roomPass == "" {
-		return fmt.Errorf("服务器需要房间密码，请用 -password 参数指定")
+		return fmt.Errorf(i18n.T().ErrNeedPassword)
 	}
 
 	acp, err := protocol.UnmarshalAuthChallenge(payload)
 	if err != nil {
-		return fmt.Errorf("解析认证请求失败: %w", err)
+		return fmt.Errorf(i18n.T().ErrParseAuthFailed, err)
 	}
 
 	key := auth.DeriveKey(t.roomPass, t.roomID)
 	if key == nil {
-		return fmt.Errorf("无法派生认证密钥")
+		return fmt.Errorf(i18n.T().ErrDeriveKeyFailed)
 	}
 
 	// 使用服务端观测到的客户端地址（经过 NAT 后的公网地址）
@@ -151,6 +152,6 @@ func (t *Tunnel) handleAuthChallenge(payload []byte) error {
 	packet := protocol.EncodeChecked(protocol.TypeAuthResponse, resp.Marshal())
 	t.sendUDP(packet, t.serverAddr)
 
-	log.Printf("[tunnel] 已发送认证响应，等待服务器确认...")
+	log.Printf(i18n.T().LogAuthSent)
 	return nil
 }

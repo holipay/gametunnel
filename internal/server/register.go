@@ -5,6 +5,7 @@ import (
 	"net"
 	"time"
 
+	"github.com/holipay/gametunnel/internal/i18n"
 	"github.com/holipay/gametunnel-protocol/auth"
 	"github.com/holipay/gametunnel-protocol/protocol"
 )
@@ -21,20 +22,22 @@ func (s *Server) handleRegister(payload []byte, from *net.UDPAddr) {
 		return
 	}
 
+	t := i18n.T()
+
 	// Validate input lengths
 	if len(reg.Username) == 0 || len(reg.Username) > maxUsernameLen {
-		s.sendKick(from, "用户名不合法")
+		s.sendKick(from, t.KickInvalidName)
 		return
 	}
 	if len(reg.RoomID) == 0 || len(reg.RoomID) > maxRoomIDLen {
-		s.sendKick(from, "房间ID不合法")
+		s.sendKick(from, t.KickInvalidRoom)
 		return
 	}
 
 	// Per-IP registration rate limit
 	clientIP := from.IP.String()
 	if !s.checkRegRate(clientIP) {
-		s.sendKick(from, "注册过于频繁，请稍后再试")
+		s.sendKick(from, t.KickRateLimit)
 		return
 	}
 
@@ -44,7 +47,7 @@ func (s *Server) handleRegister(payload []byte, from *net.UDPAddr) {
 	// Auth in progress: same address already registered and pending auth
 	if existing := s.addrMap[fromKey]; existing != nil && existing.auth == authChallengeSent {
 		s.mu.Unlock()
-		s.sendKick(from, "认证进行中，请等待")
+		s.sendKick(from, t.KickAuthPending)
 		return
 	}
 
@@ -61,21 +64,18 @@ func (s *Server) handleRegister(payload []byte, from *net.UDPAddr) {
 	// Capacity check
 	if len(s.clients) >= s.maxPlayers {
 		s.mu.Unlock()
-		s.sendKick(from, "房间已满")
+		s.sendKick(from, t.KickRoomFull)
 		return
 	}
 
 	// ====== Duplicate username detection ======
-	// Reject if any authenticated client in the same room already uses this name.
-	// This prevents confusion when a user accidentally launches a second instance
-	// that somehow bypasses the local single-instance lock (e.g., different binary path).
 	for _, c := range s.clients {
 		if c.auth == authNone || c.auth == authChallengeSent {
-			continue // skip unauthenticated/pending entries
+			continue
 		}
 		if c.authRoomID == reg.RoomID && c.Username == reg.Username {
 			s.mu.Unlock()
-			s.sendKick(from, "同房间内已存在相同用户名的玩家，请更换用户名")
+			s.sendKick(from, t.KickDuplicateName)
 			return
 		}
 	}
@@ -89,7 +89,7 @@ func (s *Server) handleRegister(payload []byte, from *net.UDPAddr) {
 	// Password required: check pending auth flood limit
 	if s.pendingAuth >= s.maxPending {
 		s.mu.Unlock()
-		s.sendKick(from, "服务器繁忙，请稍后重试")
+		s.sendKick(from, t.KickServerBusy)
 		return
 	}
 
@@ -100,10 +100,11 @@ func (s *Server) handleRegister(payload []byte, from *net.UDPAddr) {
 // registerClientLocked completes registration. MUST be called with s.mu held.
 // Releases s.mu before returning.
 func (s *Server) registerClientLocked(reg *protocol.RegisterPayload, from *net.UDPAddr) {
+	t := i18n.T()
 	vip := s.nextAvailableIP()
 	if vip == nil {
 		s.mu.Unlock()
-		s.sendKick(from, "IP已分配完")
+		s.sendKick(from, t.KickIPExhausted)
 		return
 	}
 
@@ -118,27 +119,25 @@ func (s *Server) registerClientLocked(reg *protocol.RegisterPayload, from *net.U
 	}
 	s.clients[ip4Key(vip)] = c
 	s.addrMap[addrToRateKey(from)] = c
-	log.Printf("[+] %s (%s) → %s  [在线: %d]",
-		reg.Username, from, vip, len(s.clients))
+	log.Printf(t.LogPlayerJoin, reg.Username, from, vip, len(s.clients))
 
 	selfIP := vip
 	s.mu.Unlock()
 
 	s.sendAssignIP(selfIP, from)
-	// Send full peer list to new player immediately (for hole punching)
 	s.sendPeerInfoToClient(from)
-	// Mark dirty so existing players learn about the new player within peerInfoInterval
 	s.peerInfoDirty.Store(true)
 }
 
 // sendAuthChallengeLocked sends auth challenge. MUST be called with s.mu held.
 // Releases s.mu before returning.
 func (s *Server) sendAuthChallengeLocked(reg *protocol.RegisterPayload, from *net.UDPAddr) {
+	t := i18n.T()
 	challenge, err := auth.GenerateChallenge()
 	if err != nil {
 		s.mu.Unlock()
-		log.Printf("[auth] 生成 challenge 失败: %v", err)
-		s.sendKick(from, "服务器内部错误")
+		log.Printf(t.LogChallengeFail, err)
+		s.sendKick(from, t.KickInternalError)
 		return
 	}
 
@@ -170,13 +169,15 @@ func (s *Server) handleAuthResponse(payload []byte, from *net.UDPAddr) {
 		return
 	}
 
+	t := i18n.T()
+
 	s.mu.Lock()
 	fromKey := addrToRateKey(from)
 	c := s.addrMap[fromKey]
 
 	if c == nil || c.auth != authChallengeSent {
 		s.mu.Unlock()
-		s.sendKick(from, "认证状态异常")
+		s.sendKick(from, t.KickAuthAbnormal)
 		return
 	}
 
@@ -185,7 +186,7 @@ func (s *Server) handleAuthResponse(payload []byte, from *net.UDPAddr) {
 		delete(s.addrMap, fromKey)
 		s.pendingAuth--
 		s.mu.Unlock()
-		s.sendKick(from, "认证超时")
+		s.sendKick(from, t.KickAuthTimeout)
 		return
 	}
 
@@ -195,7 +196,7 @@ func (s *Server) handleAuthResponse(payload []byte, from *net.UDPAddr) {
 		delete(s.addrMap, fromKey)
 		s.pendingAuth--
 		s.mu.Unlock()
-		s.sendKick(from, "服务器内部错误")
+		s.sendKick(from, t.KickInternalError)
 		return
 	}
 
@@ -203,20 +204,20 @@ func (s *Server) handleAuthResponse(payload []byte, from *net.UDPAddr) {
 		delete(s.addrMap, fromKey)
 		s.pendingAuth--
 		s.mu.Unlock()
-		log.Printf("[auth] 认证失败: %s (%s)", resp.Username, from)
-		s.sendKick(from, "密码错误")
+		log.Printf(t.LogAuthFail, resp.Username, from)
+		s.sendKick(from, t.KickWrongPassword)
 		return
 	}
 
 	// Auth passed — complete registration
-	log.Printf("[auth] 认证通过: %s (%s)", resp.Username, from)
+	log.Printf(t.LogAuthPass, resp.Username, from)
 
 	delete(s.addrMap, fromKey)
 	s.pendingAuth--
 
 	if len(s.clients) >= s.maxPlayers {
 		s.mu.Unlock()
-		s.sendKick(from, "房间已满")
+		s.sendKick(from, t.KickRoomFull)
 		return
 	}
 
@@ -227,7 +228,7 @@ func (s *Server) handleAuthResponse(payload []byte, from *net.UDPAddr) {
 		}
 		if existing.authRoomID == resp.RoomID && existing.Username == resp.Username {
 			s.mu.Unlock()
-			s.sendKick(from, "同房间内已存在相同用户名的玩家，请更换用户名")
+			s.sendKick(from, t.KickDuplicateName)
 			return
 		}
 	}

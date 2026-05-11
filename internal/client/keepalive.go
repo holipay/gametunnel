@@ -6,6 +6,7 @@ import (
 	"net"
 	"time"
 
+	"github.com/holipay/gametunnel/internal/i18n"
 	"github.com/holipay/gametunnel-protocol/protocol"
 )
 
@@ -66,12 +67,12 @@ func (t *Tunnel) startHolePunch(ctx context.Context, peerIP net.IP) {
 		// If peer is already reachable via P2P after this phase, stop early.
 		// This is checked by seeing if we've received any direct data from them.
 		if t.hasDirectPeerTraffic(peerIP) {
-			log.Printf("[tunnel] P2P 打洞成功 (phase %d): %s", phase+1, peerIP)
+			log.Printf(i18n.T().LogP2PSuccess, phase+1, peerIP)
 			return
 		}
 	}
 
-	log.Printf("[tunnel] P2P 打洞完成（未确认直通），将通过中继通信: %s", peerIP)
+	log.Printf(i18n.T().LogP2PFailed, peerIP)
 }
 
 // handleHolePunchReceived processes an incoming hole punch request (bidirectional).
@@ -146,7 +147,7 @@ func (t *Tunnel) keepaliveLoop(ctx context.Context) {
 			// Check if server is still alive
 			lastSeen := t.lastServerResponse.Load()
 			if lastSeen != nil && time.Since(*lastSeen) > serverTimeout {
-				log.Printf("[tunnel] 服务器无响应超过 %v，连接可能已断开", serverTimeout)
+				log.Printf(i18n.T().LogServerTimeout, serverTimeout)
 				// Don't cancel ctx here — let the outer connectLoop handle reconnection.
 				// The ReadFromUDP goroutine will eventually fail and exit.
 			}
@@ -195,7 +196,7 @@ func (t *Tunnel) cleanStalePeers() {
 	for key, peer := range t.peers {
 		lastSeen := peer.lastSeen.Load()
 		if lastSeen != nil && now.Sub(*lastSeen) > stalePeerGracePeriod {
-			log.Printf("[tunnel] 清理过期玩家: %s (%s) — 超过 %v 未响应",
+			log.Printf(i18n.T().LogCleanPeer,
 				peer.Username, peer.VirtualIP, stalePeerGracePeriod)
 			delete(t.peers, key)
 		}
@@ -235,7 +236,7 @@ func (t *Tunnel) retryFailedHolePunches(ctx context.Context) {
 		return
 	}
 
-	log.Printf("[tunnel] 重试打洞: %d 个未直通的玩家", len(retryPeers))
+	log.Printf(i18n.T().LogRetryPunch, len(retryPeers))
 	for _, peerIP := range retryPeers {
 		go t.startHolePunch(ctx, peerIP)
 	}

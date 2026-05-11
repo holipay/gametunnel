@@ -5,6 +5,8 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+
+	"github.com/holipay/gametunnel/internal/i18n"
 )
 
 // SetupLog configures logging to both file and stderr (tee).
@@ -20,6 +22,6 @@ func SetupLog() *os.File {
 		return os.Stderr
 	}
 	log.SetOutput(io.MultiWriter(f, os.Stderr))
-	log.Printf("=== GameTunnel 启动 ===")
+	log.Printf(i18n.T().RunStartup)
 	return f
 }

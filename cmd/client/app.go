@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/holipay/gametunnel/internal/client"
+	"github.com/holipay/gametunnel/internal/i18n"
 )
 
 // App wraps the tunnel with HTTP API and status tracking.
@@ -126,7 +127,7 @@ func (a *App) Connect(cfg *client.Config) {
 	a.ctx, a.cancel = context.WithCancel(context.Background())
 
 	if err := client.SaveConfig(cfg); err != nil {
-		log.Printf("[app] 保存配置失败: %v", err)
+		log.Printf(i18n.T().AppSaveFail, err)
 	}
 
 	go a.connectLoop()
@@ -232,13 +233,13 @@ func (a *App) connectLoop() {
 			a.lastErr = err.Error()
 			a.connected = false
 			a.mu.Unlock()
-			log.Printf("[app] 连接断开: %v", err)
+			log.Printf(i18n.T().AppDisconnectErr, err)
 		} else {
 			a.mu.Lock()
 			a.connected = false
 			a.lastErr = ""
 			a.mu.Unlock()
-			log.Printf("[app] 连接断开")
+			log.Printf(i18n.T().AppDisconnected)
 		}
 	}
 }

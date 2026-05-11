@@ -1,4 +1,4 @@
-// GameTunnel Server — 局域网游戏隧道
+// GameTunnel Server — LAN Gaming Tunnel
 //
 // Usage:
 //
@@ -16,6 +16,7 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/holipay/gametunnel/internal/i18n"
 	"github.com/holipay/gametunnel/internal/server"
 	"github.com/holipay/gametunnel/internal/singleinstance"
 )
@@ -24,12 +25,13 @@ import (
 var Version = "dev"
 
 func main() {
-	addr := flag.String("addr", ":4700", "监听地址 (UDP)")
-	subnetStr := flag.String("subnet", "10.10.0.0/24", "虚拟子网 (CIDR)")
-	maxPlayers := flag.Int("max", 10, "最大玩家数")
-	roomPass := flag.String("password", "", "房间密码（留空=无认证）")
-	statusAddr := flag.String("status-addr", "", "状态页面地址 (HTTP)，如 :4701")
-	versionFlag := flag.Bool("version", false, "显示版本")
+	addr := flag.String("addr", ":4700", "listen address (UDP)")
+	subnetStr := flag.String("subnet", "10.10.0.0/24", "virtual subnet (CIDR)")
+	maxPlayers := flag.Int("max", 10, "max players")
+	roomPass := flag.String("password", "", "room password (empty = no auth)")
+	statusAddr := flag.String("status-addr", "", "status page address (HTTP), e.g. :4701")
+	langFlag := flag.String("lang", "zh", "language (zh or en)")
+	versionFlag := flag.Bool("version", false, "show version")
 	flag.Parse()
 
 	if *versionFlag {
@@ -37,28 +39,33 @@ func main() {
 		os.Exit(0)
 	}
 
+	// Set language
+	i18n.Set(i18n.ParseLang(*langFlag))
+	t := i18n.T()
+
 	// ====== Single-instance check ======
 	lock, err := singleinstance.Acquire("GameTunnel-Server")
 	if err != nil {
-		log.Fatalf("检测到已有实例运行中: %v\n请先关闭已有的 GameTunnel 服务端再重试。", err)
+		log.Fatalf(t.ServerInstRunning, err)
 	}
 	defer lock.Close()
 
 	_, subnet, err := net.ParseCIDR(*subnetStr)
 	if err != nil {
-		log.Fatalf("子网解析失败 %s: %v", *subnetStr, err)
+		log.Fatalf(t.ServerSubnetFail, *subnetStr, err)
 	}
 
 	s, err := server.New(server.Config{
-		Addr:        *addr,
-		Subnet:      subnet,
-		MaxPlayers:  *maxPlayers,
-		RoomPass:    *roomPass,
-		StatusAddr:  *statusAddr,
-		Version:     Version,
+		Addr:       *addr,
+		Subnet:     subnet,
+		MaxPlayers: *maxPlayers,
+		RoomPass:   *roomPass,
+		StatusAddr: *statusAddr,
+		Version:    Version,
+		Lang:       i18n.ParseLang(*langFlag),
 	})
 	if err != nil {
-		log.Fatalf("启动失败: %v", err)
+		log.Fatalf(t.ServerStartFail, err)
 	}
 
 	// Graceful shutdown
@@ -70,29 +77,29 @@ func main() {
 
 	go func() {
 		sig := <-sigCh
-		log.Printf("收到信号 %v，正在关闭...", sig)
+		log.Printf(t.ServerSignal, sig)
 		cancel()
 		s.Close()
 	}()
 
 	// Print banner
-	authStatus := "无认证"
+	authStatus := t.ServerNoAuth
 	if *roomPass != "" {
-		authStatus = "HMAC 认证 (基于房间ID)"
+		authStatus = t.ServerHMACAuth
 	}
 	log.Printf("════════════════════════════════════════════════════════════")
-	log.Printf("▎         GameTunnel Server 局域网游戏隧道                ▎")
+	log.Printf(t.ServerBanner)
 	log.Printf("════════════════════════════════════════════════════════════")
-	log.Printf("▎  地址：   %-31s ▎", *addr)
-	log.Printf("▎  子网：   %-31s ▎", subnet.String())
-	log.Printf("▎  最大玩家：  %-31d ▎", *maxPlayers)
-	log.Printf("▎  认证：   %-31s ▎", authStatus)
-	log.Printf("▎  版本：   %-31s ▎", Version)
+	log.Printf("▎  %-7s %-31s ▎", t.ServerAddr+":", *addr)
+	log.Printf("▎  %-7s %-31s ▎", t.ServerSubnet+":", subnet.String())
+	log.Printf("▎  %-7s %-31d ▎", t.ServerMaxPlayers+":", *maxPlayers)
+	log.Printf("▎  %-7s %-31s ▎", t.ServerAuth+":", authStatus)
+	log.Printf("▎  %-7s %-31s ▎", t.ServerVersion+":", Version)
 	if *statusAddr != "" {
-		log.Printf("▎  状态页：   %-31s ▎", fmt.Sprintf("http://%s", *statusAddr))
+		log.Printf("▎  %-7s %-31s ▎", t.ServerStatusPage+":", fmt.Sprintf("http://%s", *statusAddr))
 	}
 	log.Printf("════════════════════════════════════════════════════════════")
 
 	s.Run(ctx)
-	log.Println("服务器已关闭")
+	log.Println(t.ServerShutdown)
 }

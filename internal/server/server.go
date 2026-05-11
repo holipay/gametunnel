@@ -15,6 +15,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/holipay/gametunnel/internal/i18n"
 	"github.com/holipay/gametunnel-protocol/auth"
 	"github.com/holipay/gametunnel-protocol/protocol"
 )
@@ -66,6 +67,7 @@ type Server struct {
 	roomPass   string   // room password (empty = no auth)
 	statusAddr string   // HTTP status address, empty = disabled
 	version    string
+	lang       i18n.Lang
 	startTime  time.Time
 
 	// Worker pool
@@ -111,6 +113,7 @@ type Config struct {
 	RoomPass   string
 	StatusAddr string // HTTP status address (e.g. ":4701"), empty = disabled
 	Version    string
+	Lang       i18n.Lang
 }
 
 // New creates a new Server. Call Run() to start it.
@@ -129,7 +132,7 @@ func New(cfg Config) (*Server, error) {
 	ones, bits := cfg.Subnet.Mask.Size()
 	if bits != 32 || ones != 24 {
 		conn.Close()
-		return nil, fmt.Errorf("子网必须是 /24 (当前: /%d)", ones)
+		return nil, fmt.Errorf(i18n.T().ServerSubnetMust, ones)
 	}
 
 	serverIP := make(net.IP, 4)
@@ -165,6 +168,7 @@ func New(cfg Config) (*Server, error) {
 		roomPass:    cfg.RoomPass,
 		statusAddr:  cfg.StatusAddr,
 		version:     cfg.Version,
+		lang:        cfg.Lang,
 		startTime:   time.Now(),
 		workers:     workers,
 		pktCh:       make(chan pktJob, chanBuf),
@@ -343,7 +347,7 @@ func (s *Server) keepaliveLoop(ctx context.Context) {
 		changed := false
 		for _, key := range staleClients {
 			if c, ok := s.clients[key]; ok && now.Sub(c.LastSeen) > 45*time.Second {
-				log.Printf("[-] %s (%s) 超时断开", c.Username, c.VirtualIP)
+				log.Printf(i18n.T().ServerPeerLeave, c.Username, c.VirtualIP)
 				s.markIPFree(c.VirtualIP)
 				delete(s.clients, key)
 				delete(s.addrMap, addrToRateKey(c.PublicAddr))
@@ -370,9 +374,8 @@ func (s *Server) sendChecked(typ byte, payload []byte, to *net.UDPAddr) {
 	data := protocol.EncodeChecked(typ, payload)
 	if _, err := s.conn.WriteToUDP(data, to); err != nil {
 		n := s.sendErrors.Add(1)
-		// 指数退避记录: 第1、2、4、8...次（2的幂次）记录日志
 		if n&(n-1) == 0 {
-			log.Printf("[server] 发送失败 (累计%d次): %v", n, err)
+			log.Printf(i18n.T().ServerSendFail, n, err)
 		}
 	}
 }
@@ -381,7 +384,7 @@ func (s *Server) sendCheckedRaw(data []byte, to *net.UDPAddr) {
 	if _, err := s.conn.WriteToUDP(data, to); err != nil {
 		n := s.sendErrors.Add(1)
 		if n&(n-1) == 0 {
-			log.Printf("[server] 发送失败 (累计%d次): %v", n, err)
+			log.Printf(i18n.T().ServerSendFail, n, err)
 		}
 	}
 }

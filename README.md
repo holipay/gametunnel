@@ -58,6 +58,7 @@ server=1.2.3.4:4700
 name=玩家名
 room=default
 password=
+lang=zh
 ```
 
 连接成功后，打开游戏进入局域网模式即可。
@@ -134,6 +135,7 @@ gtunnel-server -addr :4700 -subnet 10.10.0.0/24 -max 10 -password secret
 | `-max` | `10` | 最大玩家数 |
 | `-password` | _(空)_ | 房间密码（留空=无认证） |
 | `-status-addr` | _(禁用)_ | 状态页面地址 (HTTP)，如 `:4701` |
+| `-lang` | `zh` | 语言（`zh` 中文 / `en` 英文） |
 | `-version` | | 显示版本 |
 
 ### 客户端
@@ -150,6 +152,8 @@ gtunnel-client -server 1.2.3.4:4700 -name 玩家名 -room 房间ID -password sec
 | `-version` | | 显示版本 |
 
 配置文件优先级：`config.ini`（exe 同目录）> `%APPDATA%\GameTunnel\config.json`
+
+配置文件支持 `lang` 字段设置语言：`zh`（中文，默认）或 `en`（英文）。
 
 ## 防火墙
 

@@ -14,6 +14,7 @@ type Config struct {
 	PlayerName   string
 	RoomID       string
 	RoomPassword string
+	Lang         string // "zh" or "en", default "zh"
 }
 
 // exeDir returns the directory containing the executable.
@@ -76,6 +77,8 @@ func SaveConfig(cfg *Config) error {
 	fmt.Fprintf(&b, "room=%s\n", cfg.RoomID)
 	fmt.Fprintln(&b, "# Password (leave empty if none)")
 	fmt.Fprintf(&b, "password=%s\n", cfg.RoomPassword)
+	fmt.Fprintln(&b, "# Language (zh or en)")
+	fmt.Fprintf(&b, "lang=%s\n", cfg.Lang)
 	return os.WriteFile(path, []byte(b.String()), 0644)
 }
 
@@ -120,6 +123,10 @@ func loadINI(path string, cfg *Config) bool {
 			}
 		case "password":
 			cfg.RoomPassword = value
+		case "lang":
+			if value != "" {
+				cfg.Lang = value
+			}
 		}
 	}
 	return true
@@ -137,6 +144,7 @@ func loadJSON(path string, cfg *Config) {
 		RoomID       string `json:"room_id"`
 		RoomPassword string `json:"room_password,omitempty"`
 		AutoConnect  *bool  `json:"auto_connect,omitempty"`
+		Lang         string `json:"lang,omitempty"`
 	}
 	var r raw
 	if json.Unmarshal(data, &r) == nil {
@@ -150,5 +158,8 @@ func loadJSON(path string, cfg *Config) {
 			cfg.RoomID = r.RoomID
 		}
 		cfg.RoomPassword = r.RoomPassword
+		if r.Lang != "" {
+			cfg.Lang = r.Lang
+		}
 	}
 }

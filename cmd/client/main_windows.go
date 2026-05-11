@@ -11,11 +11,12 @@ import (
 	"golang.org/x/sys/windows"
 
 	"github.com/holipay/gametunnel/internal/client"
+	"github.com/holipay/gametunnel/internal/i18n"
 	"github.com/holipay/gametunnel/internal/tun"
 )
 
 var (
-	kernel32          = syscall.NewLazyDLL("kernel32.dll")
+	kernel32             = syscall.NewLazyDLL("kernel32.dll")
 	procGetConsoleWindow = kernel32.NewProc("GetConsoleWindow")
 	user32               = syscall.NewLazyDLL("user32.dll")
 	procShowWindow       = user32.NewProc("ShowWindow")
@@ -32,6 +33,11 @@ func main() {
 
 	// Load config
 	cfg := client.LoadConfig()
+
+	// Set language from config
+	if cfg.Lang != "" {
+		i18n.Set(i18n.ParseLang(cfg.Lang))
+	}
 
 	// Parse server public IP for route exclusion
 	serverPublicIP := parseHostIP(cfg.ServerAddr)
@@ -75,7 +81,7 @@ func requestAdmin() {
 	exePath, _ := windows.UTF16PtrFromString(exe)
 
 	if err := windows.ShellExecute(0, verb, exePath, nil, nil, windows.SW_SHOWNORMAL); err != nil {
-		fmt.Fprintf(os.Stderr, "  无法提升权限: %v\n", err)
+		fmt.Fprintf(os.Stderr, "  Failed to elevate: %v\n", err)
 		os.Exit(1)
 	}
 
@@ -85,7 +91,7 @@ func requestAdmin() {
 // parseHostIP extracts the IP from a "host:port" address string.
 // Returns nil if parsing fails.
 func parseHostIP(addr string) net.IP {
-	host, _, err := net.SplitHostPort(addr)
+	host, err := net.SplitHostPort(addr)
 	if err != nil {
 		// Try as bare IP
 		return net.ParseIP(addr)

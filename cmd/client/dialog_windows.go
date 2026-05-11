@@ -11,6 +11,7 @@ import (
 	"golang.org/x/sys/windows"
 
 	"github.com/holipay/gametunnel/internal/client"
+	"github.com/holipay/gametunnel/internal/i18n"
 )
 
 var (
@@ -130,7 +131,7 @@ func showConfigDialog(statusText string) bool {
 	// Build a minimal DLGTEMPLATE with zero controls.
 	// All child controls are created via CreateWindowEx in WM_INITDIALOG,
 	// which avoids all template-parsing compatibility issues.
-	tmpl := buildDialogTemplate(260, 180, "GameTunnel 设置")
+	tmpl := buildDialogTemplate(260, 180, i18n.T().DlgTitle)
 	defer runtime.KeepAlive(tmpl)
 
 	ret, _, err := procDialogBoxIndirectParam.Call(
@@ -152,6 +153,7 @@ func configDialogProc(cfg *client.Config, hFont uintptr, statusText string) func
 		switch msg {
 		case WM_INITDIALOG:
 			log.Printf("[dialog] WM_INITDIALOG hwnd=%x", hwnd)
+			s := i18n.T()
 
 			// ── Layout (all values in DLU) ──
 			margin := 7
@@ -161,24 +163,24 @@ func configDialogProc(cfg *client.Config, hFont uintptr, statusText string) func
 			rowH := 14
 			gap := 8
 
-			// Row 1: 服务器地址
+			// Row 1: Server address
 			y1 := 15
-			makeCtl("STATIC", "服务器地址:", 0, margin, y1, labelW, rowH, hwnd, 0)
+			makeCtl("STATIC", s.DlgServerAddr, 0, margin, y1, labelW, rowH, hwnd, 0)
 			makeCtl("EDIT", "", WS_TABSTOP|WS_BORDER|ES_AUTOHSCROLL, editX, y1, editW, rowH, hwnd, IDC_SERVER)
 
-			// Row 2: 玩家名称
+			// Row 2: Player name
 			y2 := y1 + rowH + gap
-			makeCtl("STATIC", "玩家名称:", 0, margin, y2, labelW, rowH, hwnd, 0)
+			makeCtl("STATIC", s.DlgPlayerName, 0, margin, y2, labelW, rowH, hwnd, 0)
 			makeCtl("EDIT", "", WS_TABSTOP|WS_BORDER|ES_AUTOHSCROLL, editX, y2, editW, rowH, hwnd, IDC_NAME)
 
-			// Row 3: 房间 ID
+			// Row 3: Room ID
 			y3 := y2 + rowH + gap
-			makeCtl("STATIC", "房间 ID:", 0, margin, y3, labelW, rowH, hwnd, 0)
+			makeCtl("STATIC", s.DlgRoomID, 0, margin, y3, labelW, rowH, hwnd, 0)
 			makeCtl("EDIT", "", WS_TABSTOP|WS_BORDER|ES_AUTOHSCROLL, editX, y3, editW, rowH, hwnd, IDC_ROOM)
 
-			// Row 4: 密码
+			// Row 4: Password
 			y4 := y3 + rowH + gap
-			makeCtl("STATIC", "密码:", 0, margin, y4, labelW, rowH, hwnd, 0)
+			makeCtl("STATIC", s.DlgPassword, 0, margin, y4, labelW, rowH, hwnd, 0)
 			makeCtl("EDIT", "", WS_TABSTOP|WS_BORDER|ES_AUTOHSCROLL|ES_PASSWORD, editX, y4, editW, rowH, hwnd, IDC_PASSWORD)
 
 			// Status label
@@ -190,8 +192,8 @@ func configDialogProc(cfg *client.Config, hFont uintptr, statusText string) func
 			btnW := 40
 			btnGap := 10
 			btnX := (260 - btnW*2 - btnGap) / 2
-			makeCtl("BUTTON", "确定", BS_DEFPUSHBUTTON|WS_TABSTOP, btnX, btnY, btnW, 14, hwnd, IDOK)
-			makeCtl("BUTTON", "取消", BS_PUSHBUTTON|WS_TABSTOP, btnX+btnW+btnGap, btnY, btnW, 14, hwnd, IDCANCEL)
+			makeCtl("BUTTON", s.DlgOK, BS_DEFPUSHBUTTON|WS_TABSTOP, btnX, btnY, btnW, 14, hwnd, IDOK)
+			makeCtl("BUTTON", s.DlgCancel, BS_PUSHBUTTON|WS_TABSTOP, btnX+btnW+btnGap, btnY, btnW, 14, hwnd, IDCANCEL)
 
 			// Apply font to every control.
 			if hFont != 0 {

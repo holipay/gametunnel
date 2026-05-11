@@ -6,6 +6,7 @@ import (
 	"net"
 	"time"
 
+	"github.com/holipay/gametunnel/internal/i18n"
 	"github.com/holipay/gametunnel-protocol/protocol"
 )
 
@@ -33,7 +34,7 @@ func (s *Server) handleDisconnect(from *net.UDPAddr) {
 		s.mu.Unlock()
 		return
 	}
-	log.Printf("[-] %s (%s) 主动断开", c.Username, c.VirtualIP)
+	log.Printf(i18n.T().LogPlayerLeave, c.Username, c.VirtualIP)
 	if c.auth == authChallengeSent {
 		s.pendingAuth--
 	} else {

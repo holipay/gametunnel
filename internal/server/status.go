@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/holipay/gametunnel/internal/i18n"
 )
 
 // StatusInfo is the JSON response from the status API.
@@ -53,9 +55,9 @@ func (s *Server) startStatusServer(ctx context.Context, addr string) {
 	}
 
 	go func() {
-		log.Printf("[status] 状态页面: http://%s", addr)
+		log.Printf(i18n.T().ServerStatusLog, addr)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Printf("[status] HTTP 服务启动失败: %v", err)
+			log.Printf(i18n.T().ServerStatusFail, err)
 		}
 	}()
 
@@ -72,11 +74,41 @@ func (s *Server) handleStatusJSON(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(info)
 }
 
-var statusTmpl = template.Must(template.New("status").Parse(`<!DOCTYPE html>
+func (s *Server) handleStatusHTML(w http.ResponseWriter, r *http.Request) {
+	info := s.buildStatusInfo()
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+
+	t := i18n.T()
+	tmplData := struct {
+		*StatusInfo
+		T *i18n.Strings
+	}{StatusInfo: &info, T: t}
+
+	if err := getStatusTmpl(s.lang).Execute(w, tmplData); err != nil {
+		log.Printf(i18n.T().ServerTmplFail, err)
+	}
+}
+
+var statusTmplCache struct {
+	lang i18n.Lang
+	tmpl *template.Template
+}
+
+func getStatusTmpl(lang i18n.Lang) *template.Template {
+	if statusTmplCache.tmpl != nil && statusTmplCache.lang == lang {
+		return statusTmplCache.tmpl
+	}
+	tmpl := template.Must(template.New("status").Parse(statusHTML))
+	statusTmplCache.lang = lang
+	statusTmplCache.tmpl = tmpl
+	return tmpl
+}
+
+const statusHTML = `<!DOCTYPE html>
 <html>
 <head>
 <meta charset="utf-8">
-<title>GameTunnel Server</title>
+<title>{{.T.StatusTitle}}</title>
 <meta http-equiv="refresh" content="5">
 <style>
   body { font-family: -apple-system, "Segoe UI", sans-serif; max-width: 600px; margin: 40px auto; padding: 0 20px; background: #1a1a2e; color: #e0e0e0; }
@@ -91,41 +123,34 @@ var statusTmpl = template.Must(template.New("status").Parse(`<!DOCTYPE html>
 </style>
 </head>
 <body>
-<h1>🎮 GameTunnel Server</h1>
+<h1>🎮 {{.T.StatusTitle}}</h1>
 <div>
-  <div class="stat"><div class="num">{{.Players}}/{{.MaxPlayers}}</div><div class="label">玩家</div></div>
-  <div class="stat"><div class="num">{{.Uptime}}</div><div class="label">运行时间</div></div>
-  <div class="stat"><div class="num">{{.Version}}</div><div class="label">版本</div></div>
+  <div class="stat"><div class="num">{{.Players}}/{{.MaxPlayers}}</div><div class="label">{{.T.StatusPlayers}}</div></div>
+  <div class="stat"><div class="num">{{.Uptime}}</div><div class="label">{{.T.StatusUptime}}</div></div>
+  <div class="stat"><div class="num">{{.Version}}</div><div class="label">{{.T.StatusVersion}}</div></div>
 </div>
 {{if .Connections}}
-<table><tr><th>玩家</th><th>虚拟 IP</th><th>地址</th><th>延迟</th><th>空闲</th></tr>
+<table><tr><th>{{.T.StatusTablePlayer}}</th><th>{{.T.StatusTableVIP}}</th><th>{{.T.StatusTableAddr}}</th><th>{{.T.StatusTablePing}}</th><th>{{.T.StatusTableIdle}}</th></tr>
 {{range .Connections}}<tr><td>{{.Username}}</td><td>{{.VirtualIP}}</td><td>{{.PublicAddr}}</td><td>{{.Ping}}</td><td>{{.Idle}}</td></tr>
 {{end}}</table>
 {{else}}
-<p style="color:#666">暂无玩家连接</p>
+<p style="color:#666">{{.T.StatusNoPlayers}}</p>
 {{end}}
-<div class="meta">{{.Subnet}} · {{.ServerIP}} · {{if .HasAuth}}HMAC 认证{{else}}无认证{{end}}</div>
-</body></html>`))
-
-func (s *Server) handleStatusHTML(w http.ResponseWriter, r *http.Request) {
-	info := s.buildStatusInfo()
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	if err := statusTmpl.Execute(w, info); err != nil {
-		log.Printf("[status] 模板渲染失败: %v", err)
-	}
-}
+<div class="meta">{{.Subnet}} · {{.ServerIP}} · {{if .HasAuth}}{{.T.StatusAuthHMAC}}{{else}}{{.T.StatusAuthNone}}{{end}}</div>
+</body></html>`
 
 func (s *Server) buildStatusInfo() StatusInfo {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
+	t := i18n.T()
 	now := time.Now()
 	conns := make([]ConnectionInfo, 0, len(s.clients))
 	for _, c := range s.clients {
 		idle := now.Sub(c.LastSeen)
-		idleStr := "刚刚"
+		idleStr := t.StatusJustNow
 		if idle > time.Second {
-			idleStr = fmt.Sprintf("%ds前", int(idle.Seconds()))
+			idleStr = fmt.Sprintf(t.StatusSecAgo, int(idle.Seconds()))
 		}
 		pubAddr := ""
 		if c.PublicAddr != nil {

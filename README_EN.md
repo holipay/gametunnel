@@ -58,6 +58,7 @@ server=1.2.3.4:4700
 name=PlayerName
 room=default
 password=
+lang=en
 ```
 
 Once connected, launch your game and enter LAN mode.
@@ -134,6 +135,7 @@ gtunnel-server -addr :4700 -subnet 10.10.0.0/24 -max 10 -password secret
 | `-max` | `10` | Max players |
 | `-password` | _(empty)_ | Room password (empty = no auth) |
 | `-status-addr` | _(disabled)_ | HTTP status page address, e.g. `:4701` |
+| `-lang` | `zh` | Language (`zh` Chinese / `en` English) |
 | `-version` | | Show version |
 
 ### Client
@@ -150,6 +152,8 @@ gtunnel-client -server 1.2.3.4:4700 -name PlayerName -room roomID -password secr
 | `-version` | | Show version |
 
 Config file priority: `config.ini` (same directory as exe) > `%APPDATA%\GameTunnel\config.json`
+
+The config file supports a `lang` field to set the language: `zh` (Chinese, default) or `en` (English).
 
 ## Firewall
 

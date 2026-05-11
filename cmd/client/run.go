@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 
 	"github.com/holipay/gametunnel/internal/client"
+	"github.com/holipay/gametunnel/internal/i18n"
 )
 
 // run is the cross-platform entry point. It sets up logging, firewall,
@@ -23,7 +24,7 @@ func run(cfg *client.Config, tunFactory func(client.TunConfig) (client.TunDevice
 
 	// Auto-connect if server is configured
 	if cfg.ServerAddr != "" {
-		log.Printf("[app] 自动连接到 %s", cfg.ServerAddr)
+		log.Printf(i18n.T().AppAutoConnect, cfg.ServerAddr)
 		app.Connect(cfg)
 	}
 
@@ -42,7 +43,7 @@ func setupLog() *os.File {
 		return os.Stderr
 	}
 	log.SetOutput(io.MultiWriter(f, os.Stderr))
-	log.Printf("=== GameTunnel 启动 ===")
+	log.Printf(i18n.T().RunStartup)
 	return f
 }
 

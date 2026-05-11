@@ -9,6 +9,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/holipay/gametunnel/internal/i18n"
 	"github.com/holipay/gametunnel-protocol/protocol"
 )
 
@@ -102,7 +103,7 @@ func (t *Tunnel) Connect(ctx context.Context, serverAddr string, mtu int, newTUN
 
 	sAddr, err := net.ResolveUDPAddr("udp4", serverAddr)
 	if err != nil {
-		return fmt.Errorf("服务器地址无效: %w", err)
+		return fmt.Errorf(i18n.T().ErrInvalidServer, err)
 	}
 	t.serverAddr = sAddr
 
@@ -111,13 +112,13 @@ func (t *Tunnel) Connect(ctx context.Context, serverAddr string, mtu int, newTUN
 
 	conn, err := net.ListenUDP("udp4", &net.UDPAddr{})
 	if err != nil {
-		return fmt.Errorf("绑定 UDP 失败: %w", err)
+		return fmt.Errorf(i18n.T().ErrBindUDP, err)
 	}
 	t.conn = conn
 
 	if err := t.register(ctx); err != nil {
 		conn.Close()
-		return fmt.Errorf("注册失败: %w", err)
+		return fmt.Errorf(i18n.T().ErrRegisterFailed, err)
 	}
 
 	// ── TUN device: reuse or create ─────────────────────────────────
@@ -126,12 +127,10 @@ func (t *Tunnel) Connect(ctx context.Context, serverAddr string, mtu int, newTUN
 
 	switch {
 	case tunAlive && !ipChanged:
-		// Best case: TUN is alive and IP didn't change — reuse as-is.
-		log.Printf("[tunnel] 复用 TUN 设备 (IP %s 未变)", t.virtualIP)
+		log.Printf(i18n.T().LogReuseTUN, t.virtualIP)
 
 	case tunAlive && ipChanged:
-		// IP changed — must recreate TUN with new IP/routes.
-		log.Printf("[tunnel] IP 变更 %s → %s，重建 TUN 设备", t.lastAssignedIP, t.virtualIP)
+		log.Printf(i18n.T().LogIPChanged, t.lastAssignedIP, t.virtualIP)
 		t.tunDev.Close()
 		t.tunDev = nil
 		if err := t.createTUN(mtu); err != nil {
@@ -152,7 +151,7 @@ func (t *Tunnel) Connect(ctx context.Context, serverAddr string, mtu int, newTUN
 	var once sync.Once
 	onGoroutineExit := func(name string) {
 		once.Do(func() {
-			log.Printf("[tunnel] %s 退出，断开连接", name)
+			log.Printf(i18n.T().LogPeerExit, name)
 			runCancel()
 		})
 	}
@@ -184,7 +183,7 @@ func (t *Tunnel) Connect(ctx context.Context, serverAddr string, mtu int, newTUN
 
 	<-runCtx.Done()
 
-	log.Printf("[tunnel] 断开连接")
+	log.Printf(i18n.T().LogTunnelDisconnect)
 	return nil
 }
 
@@ -199,7 +198,7 @@ func (t *Tunnel) createTUN(mtu int) error {
 	}
 	dev, err := t.newTUNFunc(tunCfg)
 	if err != nil {
-		return fmt.Errorf("创建 TUN 失败: %w", err)
+		return fmt.Errorf(i18n.T().ErrCreateTUN, err)
 	}
 	t.tunDev = dev
 	t.lastAssignedIP = append(net.IP(nil), t.virtualIP...) // defensive copy
@@ -267,7 +266,7 @@ func (t *Tunnel) sendUDP(data []byte, addr *net.UDPAddr) {
 		if _, err := t.conn.WriteToUDP(data, addr); err != nil {
 			n := t.sendErrors.Add(1)
 			if n == 1 || n%100 == 0 {
-				log.Printf("[tunnel] 发送失败 (累计%d次): %v", n, err)
+				log.Printf(i18n.T().LogSendFail, n, err)
 			}
 		}
 	}
