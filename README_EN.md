@@ -29,6 +29,37 @@ make server
 sudo ./bin/gtunnel-server -addr :4700
 ```
 
+#### OpenWrt Router (Mid-to-High-End)
+
+For NanoPi R2S/R4S/R5S, Raspberry Pi 4/5, GL.iNet and other ARM-based OpenWrt devices.
+
+```bash
+# Online install (run via router SSH)
+wget -qO- https://raw.githubusercontent.com/holipay/gametunnel/main/scripts/install-openwrt.sh | sh
+
+# With room password:
+ROOM_PASSWORD=yourpassword wget -qO- https://raw.githubusercontent.com/holipay/gametunnel/main/scripts/install-openwrt.sh | sh
+
+# Or build and deploy manually:
+git clone https://github.com/holipay/gametunnel.git
+cd gametunnel
+make server-openwrt-arm64  # for aarch64 devices
+# make server-openwrt-armv7  # for armv7 devices
+scp bin/gtunnel-server-openwrt-arm64 root@router-ip:/usr/bin/gtunnel-server
+```
+
+The install script handles: binary deployment, procd init script, UCI firewall rules, and auto-start.
+
+Management:
+```bash
+/etc/init.d/gtunnel-server start     # Start
+/etc/init.d/gtunnel-server stop      # Stop
+/etc/init.d/gtunnel-server restart   # Restart
+logread | grep gtunnel               # View logs
+```
+
+> **Recommended devices**: NanoPi R2S/R4S (ARM64, budget-friendly), Raspberry Pi 4/5, GL.iNet series. Low-end MIPS routers are not recommended.
+
 #### Windows
 
 1. Download `GameTunnel-Server-windows-amd64.zip` from [Releases](https://github.com/holipay/gametunnel/releases)
@@ -42,12 +73,16 @@ sudo ./bin/gtunnel-server -addr :4700
 Or build from source:
 ```bash
 make server-windows-amd64
+# 32-bit Windows (older PCs)
+make server-windows-x86
 ```
 
 ### Player (Windows PC)
 
 **Option 1: Download archive (recommended)**
-1. Download `GameTunnel-Client-windows-amd64.zip` from [Releases](https://github.com/holipay/gametunnel/releases)
+1. Download the client from [Releases](https://github.com/holipay/gametunnel/releases)
+   - 64-bit: `GameTunnel-Client-windows-amd64.zip`
+   - **32-bit (older PCs/retro games)**: `GameTunnel-Client-windows-x86.zip`
 2. Extract to any folder (3 files total)
 3. Edit `config.ini` with your server address
 4. Double-click `gtunnel-client.exe` — it will auto-request admin privileges and connect
@@ -188,7 +223,7 @@ A: Depends on the round-trip to the server. With a domestic VPS, typically 20-50
 A: All IP-based LAN games. Broadcast forwarding is built-in, supporting games that rely on UDP broadcast discovery (e.g. StarCraft, Red Alert, Age of Empires, etc.).
 
 **Q: Which operating systems are supported?**
-A: Server: Linux and Windows. Client: Windows 10+.
+A: Server: Linux, Windows, and OpenWrt routers (mid-to-high-end ARM devices). Client: Windows 10+.
 
 **Q: Is data secure?**
 A: Authentication is secure (HMAC-SHA256 + HKDF), but game data is transmitted in plaintext. Use WireGuard for encryption.
@@ -207,6 +242,11 @@ make server
 
 # Build server (Windows, cross-compilable)
 make server-windows-amd64
+
+# Build OpenWrt server (ARM64 / ARMv7)
+make server-openwrt-arm64
+make server-openwrt-armv7
+make server-openwrt           # All OpenWrt architectures
 
 # Build Windows client (cross-compilable from any platform)
 make client

@@ -29,6 +29,37 @@ make server
 sudo ./bin/gtunnel-server -addr :4700
 ```
 
+#### OpenWrt 路由器（中高端）
+
+适用于 NanoPi R2S/R4S/R5S、树莓派 4/5、GL.iNet 等 ARM 架构 OpenWrt 设备。
+
+```bash
+# 在线安装（路由器 SSH 执行）
+wget -qO- https://raw.githubusercontent.com/holipay/gametunnel/main/scripts/install-openwrt.sh | sh
+
+# 带房间密码：
+ROOM_PASSWORD=你的密码 wget -qO- https://raw.githubusercontent.com/holipay/gametunnel/main/scripts/install-openwrt.sh | sh
+
+# 或手动编译部署：
+git clone https://github.com/holipay/gametunnel.git
+cd gametunnel
+make server-openwrt-arm64  # aarch64 设备
+# make server-openwrt-armv7  # armv7 设备
+scp bin/gtunnel-server-openwrt-arm64 root@路由器IP:/usr/bin/gtunnel-server
+```
+
+安装脚本自动完成：二进制部署、procd init 脚本创建、防火墙 UCI 规则配置、开机自启。
+
+管理命令：
+```bash
+/etc/init.d/gtunnel-server start     # 启动
+/etc/init.d/gtunnel-server stop      # 停止
+/etc/init.d/gtunnel-server restart   # 重启
+logread | grep gtunnel               # 查看日志
+```
+
+> **推荐设备**：NanoPi R2S/R4S（ARM64，百元价位）、树莓派 4/5、GL.iNet 系列。不推荐 MIPS 架构低端路由器。
+
 #### Windows
 
 1. 从 [Releases](https://github.com/holipay/gametunnel/releases) 下载 `GameTunnel-Server-windows-amd64.zip`
@@ -42,12 +73,16 @@ sudo ./bin/gtunnel-server -addr :4700
 或从源码编译：
 ```bash
 make server-windows-amd64
+# 32 位 Windows（老电脑）
+make server-windows-x86
 ```
 
 ### 玩家（Windows 电脑）
 
 **方式一：下载压缩包（推荐）**
-1. 从 [Releases](https://github.com/holipay/gametunnel/releases) 下载 `GameTunnel-Client-windows-amd64.zip`
+1. 从 [Releases](https://github.com/holipay/gametunnel/releases) 下载客户端
+   - 64 位系统：`GameTunnel-Client-windows-amd64.zip`
+   - **32 位系统（老电脑/老游戏）**：`GameTunnel-Client-windows-x86.zip`
 2. 解压到任意文件夹（共 3 个文件）
 3. 用记事本编辑 `config.ini`，填入服务器地址
 4. 双击 `gtunnel-client.exe`，自动请求管理员权限后连接
@@ -188,7 +223,7 @@ A: 取决于到服务器的延迟。如果服务器在国内 VPS，通常 20-50m
 A: 支持所有基于 IP 的局域网游戏。广播转发已内置，适用于依赖 UDP 广播发现的游戏（如星际争霸、红警、帝国时代等）。
 
 **Q: 支持哪些操作系统？**
-A: 服务端支持 Linux 和 Windows。客户端支持 Windows 10+。
+A: 服务端支持 Linux、Windows 和 OpenWrt 路由器（中高端 ARM 设备）。客户端支持 Windows 10+。
 
 **Q: 数据安全吗？**
 A: 认证安全（HMAC-SHA256 + HKDF），但游戏数据明文传输。如需加密请配合 WireGuard 使用。
@@ -207,6 +242,11 @@ make server
 
 # 编译服务端（Windows，可交叉编译）
 make server-windows-amd64
+
+# 编译 OpenWrt 服务端（ARM64 / ARMv7）
+make server-openwrt-arm64
+make server-openwrt-armv7
+make server-openwrt           # 编译所有 OpenWrt 架构
 
 # 编译 Windows 客户端（任意平台交叉编译）
 make client
