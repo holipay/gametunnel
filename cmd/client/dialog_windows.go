@@ -45,6 +45,12 @@ const (
 	IDC_STATUS_LABEL = 1005
 	IDC_SHOW_PASS    = 1006
 
+	// Connection error dialog control IDs
+	IDC_ERR_MSG    = 1101
+	IDC_ERR_RETRY  = 1102
+	IDC_ERR_EDIT   = 1103
+	IDC_ERR_STOP   = 1104
+
 	WM_INITDIALOG = 0x0110
 	WM_COMMAND    = 0x0111
 	WM_CLOSE      = 0x0010
@@ -269,7 +275,7 @@ func configDialogProc(cfg *client.Config, hFont uintptr, statusText string) func
 					return 1
 				}
 				if playerName == "" {
-					setStatusText(hwnd, IDC_STATUS_LABEL, "玩家名称不能为空")
+					setStatusText(hwnd, IDC_STATUS_LABEL, i18n.T().DlgNameEmpty)
 					hctl, _, _ := procGetDlgItem.Call(hwnd, uintptr(IDC_NAME))
 					procSetFocus.Call(hctl)
 					return 1
@@ -407,4 +413,98 @@ func setStatusText(hwnd uintptr, id uintptr, text string) {
 // On Windows, it delegates to the Win32 native dialog.
 func showSettingsDialog(statusText string) bool {
 	return showConfigDialog(statusText)
+}
+
+// showConnErrorDialog shows a connection error dialog with 3 choices:
+// Retry (returns true), Edit Settings (opens settings then returns false), Stop (returns false).
+func showConnErrorDialog(errMsg string) bool {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+
+	s := i18n.T()
+
+	hFont, _, _ := procCreateFont.Call(
+		uintptr(15), 0, 0, 0,
+		400, 0, 0, 0,
+		1, 0, 0, 0, 0,
+		uintptr(unsafe.Pointer(syscall.StringToUTF16Ptr("Segoe UI"))),
+	)
+
+	// Dialog dimensions
+	dlgW := 280
+	dlgH := 120
+	tmpl := buildDialogTemplate(dlgW, dlgH, s.ConnErrTitle)
+	defer runtime.KeepAlive(tmpl)
+
+	ret, _, _ := procDialogBoxIndirectParam.Call(
+		0,
+		uintptr(unsafe.Pointer(&tmpl[0])),
+		0,
+		syscall.NewCallback(func(hwnd uintptr, msg uint32, wParam, lParam uintptr) uintptr {
+			switch msg {
+			case WM_INITDIALOG:
+				margin := 10
+
+				// Error icon + message
+				// Truncate long error messages for display
+				displayMsg := errMsg
+				if len(displayMsg) > 80 {
+					displayMsg = displayMsg[:77] + "..."
+				}
+				makeCtl("STATIC", "⚠ "+displayMsg, 0, margin, 12, dlgW-2*margin, 24, hwnd, IDC_ERR_MSG)
+
+				// Three buttons: Retry | Edit Settings | Stop
+				btnY := 50
+				btnW := 55
+				btnGap := 8
+				totalW := btnW*3 + btnGap*2
+				startX := (dlgW - totalW) / 2
+				makeCtl("BUTTON", s.ConnErrRetry, BS_DEFPUSHBUTTON|WS_TABSTOP, startX, btnY, btnW, 16, hwnd, IDC_ERR_RETRY)
+				makeCtl("BUTTON", s.ConnErrSettings, BS_PUSHBUTTON|WS_TABSTOP, startX+btnW+btnGap, btnY, btnW, 16, hwnd, IDC_ERR_EDIT)
+				makeCtl("BUTTON", s.ConnErrStop, BS_PUSHBUTTON|WS_TABSTOP, startX+2*(btnW+btnGap), btnY, btnW, 16, hwnd, IDC_ERR_STOP)
+
+				if hFont != 0 {
+					for _, id := range []uintptr{IDC_ERR_MSG, IDC_ERR_RETRY, IDC_ERR_EDIT, IDC_ERR_STOP} {
+						hctl, _, _ := procGetDlgItem.Call(hwnd, id)
+						if hctl != 0 {
+							procSendMessage.Call(hctl, WM_SETFONT, hFont, 1)
+						}
+					}
+				}
+				return 1
+
+			case WM_COMMAND:
+				switch wParam & 0xFFFF {
+				case IDC_ERR_RETRY: // Retry
+					procEndDialog.Call(hwnd, 1)
+					return 1
+				case IDC_ERR_EDIT: // Edit Settings
+					procEndDialog.Call(hwnd, 2)
+					return 1
+				case IDC_ERR_STOP: // Stop
+					procEndDialog.Call(hwnd, 0)
+					return 1
+				}
+
+			case WM_CLOSE:
+				procEndDialog.Call(hwnd, 0)
+				return 1
+			}
+			return 0
+		}),
+	)
+
+	if hFont != 0 {
+		procDeleteObject.Call(hFont)
+	}
+
+	switch ret {
+	case 1: // Retry
+		return true
+	case 2: // Edit Settings — open settings dialog, then stop reconnect
+		showSettingsDialog(i18n.T().DlgStatusIdle)
+		return false
+	default: // Stop or closed
+		return false
+	}
 }

@@ -96,6 +96,16 @@ type Strings struct {
 	AppDisconnected string // "[app] 连接断开"
 	AppDisconnectErr string // "[app] 连接断开: %v"
 
+	// ── Connection Error Dialog ──
+	ConnErrTitle     string // "连接失败"
+	ConnErrRetry     string // "重试"
+	ConnErrSettings  string // "修改设置"
+	ConnErrStop      string // "停止连接"
+	ConnErrBalloon   string // "GameTunnel 已启动，点击右下角托盘图标进行设置"
+	ConnErrBalloonTitle string // "GameTunnel"
+	FirstRunBalloon  string // "GameTunnel 已启动！请点击右下角托盘图标进行首次设置"
+	DlgNameEmpty     string // "玩家名称不能为空"
+
 	// ── Client Run ──
 	RunStartup string // "=== GameTunnel 启动 ==="
 
@@ -239,6 +249,15 @@ var zhStrings = &Strings{
 	AppDisconnected:  "[app] 连接断开",
 	AppDisconnectErr: "[app] 连接断开: %v",
 
+	ConnErrTitle:        "连接失败",
+	ConnErrRetry:        "重试",
+	ConnErrSettings:     "修改设置",
+	ConnErrStop:         "停止连接",
+	ConnErrBalloon:      "GameTunnel 已启动，点击右下角托盘图标进行设置",
+	ConnErrBalloonTitle: "GameTunnel",
+	FirstRunBalloon:     "GameTunnel 已启动！请点击右下角托盘图标进行首次设置",
+	DlgNameEmpty:        "玩家名称不能为空",
+
 	RunStartup: "=== GameTunnel 启动 ===",
 
 	CfgHeader:     "# GameTunnel 配置文件",
@@ -377,6 +396,15 @@ var enStrings = &Strings{
 	AppSaveFail:      "[app] Failed to save config: %v",
 	AppDisconnected:  "[app] Disconnected",
 	AppDisconnectErr: "[app] Disconnected: %v",
+
+	ConnErrTitle:        "Connection Failed",
+	ConnErrRetry:        "Retry",
+	ConnErrSettings:     "Edit Settings",
+	ConnErrStop:         "Stop",
+	ConnErrBalloon:      "GameTunnel is running. Click the tray icon in the bottom-right to set up.",
+	ConnErrBalloonTitle: "GameTunnel",
+	FirstRunBalloon:     "GameTunnel started! Click the tray icon in the bottom-right for first-time setup.",
+	DlgNameEmpty:        "Player name cannot be empty",
 
 	RunStartup: "=== GameTunnel Started ===",
 

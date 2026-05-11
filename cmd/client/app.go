@@ -35,6 +35,10 @@ type App struct {
 	// Context for connect loop
 	ctx    context.Context
 	cancel context.CancelFunc
+
+	// onConnFailed is called when fast retries are exhausted.
+	// Args: error message. Return true to retry, false to stop.
+	onConnFailed func(errMsg string) bool
 }
 
 // PeerStatus is the JSON-serializable peer info.
@@ -193,6 +197,8 @@ func (a *App) statusLoop(ctx context.Context) {
 }
 
 // connectLoop handles connection with auto-reconnect.
+// After fastRetries (3) rapid attempts, it pauses and calls onConnFailed
+// to let the user decide: retry, edit settings, or stop.
 func (a *App) connectLoop() {
 	// Start status polling for this connection session
 	pollCtx, pollCancel := context.WithCancel(a.ctx)
@@ -206,8 +212,9 @@ func (a *App) connectLoop() {
 	}()
 
 	const (
-		baseDelay = 2 * time.Second
-		maxDelay  = 60 * time.Second
+		baseDelay  = 2 * time.Second
+		maxDelay   = 60 * time.Second
+		fastRetries = 3 // number of rapid retries before prompting user
 	)
 
 	for attempt := 0; ; attempt++ {
@@ -229,17 +236,34 @@ func (a *App) connectLoop() {
 		}
 
 		if err != nil {
+			errMsg := err.Error()
 			a.mu.Lock()
-			a.lastErr = err.Error()
+			a.lastErr = errMsg
 			a.connected = false
 			a.mu.Unlock()
 			log.Printf(i18n.T().AppDisconnectErr, err)
+
+			// After exhausting fast retries, prompt user instead of silent backoff
+			if attempt+1 >= fastRetries {
+				// Reset attempt counter so next round also gets fast retries
+				if a.onConnFailed != nil {
+					shouldRetry := a.onConnFailed(errMsg)
+					if !shouldRetry {
+						return
+					}
+					// User chose to retry — reset attempt for another round of fast retries
+					attempt = -1
+					continue
+				}
+			}
 		} else {
 			a.mu.Lock()
 			a.connected = false
 			a.lastErr = ""
 			a.mu.Unlock()
 			log.Printf(i18n.T().AppDisconnected)
+			// Successful connection that later dropped — reset attempt counter
+			attempt = -1
 		}
 	}
 }
