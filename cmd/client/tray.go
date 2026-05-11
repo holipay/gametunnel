@@ -55,13 +55,11 @@ func (tr *Tray) setup() {
 		return showConnErrorDialog(errMsg)
 	}
 
-	// First run: show balloon notification and auto-open settings
+	// First run: auto-open settings dialog to guide user
 	isFirstRun := tr.app.cfg.ServerAddr == ""
 	if isFirstRun {
 		go func() {
 			time.Sleep(500 * time.Millisecond)
-			// Balloon notification to help user find the tray icon
-			systray.ShowBalloon(s.ConnErrBalloonTitle, s.FirstRunBalloon)
 			statusText := s.TrayNoServer
 			if showSettingsDialog(statusText) {
 				cfg := client.LoadConfig()
@@ -73,12 +71,6 @@ func (tr *Tray) setup() {
 					tr.app.Connect(cfg)
 				}
 			}
-		}()
-	} else {
-		// Non-first-run: brief balloon to remind user where the icon is
-		go func() {
-			time.Sleep(800 * time.Millisecond)
-			systray.ShowBalloon(s.ConnErrBalloonTitle, s.ConnErrBalloon)
 		}()
 	}
 
