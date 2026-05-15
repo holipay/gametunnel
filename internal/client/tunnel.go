@@ -9,8 +9,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/holipay/gametunnel/internal/i18n"
 	"github.com/holipay/gametunnel-protocol/protocol"
+	"github.com/holipay/gametunnel/internal/i18n"
 )
 
 // sendJob is a single UDP send request, consumed by the dedicated sendLoop goroutine.
@@ -28,10 +28,10 @@ func ip4Key(ip net.IP) [4]byte {
 
 // Peer represents a remote player.
 type Peer struct {
-	VirtualIP  net.IP
-	PublicAddr *net.UDPAddr
-	Username   string
-	DirectReach   atomic.Bool              // true if P2P direct path has been confirmed
+	VirtualIP     net.IP
+	PublicAddr    *net.UDPAddr
+	Username      string
+	DirectReach   atomic.Bool               // true if P2P direct path has been confirmed
 	lastSeen      atomic.Pointer[time.Time] // last time server reported this peer
 	lastPunchBack atomic.Pointer[time.Time] // rate limit for hole punch responses
 }
@@ -54,29 +54,29 @@ type TunConfig struct {
 
 // Tunnel is the GameTunnel client.
 type Tunnel struct {
-	conn       *net.UDPConn
-	sendCh     chan sendJob // dedicated channel for UDP sends (replaces connMu)
-	serverAddr *net.UDPAddr
-	tunDev     TunDevice
-	virtualIP  net.IP
-	serverIP   net.IP
-	serverIP4  [4]byte    // cached serverIP as [4]byte for fast comparison
-	subnetMask net.IPMask
-	cachedSubnet *net.IPNet // cached subnet for broadcast detection
-	peers      map[[4]byte]*Peer
-	mu         sync.RWMutex
-	username   string
-	roomID     string
-	roomPass   string
+	conn           *net.UDPConn
+	sendCh         chan sendJob // dedicated channel for UDP sends (replaces connMu)
+	serverAddr     *net.UDPAddr
+	tunDev         TunDevice
+	virtualIP      net.IP
+	serverIP       net.IP
+	serverIP4      [4]byte // cached serverIP as [4]byte for fast comparison
+	subnetMask     net.IPMask
+	cachedSubnet   *net.IPNet // cached subnet for broadcast detection
+	peers          map[[4]byte]*Peer
+	mu             sync.RWMutex
+	username       string
+	roomID         string
+	roomPass       string
 	disconnectOnce sync.Once
-	sendErrors    atomic.Int64 // send failure counter
+	sendErrors     atomic.Int64 // send failure counter
 
 	// Server liveness tracking — updated by handleServerData
 	lastServerResponse atomic.Pointer[time.Time]
 
 	// TUN reuse state — persists across Connect() calls
-	lastAssignedIP net.IP               // virtual IP from last registration
-	lastMTU        int                  // MTU from last connection
+	lastAssignedIP net.IP                             // virtual IP from last registration
+	lastMTU        int                                // MTU from last connection
 	newTUNFunc     func(TunConfig) (TunDevice, error) // cached factory
 }
 
@@ -198,7 +198,7 @@ func (t *Tunnel) Connect(ctx context.Context, serverAddr string, mtu int, newTUN
 
 	<-runCtx.Done()
 
-	log.Printf(i18n.T().LogTunnelDisconnect)
+	log.Printf("%s", i18n.T().LogTunnelDisconnect)
 	return nil
 }
 

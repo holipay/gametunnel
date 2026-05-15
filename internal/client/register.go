@@ -7,9 +7,9 @@ import (
 	"net"
 	"time"
 
-	"github.com/holipay/gametunnel/internal/i18n"
 	"github.com/holipay/gametunnel-protocol/auth"
 	"github.com/holipay/gametunnel-protocol/protocol"
+	"github.com/holipay/gametunnel/internal/i18n"
 )
 
 // register performs the registration handshake with the server.
@@ -64,7 +64,7 @@ func (t *Tunnel) register(ctx context.Context) error {
 		case protocol.TypeAuthChallenge:
 			authRounds++
 			if authRounds > maxAuthRounds {
-				return fmt.Errorf(i18n.T().ErrTooManyAuth)
+				return fmt.Errorf("%s", i18n.T().ErrTooManyAuth)
 			}
 			if err := t.handleAuthChallenge(msg.Payload); err != nil {
 				return err
@@ -122,7 +122,7 @@ func (t *Tunnel) handleAssignIP(payload []byte) error {
 // handleAuthChallenge responds to the server's HMAC authentication challenge.
 func (t *Tunnel) handleAuthChallenge(payload []byte) error {
 	if t.roomPass == "" {
-		return fmt.Errorf(i18n.T().ErrNeedPassword)
+		return fmt.Errorf("%s", i18n.T().ErrNeedPassword)
 	}
 
 	acp, err := protocol.UnmarshalAuthChallenge(payload)
@@ -132,7 +132,7 @@ func (t *Tunnel) handleAuthChallenge(payload []byte) error {
 
 	key := auth.DeriveKey(t.roomPass, t.roomID)
 	if key == nil {
-		return fmt.Errorf(i18n.T().ErrDeriveKeyFailed)
+		return fmt.Errorf("%s", i18n.T().ErrDeriveKeyFailed)
 	}
 
 	// 使用服务端观测到的客户端地址（经过 NAT 后的公网地址）
@@ -152,6 +152,6 @@ func (t *Tunnel) handleAuthChallenge(payload []byte) error {
 	packet := protocol.EncodeChecked(protocol.TypeAuthResponse, resp.Marshal())
 	t.sendUDP(packet, t.serverAddr)
 
-	log.Printf(i18n.T().LogAuthSent)
+	log.Printf("%s", i18n.T().LogAuthSent)
 	return nil
 }
