@@ -4,7 +4,6 @@ import (
 	"context"
 	"log"
 	"net"
-	"sync"
 	"time"
 
 	"github.com/holipay/gametunnel/internal/i18n"
@@ -23,24 +22,6 @@ const errorBackoff = 100 * time.Millisecond
 // readBufSize is the buffer size for UDP and TUN reads.
 // 4096 covers typical MTU (1400) + protocol overhead with headroom.
 const readBufSize = 4096
-
-// pktPool reuses byte slices for packet data to reduce GC pressure.
-// Each slice is readBufSize (4096 bytes), covering typical MTU + overhead.
-var pktPool = sync.Pool{
-	New: func() any {
-		b := make([]byte, readBufSize)
-		return &b
-	},
-}
-
-// encodeBufPool reuses byte slices for encoding outgoing packets.
-// Sized to fit header + MTU + checksum without reallocation.
-var encodeBufPool = sync.Pool{
-	New: func() any {
-		b := make([]byte, 0, protocol.MaxPacketLen)
-		return &b
-	},
-}
 
 // receiveFromServer handles packets from the server and direct P2P peers.
 // It distinguishes between server-relayed packets and direct peer packets
