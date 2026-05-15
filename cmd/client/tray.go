@@ -60,6 +60,8 @@ func (tr *Tray) setup() {
 	if isFirstRun {
 		go func() {
 			time.Sleep(500 * time.Millisecond)
+			// Show balloon notification so user can find the tray icon
+			systray.ShowBalloon(s.ConnErrBalloonTitle, s.FirstRunBalloon)
 			statusText := s.TrayNoServer
 			if showSettingsDialog(statusText) {
 				cfg := client.LoadConfig()
