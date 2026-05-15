@@ -13,6 +13,12 @@ import (
 	"github.com/holipay/gametunnel-protocol/protocol"
 )
 
+// sendJob is a single UDP send request, consumed by the dedicated sendLoop goroutine.
+type sendJob struct {
+	data []byte
+	addr *net.UDPAddr
+}
+
 // ip4Key converts a 4-byte IPv4 address to a [4]byte map key.
 // Panics if ip is not a valid IPv4 address.
 func ip4Key(ip net.IP) [4]byte {
@@ -48,22 +54,22 @@ type TunConfig struct {
 
 // Tunnel is the GameTunnel client.
 type Tunnel struct {
-	conn          *net.UDPConn
-	connMu        sync.Mutex // protects WriteToUDP
-	serverAddr    *net.UDPAddr
-	tunDev        TunDevice
-	virtualIP     net.IP
-	serverIP      net.IP
-	serverIP4     [4]byte    // cached serverIP as [4]byte for fast comparison
-	subnetMask    net.IPMask
-	cachedSubnet  *net.IPNet // cached subnet for broadcast detection
-	peers         map[[4]byte]*Peer
-	mu            sync.RWMutex
-	username      string
-	roomID        string
-	roomPass      string
+	conn       *net.UDPConn
+	sendCh     chan sendJob // dedicated channel for UDP sends (replaces connMu)
+	serverAddr *net.UDPAddr
+	tunDev     TunDevice
+	virtualIP  net.IP
+	serverIP   net.IP
+	serverIP4  [4]byte    // cached serverIP as [4]byte for fast comparison
+	subnetMask net.IPMask
+	cachedSubnet *net.IPNet // cached subnet for broadcast detection
+	peers      map[[4]byte]*Peer
+	mu         sync.RWMutex
+	username   string
+	roomID     string
+	roomPass   string
 	disconnectOnce sync.Once
-	sendErrors     atomic.Int64 // send failure counter
+	sendErrors    atomic.Int64 // send failure counter
 
 	// Server liveness tracking — updated by handleServerData
 	lastServerResponse atomic.Pointer[time.Time]
@@ -74,6 +80,10 @@ type Tunnel struct {
 	newTUNFunc     func(TunConfig) (TunDevice, error) // cached factory
 }
 
+// sendChanSize is the buffer size for the UDP send channel.
+// Sized to absorb bursts without blocking callers.
+const sendChanSize = 4096
+
 // New creates a new Tunnel. Call Connect to start it.
 func New(cfg *Config) *Tunnel {
 	return &Tunnel{
@@ -81,6 +91,7 @@ func New(cfg *Config) *Tunnel {
 		roomID:   cfg.RoomID,
 		roomPass: cfg.RoomPassword,
 		peers:    make(map[[4]byte]*Peer),
+		sendCh:   make(chan sendJob, sendChanSize),
 	}
 }
 
@@ -156,6 +167,10 @@ func (t *Tunnel) Connect(ctx context.Context, serverAddr string, mtu int, newTUN
 		})
 	}
 
+	go func() {
+		t.sendLoop(runCtx)
+		onGoroutineExit("sendLoop")
+	}()
 	go func() {
 		t.receiveFromServer(runCtx)
 		onGoroutineExit("receiveFromServer")
@@ -258,16 +273,51 @@ func (t *Tunnel) Status() TunnelStatus {
 	}
 }
 
-// sendUDP is a thread-safe UDP write.
-func (t *Tunnel) sendUDP(data []byte, addr *net.UDPAddr) {
-	t.connMu.Lock()
-	defer t.connMu.Unlock()
+// sendLoop is the dedicated UDP send goroutine. It consumes from sendCh and
+// writes to the UDP socket serially, eliminating mutex contention on the
+// send path. Callers use sendUDP() which is non-blocking (channel send).
+func (t *Tunnel) sendLoop(ctx context.Context) {
+	for {
+		select {
+		case <-ctx.Done():
+			// Drain remaining sends before exiting
+			for {
+				select {
+				case job := <-t.sendCh:
+					t.writeUDP(job.data, job.addr)
+				default:
+					return
+				}
+			}
+		case job := <-t.sendCh:
+			t.writeUDP(job.data, job.addr)
+		}
+	}
+}
+
+// writeUDP performs the actual UDP write. Only called from sendLoop.
+func (t *Tunnel) writeUDP(data []byte, addr *net.UDPAddr) {
 	if t.conn != nil {
 		if _, err := t.conn.WriteToUDP(data, addr); err != nil {
 			n := t.sendErrors.Add(1)
 			if n == 1 || n%100 == 0 {
 				log.Printf(i18n.T().LogSendFail, n, err)
 			}
+		}
+	}
+}
+
+// sendUDP enqueues a UDP send via the send channel (non-blocking).
+// Replaces the previous mutex-based approach to eliminate lock contention
+// between the TUN reader, server reader, and keepalive goroutines.
+func (t *Tunnel) sendUDP(data []byte, addr *net.UDPAddr) {
+	select {
+	case t.sendCh <- sendJob{data: data, addr: addr}:
+	default:
+		// Channel full — drop packet (backpressure)
+		n := t.sendErrors.Add(1)
+		if n == 1 || n%100 == 0 {
+			log.Printf(i18n.T().LogSendFail, n, fmt.Errorf("send channel full"))
 		}
 	}
 }
