@@ -4,6 +4,7 @@ import (
 	"context"
 	"log"
 	"net"
+	"sync"
 	"time"
 
 	"github.com/holipay/gametunnel/internal/i18n"
@@ -22,6 +23,24 @@ const errorBackoff = 100 * time.Millisecond
 // readBufSize is the buffer size for UDP and TUN reads.
 // 4096 covers typical MTU (1400) + protocol overhead with headroom.
 const readBufSize = 4096
+
+// pktPool reuses byte slices for packet data to reduce GC pressure.
+// Each slice is readBufSize (4096 bytes), covering typical MTU + overhead.
+var pktPool = sync.Pool{
+	New: func() any {
+		b := make([]byte, readBufSize)
+		return &b
+	},
+}
+
+// encodeBufPool reuses byte slices for encoding outgoing packets.
+// Sized to fit header + MTU + checksum without reallocation.
+var encodeBufPool = sync.Pool{
+	New: func() any {
+		b := make([]byte, 0, protocol.MaxPacketLen)
+		return &b
+	},
+}
 
 // receiveFromServer handles packets from the server and direct P2P peers.
 // It distinguishes between server-relayed packets and direct peer packets
@@ -262,7 +281,8 @@ func (t *Tunnel) receiveFromTUN(ctx context.Context) {
 			continue
 		}
 
-		// Validate IPv4 header (no copy needed — handlers copy data internally)
+		// Validate IPv4 header — buf is owned by this goroutine and reused on
+		// the next Read, so routePacket must complete before we loop back.
 		if buf[0]>>4 != 4 {
 			continue
 		}
@@ -273,11 +293,9 @@ func (t *Tunnel) receiveFromTUN(ctx context.Context) {
 
 		srcIP := net.IP(buf[12:16])
 		dstIP := net.IP(buf[16:20])
-		// Copy packet data before passing to routePacket.
-		// The buffer is reused on the next Read, and sendUDP may not
-		// complete before the next iteration overwrites it.
-		pkt := make([]byte, n)
-		copy(pkt, buf[:n])
-		t.routePacket(pkt, srcIP, dstIP)
+		// Zero-copy: pass buf slice directly. routePacket is synchronous and
+		// Marshal/MarshalTo copies the data for UDP send, so buf is safe to
+		// reuse on the next iteration.
+		t.routePacket(buf[:n], srcIP, dstIP)
 	}
 }
