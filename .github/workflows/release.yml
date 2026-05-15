@@ -1,0 +1,107 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+      - run: go test -race ./internal/...
+
+  # ── Server (Linux / OpenWrt) ──────────────────────────────────
+
+  release-server:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+
+      - name: Set version
+        run: echo "VERSION=${GITHUB_REF_NAME}" >> $GITHUB_ENV
+
+      - name: Build server (linux/amd64)
+        run: CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags "-s -w -X main.Version=${VERSION}" -o gtunnel-server-linux-amd64 ./cmd/server
+
+      - name: Build server (openwrt/armv7)
+        run: CGO_ENABLED=0 GOOS=linux GOARCH=arm GOARM=7 go build -ldflags "-s -w -X main.Version=${VERSION}" -o gtunnel-server-openwrt-armv7 ./cmd/server
+
+      - name: Build server (openwrt/arm64)
+        run: CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -ldflags "-s -w -X main.Version=${VERSION}" -o gtunnel-server-openwrt-arm64 ./cmd/server
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: server
+          path: gtunnel-server*
+
+  # ── Windows Client ────────────────────────────────────────────
+
+  release-client-windows:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+
+      - name: Set version
+        run: echo "VERSION=${GITHUB_REF_NAME}" >> $GITHUB_ENV
+
+      - name: Build client (amd64)
+        run: CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -ldflags "-s -w -X main.Version=${VERSION}" -o gtunnel-client.exe ./cmd/client
+
+      - name: Download wintun.dll
+        run: |
+          curl -sL -o wintun.zip "https://www.wintun.net/builds/wintun-0.14.1.zip"
+          unzip -q wintun.zip "wintun/bin/amd64/wintun.dll"
+          mv wintun/bin/amd64/wintun.dll wintun.dll
+          rm -rf wintun wintun.zip
+
+      - name: Package client
+        run: |
+          cp configs/config.ini .
+          zip GameTunnel-Client-windows-amd64.zip gtunnel-client.exe wintun.dll config.ini
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: client-windows
+          path: GameTunnel-Client-windows-amd64.zip
+
+  # ── Create GitHub Release ─────────────────────────────────
+
+  publish:
+    needs: [release-server, release-client-windows]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            gtunnel-server-linux-amd64
+            gtunnel-server-openwrt-armv7
+            gtunnel-server-openwrt-arm64
+            GameTunnel-Client-windows-amd64.zip

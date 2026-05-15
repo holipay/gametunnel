@@ -1,0 +1,106 @@
+// GameTunnel Server — LAN Gaming Tunnel
+//
+// Usage:
+//
+//	gtunnel-server -addr :4700 -subnet 10.10.0.0/24 -max 10
+//	gtunnel-server -addr :4700 -password myroomsecret
+package main
+
+import (
+	"context"
+	"flag"
+	"fmt"
+	"log"
+	"net"
+	"os"
+	"os/signal"
+	"syscall"
+
+	"github.com/holipay/gametunnel/internal/i18n"
+	"github.com/holipay/gametunnel/internal/server"
+	"github.com/holipay/gametunnel/internal/singleinstance"
+)
+
+// Version is set at build time via -ldflags.
+var Version = "dev"
+
+func main() {
+	addr := flag.String("addr", ":4700", "listen address (UDP)")
+	subnetStr := flag.String("subnet", "10.10.0.0/24", "virtual subnet (CIDR)")
+	maxPlayers := flag.Int("max", 10, "max players")
+	roomPass := flag.String("password", "", "room password (empty = no auth)")
+	statusAddr := flag.String("status-addr", "", "status page address (HTTP), e.g. :4701")
+	langFlag := flag.String("lang", "zh", "language (zh or en)")
+	versionFlag := flag.Bool("version", false, "show version")
+	flag.Parse()
+
+	if *versionFlag {
+		fmt.Printf("gtunnel-server %s\n", Version)
+		os.Exit(0)
+	}
+
+	// Set language
+	i18n.Set(i18n.ParseLang(*langFlag))
+	t := i18n.T()
+
+	// ====== Single-instance check ======
+	lock, err := singleinstance.Acquire("GameTunnel-Server")
+	if err != nil {
+		log.Fatalf(t.ServerInstRunning, err)
+	}
+	defer lock.Close()
+
+	_, subnet, err := net.ParseCIDR(*subnetStr)
+	if err != nil {
+		log.Fatalf(t.ServerSubnetFail, *subnetStr, err)
+	}
+
+	s, err := server.New(server.Config{
+		Addr:       *addr,
+		Subnet:     subnet,
+		MaxPlayers: *maxPlayers,
+		RoomPass:   *roomPass,
+		StatusAddr: *statusAddr,
+		Version:    Version,
+		Lang:       i18n.ParseLang(*langFlag),
+	})
+	if err != nil {
+		log.Fatalf(t.ServerStartFail, err)
+	}
+
+	// Graceful shutdown
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+
+	go func() {
+		sig := <-sigCh
+		log.Printf(t.ServerSignal, sig)
+		cancel()
+		s.Close()
+	}()
+
+	// Print banner
+	authStatus := t.ServerNoAuth
+	if *roomPass != "" {
+		authStatus = t.ServerHMACAuth
+	}
+	log.Printf("════════════════════════════════════════════════════════════")
+	log.Printf(t.ServerBanner)
+	log.Printf("════════════════════════════════════════════════════════════")
+	log.Printf("▎  %-7s %-31s ▎", t.ServerAddr+":", *addr)
+	log.Printf("▎  %-7s %-31s ▎", t.ServerSubnet+":", subnet.String())
+	log.Printf("▎  %-7s %-31d ▎", t.ServerMaxPlayers+":", *maxPlayers)
+	log.Printf("▎  %-7s %-31s ▎", t.ServerAuth+":", authStatus)
+	log.Printf("▎  %-7s %-31s ▎", t.ServerVersion+":", Version)
+	if *statusAddr != "" {
+		log.Printf("▎  %-7s %-31s ▎", t.ServerStatusPage+":", fmt.Sprintf("http://%s", *statusAddr))
+		log.Printf("▎  %-7s %-31s ▎", "Token"+":", s.StatusToken())
+	}
+	log.Printf("════════════════════════════════════════════════════════════")
+
+	s.Run(ctx)
+	log.Println(t.ServerShutdown)
+}
