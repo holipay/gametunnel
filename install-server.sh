@@ -3,7 +3,7 @@
 #
 # 用法:
 #   在线安装:  curl -sL https://raw.githubusercontent.com/holipay/gametunnel/main/install-server.sh | sudo bash
-#   本地安装:  sudo bash install-server.sh                    (gtunnel-server 或 .tar.gz 压缩包在脚本同目录)
+#   本地安装:  sudo bash install-server.sh                    (gtunnel-server-linux-amd64 或 gtunnel-server 在脚本同目录)
 #   带密码:    sudo ROOM_PASSWORD=你的密码 bash install-server.sh
 #
 # 环境变量:
@@ -65,62 +65,39 @@ echo ""
 
 BINARY_NAME="gtunnel-server"
 TMPFILE=""
-EXTRACT_DIR=""
 USE_LOCAL=false
 
 # 确定架构
 ARCH=$(uname -m)
 case "$ARCH" in
-    x86_64|amd64)   LOCAL_ARCHIVE="GameTunnel-Server-linux-amd64.tar.gz" ;;
-    aarch64|arm64)   LOCAL_ARCHIVE="GameTunnel-Server-linux-arm64.tar.gz" ;;
+    x86_64|amd64)   LOCAL_BINARY="gtunnel-server-linux-amd64" ;;
+    aarch64|arm64)   LOCAL_BINARY="gtunnel-server-linux-arm64" ;;
     *) echo "❌ 不支持的架构: $ARCH"; exit 1 ;;
 esac
 
-# 优先级1: 脚本所在目录有 gtunnel-server 二进制
-if [ -f "$SCRIPT_DIR/$BINARY_NAME" ] && file "$SCRIPT_DIR/$BINARY_NAME" | grep -q "ELF"; then
+# 优先级1: 脚本所在目录有带架构后缀的二进制
+if [ -f "$SCRIPT_DIR/$LOCAL_BINARY" ] && file "$SCRIPT_DIR/$LOCAL_BINARY" | grep -q "ELF"; then
+    echo "📦 使用本地文件: $SCRIPT_DIR/$LOCAL_BINARY"
+    TMPFILE="$SCRIPT_DIR/$LOCAL_BINARY"
+    USE_LOCAL=true
+
+# 优先级2: 脚本所在目录有 gtunnel-server 二进制（兼容旧命名）
+elif [ -f "$SCRIPT_DIR/$BINARY_NAME" ] && file "$SCRIPT_DIR/$BINARY_NAME" | grep -q "ELF"; then
     echo "📦 使用本地文件: $SCRIPT_DIR/$BINARY_NAME"
     TMPFILE="$SCRIPT_DIR/$BINARY_NAME"
     USE_LOCAL=true
 
-# 优先级2: 当前目录有 gtunnel-server 二进制
+# 优先级3: 当前目录有带架构后缀的二进制
+elif [ -f "./$LOCAL_BINARY" ] && file "./$LOCAL_BINARY" | grep -q "ELF"; then
+    echo "📦 使用本地文件: ./$LOCAL_BINARY"
+    TMPFILE="./$LOCAL_BINARY"
+    USE_LOCAL=true
+
+# 优先级4: 当前目录有 gtunnel-server 二进制（兼容旧命名）
 elif [ -f "./$BINARY_NAME" ] && file "./$BINARY_NAME" | grep -q "ELF"; then
     echo "📦 使用本地文件: ./$BINARY_NAME"
     TMPFILE="./$BINARY_NAME"
     USE_LOCAL=true
-
-# 优先级3: 脚本所在目录有 .tar.gz 压缩包
-elif [ -f "$SCRIPT_DIR/$LOCAL_ARCHIVE" ]; then
-    echo "📦 使用本地压缩包: $SCRIPT_DIR/$LOCAL_ARCHIVE"
-    EXTRACT_DIR=$(mktemp -d)
-    if ! tar xzf "$SCRIPT_DIR/$LOCAL_ARCHIVE" -C "$EXTRACT_DIR" $BINARY_NAME 2>/dev/null; then
-        echo "❌ 解压本地压缩包失败: $SCRIPT_DIR/$LOCAL_ARCHIVE"
-        rm -rf "$EXTRACT_DIR"
-        exit 1
-    fi
-    TMPFILE="$EXTRACT_DIR/$BINARY_NAME"
-    if ! file "$TMPFILE" | grep -q "ELF"; then
-        echo "❌ 解压后的文件不是有效的 Linux 二进制"
-        rm -rf "$EXTRACT_DIR"
-        exit 1
-    fi
-    USE_LOCAL=false  # 标记为非本地二进制，安装后清理临时文件
-
-# 优先级4: 当前目录有 .tar.gz 压缩包
-elif [ -f "./$LOCAL_ARCHIVE" ]; then
-    echo "📦 使用本地压缩包: ./$LOCAL_ARCHIVE"
-    EXTRACT_DIR=$(mktemp -d)
-    if ! tar xzf "./$LOCAL_ARCHIVE" -C "$EXTRACT_DIR" $BINARY_NAME 2>/dev/null; then
-        echo "❌ 解压本地压缩包失败: ./$LOCAL_ARCHIVE"
-        rm -rf "$EXTRACT_DIR"
-        exit 1
-    fi
-    TMPFILE="$EXTRACT_DIR/$BINARY_NAME"
-    if ! file "$TMPFILE" | grep -q "ELF"; then
-        echo "❌ 解压后的文件不是有效的 Linux 二进制"
-        rm -rf "$EXTRACT_DIR"
-        exit 1
-    fi
-    USE_LOCAL=false  # 标记为非本地二进制，安装后清理临时文件
 fi
 
 # 优先级5: 从 GitHub 下载
@@ -134,57 +111,29 @@ if [ -z "$TMPFILE" ]; then
     fi
     echo "  版本: $LATEST"
 
-    # LOCAL_ARCHIVE 已在上方根据架构定义
-    DOWNLOAD_URL="https://github.com/${REPO}/releases/download/${LATEST}/${LOCAL_ARCHIVE}"
+    DOWNLOAD_URL="https://github.com/${REPO}/releases/download/${LATEST}/${LOCAL_BINARY}"
     echo "📥 下载服务器..."
     TMPFILE=$(mktemp)
-    # -L: follow redirects, -s: silent, -w: output HTTP code
     HTTP_CODE=$(curl -sL -w '%{http_code}' -o "$TMPFILE" "$DOWNLOAD_URL")
     if [ "$HTTP_CODE" != "200" ]; then
         echo "❌ 下载失败 (HTTP $HTTP_CODE): $DOWNLOAD_URL"
         echo ""
         echo "  替代方案："
-        echo "  1. 从 https://github.com/${REPO}/releases 手动下载 ${LOCAL_ARCHIVE}"
-        echo "  2. 解压后放到服务器上，和 install-server.sh 同目录，重新运行"
+        echo "  1. 从 https://github.com/${REPO}/releases 手动下载 ${LOCAL_BINARY}"
+        echo "  2. 放到服务器上，和 install-server.sh 同目录，重新运行"
         rm -f "$TMPFILE"
         exit 1
     fi
-
-    # 校验下载文件是否为有效 gzip（避免 404 HTML 页面）
-    if ! file "$TMPFILE" | grep -q "gzip"; then
-        echo "❌ 下载的文件不是有效的压缩包: ${LOCAL_ARCHIVE}"
-        echo "  可能原因: release 中该文件尚未生成，请稍后重试"
-        echo ""
-        echo "  替代方案："
-        echo "  1. 从 https://github.com/${REPO}/releases 手动下载 ${LOCAL_ARCHIVE}"
-        echo "  2. 解压后放到服务器上，和 install-server.sh 同目录，重新运行"
-        rm -f "$TMPFILE"
-        exit 1
-    fi
-
-    # 解压提取 gtunnel-server
-    EXTRACT_DIR=$(mktemp -d)
-    if ! tar xzf "$TMPFILE" -C "$EXTRACT_DIR" $BINARY_NAME 2>/dev/null; then
-        echo "❌ 解压失败: ${LOCAL_ARCHIVE}"
-        echo ""
-        echo "  替代方案："
-        echo "  1. 从 https://github.com/${REPO}/releases 手动下载 ${LOCAL_ARCHIVE}"
-        echo "  2. 解压后放到服务器上，和 install-server.sh 同目录，重新运行"
-        rm -f "$TMPFILE"
-        rm -rf "$EXTRACT_DIR"
-        exit 1
-    fi
-    rm -f "$TMPFILE"
-    TMPFILE="$EXTRACT_DIR/$BINARY_NAME"
 
     # 验证是 ELF 二进制
     if ! file "$TMPFILE" | grep -q "ELF"; then
-        echo "❌ 解压后的文件不是有效的 Linux 二进制"
+        echo "❌ 下载的文件不是有效的 Linux 二进制: ${LOCAL_BINARY}"
+        echo "  可能原因: release 中该文件尚未生成，请稍后重试"
         echo ""
         echo "  替代方案："
-        echo "  1. 从 https://github.com/${REPO}/releases 手动下载 ${LOCAL_ARCHIVE}"
-        echo "  2. 解压后放到服务器上，和 install-server.sh 同目录，重新运行"
-        rm -rf "$EXTRACT_DIR"
+        echo "  1. 从 https://github.com/${REPO}/releases 手动下载 ${LOCAL_BINARY}"
+        echo "  2. 放到服务器上，和 install-server.sh 同目录，重新运行"
+        rm -f "$TMPFILE"
         exit 1
     fi
     echo "  ✅ 下载完成"
@@ -204,7 +153,6 @@ chmod 755 "$INSTALL_DIR/$BINARY_NAME"
 # 清理临时文件（仅非本地文件）
 if [ "$USE_LOCAL" = false ]; then
     rm -f "$TMPFILE"
-    [ -n "$EXTRACT_DIR" ] && rm -rf "$EXTRACT_DIR"
 fi
 
 echo "  ✅ 已安装到 $INSTALL_DIR/$BINARY_NAME"

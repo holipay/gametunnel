@@ -100,11 +100,7 @@ release-client: client client-windows-x86
 	@echo "  Created $(BINARY_DIR)/GameTunnel-Client-windows-x86.zip"
 
 release-server: server-linux-amd64 server-windows-amd64 server-windows-x86
-	@mkdir -p $(BINARY_DIR)/release-server
-	cp $(BINARY_DIR)/gtunnel-server-linux-amd64 $(BINARY_DIR)/release-server/gtunnel-server
-	cd $(BINARY_DIR)/release-server && tar czf ../GameTunnel-Server-linux-amd64.tar.gz gtunnel-server
-	rm -rf $(BINARY_DIR)/release-server
-	@echo "  Created $(BINARY_DIR)/GameTunnel-Server-linux-amd64.tar.gz"
+	@echo "  Created $(BINARY_DIR)/gtunnel-server-linux-amd64"
 	@mkdir -p $(BINARY_DIR)/release-server-win
 	cp $(BINARY_DIR)/gtunnel-server-windows-amd64.exe $(BINARY_DIR)/release-server-win/gtunnel-server.exe
 	cd $(BINARY_DIR)/release-server-win && zip -9 ../GameTunnel-Server-windows-amd64.zip ./*
