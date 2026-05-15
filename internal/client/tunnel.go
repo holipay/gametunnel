@@ -114,7 +114,7 @@ func (t *Tunnel) Connect(ctx context.Context, serverAddr string, mtu int, newTUN
 
 	sAddr, err := net.ResolveUDPAddr("udp4", serverAddr)
 	if err != nil {
-		return fmt.Errorf(i18n.T().ErrInvalidServer, err)
+		return fmt.Errorf("%s", i18n.Format(i18n.T().ErrInvalidServer, err))
 	}
 	t.serverAddr = sAddr
 
@@ -123,13 +123,13 @@ func (t *Tunnel) Connect(ctx context.Context, serverAddr string, mtu int, newTUN
 
 	conn, err := net.ListenUDP("udp4", &net.UDPAddr{})
 	if err != nil {
-		return fmt.Errorf(i18n.T().ErrBindUDP, err)
+		return fmt.Errorf("%s", i18n.Format(i18n.T().ErrBindUDP, err))
 	}
 	t.conn = conn
 
 	if err := t.register(ctx); err != nil {
 		conn.Close()
-		return fmt.Errorf(i18n.T().ErrRegisterFailed, err)
+		return fmt.Errorf("%s", i18n.Format(i18n.T().ErrRegisterFailed, err))
 	}
 
 	// ── TUN device: reuse or create ─────────────────────────────────
@@ -138,10 +138,10 @@ func (t *Tunnel) Connect(ctx context.Context, serverAddr string, mtu int, newTUN
 
 	switch {
 	case tunAlive && !ipChanged:
-		log.Printf(i18n.T().LogReuseTUN, t.virtualIP)
+		log.Printf("%s", i18n.Format(i18n.T().LogReuseTUN, t.virtualIP))
 
 	case tunAlive && ipChanged:
-		log.Printf(i18n.T().LogIPChanged, t.lastAssignedIP, t.virtualIP)
+		log.Printf("%s", i18n.Format(i18n.T().LogIPChanged, t.lastAssignedIP, t.virtualIP))
 		t.tunDev.Close()
 		t.tunDev = nil
 		if err := t.createTUN(mtu); err != nil {
@@ -162,7 +162,7 @@ func (t *Tunnel) Connect(ctx context.Context, serverAddr string, mtu int, newTUN
 	var once sync.Once
 	onGoroutineExit := func(name string) {
 		once.Do(func() {
-			log.Printf(i18n.T().LogPeerExit, name)
+			log.Printf("%s", i18n.Format(i18n.T().LogPeerExit, name))
 			runCancel()
 		})
 	}
@@ -213,7 +213,7 @@ func (t *Tunnel) createTUN(mtu int) error {
 	}
 	dev, err := t.newTUNFunc(tunCfg)
 	if err != nil {
-		return fmt.Errorf(i18n.T().ErrCreateTUN, err)
+		return fmt.Errorf("%s", i18n.Format(i18n.T().ErrCreateTUN, err))
 	}
 	t.tunDev = dev
 	t.lastAssignedIP = append(net.IP(nil), t.virtualIP...) // defensive copy
@@ -301,7 +301,7 @@ func (t *Tunnel) writeUDP(data []byte, addr *net.UDPAddr) {
 		if _, err := t.conn.WriteToUDP(data, addr); err != nil {
 			n := t.sendErrors.Add(1)
 			if n == 1 || n%100 == 0 {
-				log.Printf(i18n.T().LogSendFail, n, err)
+				log.Printf("%s", i18n.Format(i18n.T().LogSendFail, n, err))
 			}
 		}
 	}
@@ -317,7 +317,7 @@ func (t *Tunnel) sendUDP(data []byte, addr *net.UDPAddr) {
 		// Channel full — drop packet (backpressure)
 		n := t.sendErrors.Add(1)
 		if n == 1 || n%100 == 0 {
-			log.Printf(i18n.T().LogSendFail, n, fmt.Errorf("send channel full"))
+			log.Printf("%s", i18n.Format(i18n.T().LogSendFail, n, fmt.Errorf("send channel full")))
 		}
 	}
 }

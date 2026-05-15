@@ -48,9 +48,9 @@ func (t *Tunnel) register(ctx context.Context) error {
 			if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
 				retries++
 				if retries > maxRetries {
-					return fmt.Errorf(i18n.T().LogRegFailed, maxRetries)
+					return fmt.Errorf("%s", i18n.Format(i18n.T().LogRegFailed, maxRetries))
 				}
-				log.Printf(i18n.T().LogRegTimeout, retries, maxRetries)
+				log.Printf("%s", i18n.Format(i18n.T().LogRegTimeout, retries, maxRetries))
 				t.sendUDP(packet, t.serverAddr)
 				t.conn.SetReadDeadline(time.Now().Add(deadline))
 				continue
@@ -73,7 +73,7 @@ func (t *Tunnel) register(ctx context.Context) error {
 			continue
 		case protocol.TypeKick:
 			kick, _ := protocol.UnmarshalKick(msg.Payload)
-			return fmt.Errorf(i18n.T().ErrRejected, kick.Reason)
+			return fmt.Errorf("%s", i18n.Format(i18n.T().ErrRejected, kick.Reason))
 		}
 	}
 }
@@ -95,7 +95,7 @@ func (t *Tunnel) readResponse(ctx context.Context, buf []byte) (*protocol.Messag
 
 		msg, err := protocol.DecodeChecked(buf[:n])
 		if err != nil {
-			return nil, fmt.Errorf(i18n.T().ErrDecodeFailed, err)
+			return nil, fmt.Errorf("%s", i18n.Format(i18n.T().ErrDecodeFailed, err))
 		}
 		return msg, nil
 	}
@@ -105,7 +105,7 @@ func (t *Tunnel) readResponse(ctx context.Context, buf []byte) (*protocol.Messag
 func (t *Tunnel) handleAssignIP(payload []byte) error {
 	assign, err := protocol.UnmarshalAssignIP(payload)
 	if err != nil {
-		return fmt.Errorf(i18n.T().ErrParseIPFailed, err)
+		return fmt.Errorf("%s", i18n.Format(i18n.T().ErrParseIPFailed, err))
 	}
 	t.virtualIP = assign.VirtualIP
 	t.serverIP = assign.ServerIP
@@ -127,7 +127,7 @@ func (t *Tunnel) handleAuthChallenge(payload []byte) error {
 
 	acp, err := protocol.UnmarshalAuthChallenge(payload)
 	if err != nil {
-		return fmt.Errorf(i18n.T().ErrParseAuthFailed, err)
+		return fmt.Errorf("%s", i18n.Format(i18n.T().ErrParseAuthFailed, err))
 	}
 
 	key := auth.DeriveKey(t.roomPass, t.roomID)
