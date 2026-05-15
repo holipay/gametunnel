@@ -37,7 +37,7 @@ jobs:
         run: echo "VERSION=${GITHUB_REF_NAME}" >> $GITHUB_ENV
 
       - name: Build server (linux/amd64)
-        run: CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags "-s -w -X main.Version=${VERSION}" -o gtunnel-server ./cmd/server
+        run: CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags "-s -w -X main.Version=${VERSION}" -o gtunnel-server-linux-amd64 ./cmd/server
 
       - name: Build server (openwrt/armv7)
         run: CGO_ENABLED=0 GOOS=linux GOARCH=arm GOARM=7 go build -ldflags "-s -w -X main.Version=${VERSION}" -o gtunnel-server-openwrt-armv7 ./cmd/server
@@ -101,7 +101,7 @@ jobs:
         with:
           generate_release_notes: true
           files: |
-            gtunnel-server
+            gtunnel-server-linux-amd64
             gtunnel-server-openwrt-armv7
             gtunnel-server-openwrt-arm64
             GameTunnel-Client-windows-amd64.zip
