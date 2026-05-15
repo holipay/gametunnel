@@ -7,6 +7,8 @@ import (
 )
 
 // routePacket determines how to route an outgoing IP packet.
+// pkt is a slice of the TUN read buffer; it must not be retained beyond
+// this call — Marshal copies the data for the UDP send.
 func (t *Tunnel) routePacket(pkt []byte, srcIP, dstIP net.IP) {
 	// Broadcast (255.255.255.255, subnet broadcast) and multicast (224.0.0.0/4)
 	// are relayed to all peers via the server.
@@ -19,8 +21,9 @@ func (t *Tunnel) routePacket(pkt []byte, srcIP, dstIP net.IP) {
 		return
 	}
 
+	dstKey := ip4Key(dstIP)
 	t.mu.RLock()
-	peer, ok := t.peers[ip4Key(dstIP)]
+	peer, ok := t.peers[dstKey]
 	t.mu.RUnlock()
 
 	if ok && peer.PublicAddr != nil && peer.DirectReach.Load() {
@@ -41,11 +44,7 @@ func (t *Tunnel) routePacket(pkt []byte, srcIP, dstIP net.IP) {
 // Server forwards to all peers in the room.
 // Preserves the original dstIP (255.255.255.255, subnet broadcast, or multicast).
 func (t *Tunnel) relayBroadcast(pkt []byte, srcIP, dstIP net.IP) {
-	dp := &protocol.DataPayload{
-		SrcIP: srcIP,
-		DstIP: dstIP, // preserve original broadcast/multicast destination
-		Data:  pkt,
-	}
+	dp := &protocol.DataPayload{SrcIP: srcIP, DstIP: dstIP, Data: pkt}
 	encoded := protocol.EncodeChecked(protocol.TypeData, dp.Marshal())
 	t.sendUDP(encoded, t.serverAddr)
 }
@@ -53,5 +52,6 @@ func (t *Tunnel) relayBroadcast(pkt []byte, srcIP, dstIP net.IP) {
 // sendToServer sends a unicast packet via the server relay.
 func (t *Tunnel) sendToServer(pkt []byte, srcIP, dstIP net.IP) {
 	dp := &protocol.DataPayload{SrcIP: srcIP, DstIP: dstIP, Data: pkt}
-	t.sendUDP(protocol.EncodeChecked(protocol.TypeData, dp.Marshal()), t.serverAddr)
+	encoded := protocol.EncodeChecked(protocol.TypeData, dp.Marshal())
+	t.sendUDP(encoded, t.serverAddr)
 }
