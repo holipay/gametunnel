@@ -68,6 +68,11 @@ func newTestTunnel(t *testing.T) (*Tunnel, *net.UDPConn) {
 	tunnel.conn = tunnelConn
 	tunnel.serverAddr = serverConn.LocalAddr().(*net.UDPAddr)
 
+	// ── 启动 sendLoop，让 sendCh 中的数据能实际写入 UDP ──
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	go tunnel.sendLoop(ctx)
+
 	return tunnel, serverConn
 }
 
@@ -204,10 +209,10 @@ func TestRoutePacket_PeerP2P(t *testing.T) {
 	peerIP := net.IPv4(10, 0, 0, 3).To4()
 	peerAddr := peerConn.LocalAddr().(*net.UDPAddr)
 	peer := &Peer{
-			VirtualIP:  peerIP,
-			PublicAddr: peerAddr,
-			Username:   "peer1",
-		}
+		VirtualIP:  peerIP,
+		PublicAddr: peerAddr,
+		Username:   "peer1",
+	}
 	peer.DirectReach.Store(true)
 	tunnel.peers = map[[4]byte]*Peer{
 		ip4Key(peerIP): peer,
