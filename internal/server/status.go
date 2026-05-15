@@ -55,9 +55,9 @@ func (s *Server) startStatusServer(ctx context.Context, addr string) {
 	}
 
 	go func() {
-		log.Printf(i18n.T().ServerStatusLog, addr)
+		log.Printf("%s", i18n.Format(i18n.T().ServerStatusLog, addr))
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Printf(i18n.T().ServerStatusFail, err)
+			log.Printf("%s", i18n.Format(i18n.T().ServerStatusFail, err))
 		}
 	}()
 
@@ -85,7 +85,7 @@ func (s *Server) handleStatusHTML(w http.ResponseWriter, r *http.Request) {
 	}{StatusInfo: &info, T: t}
 
 	if err := getStatusTmpl(s.lang).Execute(w, tmplData); err != nil {
-		log.Printf(i18n.T().ServerTmplFail, err)
+		log.Printf("%s", i18n.Format(i18n.T().ServerTmplFail, err))
 	}
 }
 

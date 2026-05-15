@@ -92,7 +92,7 @@ func (tr *Tray) setup() {
 						if cfg.Lang != "" {
 							i18n.Set(i18n.ParseLang(cfg.Lang))
 						}
-						log.Printf(i18n.T().TrayCfgUpdated)
+						log.Printf("%s", i18n.T().TrayCfgUpdated)
 					}
 				}()
 
@@ -196,4 +196,3 @@ func (tr *Tray) statusLoop() {
 		time.Sleep(2 * time.Second)
 	}
 }
-

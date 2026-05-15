@@ -15,9 +15,9 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/holipay/gametunnel/internal/i18n"
 	"github.com/holipay/gametunnel-protocol/auth"
 	"github.com/holipay/gametunnel-protocol/protocol"
+	"github.com/holipay/gametunnel/internal/i18n"
 )
 
 // ── Auth State ─────────────────────────────────────────────────
@@ -25,8 +25,8 @@ import (
 type authState int
 
 const (
-	authNone         authState = iota // no password required, or already authenticated
-	authChallengeSent                 // challenge sent, waiting for response
+	authNone          authState = iota // no password required, or already authenticated
+	authChallengeSent                  // challenge sent, waiting for response
 )
 
 // ── Client State ───────────────────────────────────────────────
@@ -59,7 +59,7 @@ type Server struct {
 	conn       *net.UDPConn
 	clients    map[[4]byte]*Client // virtualIP [4]byte → Client
 	addrMap    map[rateKey]*Client // client endpoint → Client (O(1) lookup)
-	mu         sync.RWMutex       // protects clients + addrMap
+	mu         sync.RWMutex        // protects clients + addrMap
 	subnet     *net.IPNet
 	maxPlayers int
 	serverIP   net.IP
@@ -132,7 +132,7 @@ func New(cfg Config) (*Server, error) {
 	ones, bits := cfg.Subnet.Mask.Size()
 	if bits != 32 || ones != 24 {
 		conn.Close()
-		return nil, fmt.Errorf(i18n.T().ServerSubnetMust, ones)
+		return nil, fmt.Errorf("%s", i18n.Format(i18n.T().ServerSubnetMust, ones))
 	}
 
 	serverIP := make(net.IP, 4)
@@ -178,8 +178,8 @@ func New(cfg Config) (*Server, error) {
 		maxRegPerIP: 5,
 	}
 	s.markIPUsed(net.IPv4(serverIP[0], serverIP[1], serverIP[2], 0))   // network address
-	s.markIPUsed(serverIP)                                                // server IP
-	s.markIPUsed(net.IPv4(serverIP[0], serverIP[1], serverIP[2], 255))  // broadcast
+	s.markIPUsed(serverIP)                                             // server IP
+	s.markIPUsed(net.IPv4(serverIP[0], serverIP[1], serverIP[2], 255)) // broadcast
 	return s, nil
 }
 
@@ -347,7 +347,7 @@ func (s *Server) keepaliveLoop(ctx context.Context) {
 		changed := false
 		for _, key := range staleClients {
 			if c, ok := s.clients[key]; ok && now.Sub(c.LastSeen) > 45*time.Second {
-				log.Printf(i18n.T().ServerPeerLeave, c.Username, c.VirtualIP)
+				log.Printf("%s", i18n.Format(i18n.T().ServerPeerLeave, c.Username, c.VirtualIP))
 				s.markIPFree(c.VirtualIP)
 				delete(s.clients, key)
 				delete(s.addrMap, addrToRateKey(c.PublicAddr))
@@ -375,7 +375,7 @@ func (s *Server) sendChecked(typ byte, payload []byte, to *net.UDPAddr) {
 	if _, err := s.conn.WriteToUDP(data, to); err != nil {
 		n := s.sendErrors.Add(1)
 		if n&(n-1) == 0 {
-			log.Printf(i18n.T().ServerSendFail, n, err)
+			log.Printf("%s", i18n.Format(i18n.T().ServerSendFail, n, err))
 		}
 	}
 }
@@ -384,7 +384,7 @@ func (s *Server) sendCheckedRaw(data []byte, to *net.UDPAddr) {
 	if _, err := s.conn.WriteToUDP(data, to); err != nil {
 		n := s.sendErrors.Add(1)
 		if n&(n-1) == 0 {
-			log.Printf(i18n.T().ServerSendFail, n, err)
+			log.Printf("%s", i18n.Format(i18n.T().ServerSendFail, n, err))
 		}
 	}
 }

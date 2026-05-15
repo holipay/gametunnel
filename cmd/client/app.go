@@ -131,7 +131,7 @@ func (a *App) Connect(cfg *client.Config) {
 	a.ctx, a.cancel = context.WithCancel(context.Background())
 
 	if err := client.SaveConfig(cfg); err != nil {
-		log.Printf(i18n.T().AppSaveFail, err)
+		log.Printf("%s", i18n.Format(i18n.T().AppSaveFail, err))
 	}
 
 	go a.connectLoop()
@@ -212,8 +212,8 @@ func (a *App) connectLoop() {
 	}()
 
 	const (
-		baseDelay  = 2 * time.Second
-		maxDelay   = 60 * time.Second
+		baseDelay   = 2 * time.Second
+		maxDelay    = 60 * time.Second
 		fastRetries = 3 // number of rapid retries before prompting user
 	)
 
@@ -241,7 +241,7 @@ func (a *App) connectLoop() {
 			a.lastErr = errMsg
 			a.connected = false
 			a.mu.Unlock()
-			log.Printf(i18n.T().AppDisconnectErr, err)
+			log.Printf("%s", i18n.Format(i18n.T().AppDisconnectErr, err))
 
 			// After exhausting fast retries, prompt user instead of silent backoff
 			if attempt+1 >= fastRetries {
@@ -261,7 +261,7 @@ func (a *App) connectLoop() {
 			a.connected = false
 			a.lastErr = ""
 			a.mu.Unlock()
-			log.Printf(i18n.T().AppDisconnected)
+			log.Printf("%s", i18n.T().AppDisconnected)
 			// Successful connection that later dropped — reset attempt counter
 			attempt = -1
 		}

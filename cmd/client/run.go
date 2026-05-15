@@ -24,7 +24,7 @@ func run(cfg *client.Config, tunFactory func(client.TunConfig) (client.TunDevice
 
 	// Auto-connect if server is configured
 	if cfg.ServerAddr != "" {
-		log.Printf(i18n.T().AppAutoConnect, cfg.ServerAddr)
+		log.Printf("%s", i18n.Format(i18n.T().AppAutoConnect, cfg.ServerAddr))
 		app.Connect(cfg)
 	}
 
@@ -43,7 +43,7 @@ func setupLog() *os.File {
 		return os.Stderr
 	}
 	log.SetOutput(io.MultiWriter(f, os.Stderr))
-	log.Printf(i18n.T().RunStartup)
+	log.Printf("%s", i18n.T().RunStartup)
 	return f
 }
 
