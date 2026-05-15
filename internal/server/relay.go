@@ -6,6 +6,10 @@ import (
 	"github.com/holipay/gametunnel-protocol/protocol"
 )
 
+// maxInlineTargets is the number of peer addresses we can hold on the stack
+// without heap allocation. For rooms ≤ 32 players this covers the common case.
+const maxInlineTargets = 32
+
 // handleRelay forwards a data packet. For broadcast and multicast, it forwards
 // to all peers in the room. For unicast, it forwards to the specific peer.
 func (s *Server) handleRelay(payload []byte, from *net.UDPAddr) {
@@ -33,7 +37,10 @@ func (s *Server) handleRelay(payload []byte, from *net.UDPAddr) {
 	isBroadcast := protocol.IsRelayTarget(dstIP, s.subnet)
 	fromKey := addrToRateKey(from)
 
-	var targets []*net.UDPAddr
+	// Use stack-allocated array for small rooms, fall back to heap for large ones.
+	var stackTargets [maxInlineTargets]*net.UDPAddr
+	targets := stackTargets[:0]
+
 	if isBroadcast {
 		for _, c := range s.clients {
 			if addrToRateKey(c.PublicAddr) != fromKey {
