@@ -7,6 +7,7 @@ import (
 	"net"
 	"os"
 	"syscall"
+	"unsafe"
 
 	"golang.org/x/sys/windows"
 
@@ -18,9 +19,16 @@ import (
 var (
 	kernel32             = syscall.NewLazyDLL("kernel32.dll")
 	procGetConsoleWindow = kernel32.NewProc("GetConsoleWindow")
+	procCreateMutexW     = kernel32.NewProc("CreateMutexW")
+	procCloseHandle      = kernel32.NewProc("CloseHandle")
 	user32               = syscall.NewLazyDLL("user32.dll")
 	procShowWindow       = user32.NewProc("ShowWindow")
+
+	// mutexHandle holds the single-instance mutex; released on process exit.
+	mutexHandle uintptr
 )
+
+const errorAlreadyExists = 183
 
 func main() {
 	windows.SetConsoleOutputCP(65001)
@@ -30,6 +38,10 @@ func main() {
 
 	// Request admin rights if not elevated
 	requestAdmin()
+
+	// Prevent multiple instances (must be after requestAdmin, since the
+	// non-elevated copy exits before reaching here)
+	checkSingleInstance()
 
 	// Load config
 	cfg := client.LoadConfig()
@@ -54,6 +66,27 @@ func main() {
 	}
 
 	run(cfg, tunFactory)
+}
+
+// checkSingleInstance creates a named mutex. If the mutex already exists,
+// another instance is running — show an error and exit.
+func checkSingleInstance() {
+	name, _ := windows.UTF16PtrFromString("Global\\GameTunnel_SingleInstance")
+	handle, _, _ := procCreateMutexW.Call(0, 0, uintptr(unsafe.Pointer(name)))
+	if handle == 0 {
+		return // CreateMutex failed silently; let the app run
+	}
+	mutexHandle = handle
+
+	// If GetLastError returns ERROR_ALREADY_EXISTS, another instance holds the mutex
+	err := windows.GetLastError()
+	if err != nil && err == syscall.Errno(errorAlreadyExists) {
+		windows.MessageBox(0,
+			windows.StringToUTF16Ptr("GameTunnel 已经在运行中，请检查右下角系统托盘图标。\nGameTunnel is already running. Check the system tray icon."),
+			windows.StringToUTF16Ptr("GameTunnel"),
+			windows.MB_OK|windows.MB_ICONWARNING)
+		os.Exit(0)
+	}
 }
 
 // hideConsole hides the console window.
