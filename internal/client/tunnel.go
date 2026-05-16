@@ -195,6 +195,10 @@ func (t *Tunnel) Connect(ctx context.Context, serverAddr string, mtu int, newTUN
 		t.holePunchRetryLoop(runCtx)
 		onGoroutineExit("holePunchRetryLoop")
 	}()
+	go func() {
+		t.p2pKeepaliveLoop(runCtx)
+		onGoroutineExit("p2pKeepaliveLoop")
+	}()
 
 	<-runCtx.Done()
 
