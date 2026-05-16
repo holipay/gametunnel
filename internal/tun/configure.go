@@ -30,6 +30,9 @@ func (d *Device) configure() error {
 	}
 
 	// ── Step 2: 禁用 AutomaticMetric ──
+	// 等待 TUN 适配器完全初始化（刚创建的适配器 API 调用可能返回 ERROR_INVALID_PARAMETER）
+	time.Sleep(1 * time.Second)
+
 	// 优先用 IP Helper API（快速、可靠），失败则回退 PowerShell。
 	if err := d.applyMetricAPI(); err != nil {
 		log.Printf("[tun] IP Helper API failed (%v), trying PowerShell", err)
@@ -38,7 +41,7 @@ func (d *Device) configure() error {
 
 	// ── Step 3: 验证 + 重试 ──
 	if !checkAutoMetricDisabled(d.name) {
-		time.Sleep(500 * time.Millisecond)
+		time.Sleep(2 * time.Second)
 		if err := d.applyMetricAPI(); err != nil {
 			d.applyMetricPowerShell()
 		}
