@@ -30,7 +30,7 @@ func (t *Tunnel) register(ctx context.Context) error {
 	retries := 0
 	authRounds := 0
 
-	t.sendUDP(packet, t.serverAddr)
+	t.writeUDP(packet, t.serverAddr)
 
 	// Pre-allocate buffer for all readResponse calls during registration
 	respBuf := make([]byte, 1500)
@@ -51,7 +51,7 @@ func (t *Tunnel) register(ctx context.Context) error {
 					return fmt.Errorf("%s", i18n.Format(i18n.T().LogRegFailed, maxRetries))
 				}
 				log.Printf("%s", i18n.Format(i18n.T().LogRegTimeout, retries, maxRetries))
-				t.sendUDP(packet, t.serverAddr)
+				t.writeUDP(packet, t.serverAddr)
 				t.conn.SetReadDeadline(time.Now().Add(deadline))
 				continue
 			}
@@ -150,7 +150,7 @@ func (t *Tunnel) handleAuthChallenge(payload []byte) error {
 	}
 
 	packet := protocol.EncodeChecked(protocol.TypeAuthResponse, resp.Marshal())
-	t.sendUDP(packet, t.serverAddr)
+	t.writeUDP(packet, t.serverAddr)
 
 	log.Printf("%s", i18n.T().LogAuthSent)
 	return nil
