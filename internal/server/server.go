@@ -79,7 +79,7 @@ type Server struct {
 
 	// Rate limiting: per-client packet count per window
 	rateMu    sync.Mutex
-	rateCount map[rateKey]int
+	rateBuf   [2]map[rateKey]int // double-buffer: [0]=active, [1]=stale
 	rateTick  *time.Ticker
 
 	// Cached auth keys (derived once per roomID, avoids repeated HKDF)
@@ -91,7 +91,7 @@ type Server struct {
 
 	// Registration rate limiting
 	regMu       sync.Mutex
-	regCount    map[string]int
+	regBuf      [2]map[string]int // double-buffer: [0]=active, [1]=stale
 	regTick     *time.Ticker
 	maxRegPerIP int
 
@@ -172,9 +172,9 @@ func New(cfg Config) (*Server, error) {
 		startTime:   time.Now(),
 		workers:     workers,
 		pktCh:       make(chan pktJob, chanBuf),
-		rateCount:   make(map[rateKey]int),
+		rateBuf:     [2]map[rateKey]int{make(map[rateKey]int), make(map[rateKey]int)},
 		maxPending:  cfg.MaxPlayers * 3,
-		regCount:    make(map[string]int),
+		regBuf:      [2]map[string]int{make(map[string]int), make(map[string]int)},
 		maxRegPerIP: 5,
 	}
 	s.markIPUsed(net.IPv4(serverIP[0], serverIP[1], serverIP[2], 0))   // network address

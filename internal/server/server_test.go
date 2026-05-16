@@ -102,7 +102,7 @@ func TestAddrToRateKey(t *testing.T) {
 
 func TestCheckRateLimit(t *testing.T) {
 	s := newTestServer("10.10.0.0/24", net.IPv4(10, 10, 0, 1))
-	s.rateCount = make(map[rateKey]int)
+	s.rateBuf = [2]map[rateKey]int{make(map[rateKey]int), make(map[rateKey]int)}
 	addr := &net.UDPAddr{IP: net.IPv4(1, 2, 3, 4), Port: 1000}
 
 	// Should pass up to rateLimit
@@ -126,7 +126,7 @@ func TestCheckRateLimit(t *testing.T) {
 
 func TestCheckRegRate(t *testing.T) {
 	s := newTestServer("10.10.0.0/24", net.IPv4(10, 10, 0, 1))
-	s.regCount = make(map[string]int)
+	s.regBuf = [2]map[string]int{make(map[string]int), make(map[string]int)}
 	s.maxRegPerIP = 3
 
 	ip := "1.2.3.4"
