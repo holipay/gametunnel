@@ -9,6 +9,7 @@ BINARY_DIR := bin
 SERVER := $(BINARY_DIR)/gtunnel-server-linux-amd64
 VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
 LDFLAGS := -ldflags "-s -w -X main.Version=$(VERSION)"
+CLIENT_LDFLAGS := -ldflags "-s -w -H windowsgui -X main.Version=$(VERSION)"
 
 all: server client server-openwrt
 
@@ -55,11 +56,11 @@ install-server: server
 
 client:
 	@mkdir -p $(BINARY_DIR)
-	GOOS=windows GOARCH=amd64 go build $(LDFLAGS) -o $(BINARY_DIR)/gtunnel-client.exe ./cmd/client
+	GOOS=windows GOARCH=amd64 go build $(CLIENT_LDFLAGS) -o $(BINARY_DIR)/gtunnel-client.exe ./cmd/client
 
 client-windows-x86:
 	@mkdir -p $(BINARY_DIR)
-	GOOS=windows GOARCH=386 go build $(LDFLAGS) -o $(BINARY_DIR)/gtunnel-client-windows-x86.exe ./cmd/client
+	GOOS=windows GOARCH=386 go build $(CLIENT_LDFLAGS) -o $(BINARY_DIR)/gtunnel-client-windows-x86.exe ./cmd/client
 
 # 所有平台客户端
 client-all: client client-windows-x86
