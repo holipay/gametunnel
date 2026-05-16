@@ -97,57 +97,64 @@ func (s *Server) sendPeerInfoBroadcast() {
 		return
 	}
 
-	snapshot := make([]peerSnapshot, 0, len(s.clients))
+	targets := make([]*net.UDPAddr, 0, len(s.clients))
 	for _, c := range s.clients {
-		snapshot = append(snapshot, peerSnapshot{
-			virtualIP:  c.VirtualIP,
-			publicAddr: c.PublicAddr,
-			username:   c.Username,
-		})
+		targets = append(targets, c.PublicAddr)
 	}
 	s.mu.RUnlock()
 
-	peers := &protocol.PeerInfoPayload{}
-	for _, sn := range snapshot {
-		peers.Peers = append(peers.Peers, protocol.PeerInfoEntry{
-			VirtualIP:  sn.virtualIP,
-			PublicAddr: sn.publicAddr,
-			Username:   sn.username,
-		})
-	}
+	encoded := s.getEncodedPeerInfo()
 
-	encoded := protocol.EncodeChecked(protocol.TypePeerInfo, peers.Marshal())
-
-	for _, sn := range snapshot {
-		s.sendCheckedRaw(encoded, sn.publicAddr)
+	for _, addr := range targets {
+		s.sendCheckedRaw(encoded, addr)
 	}
 }
 
 // sendPeerInfoToClient sends the peer list to a single client.
 // The payload includes ALL clients — the client filters out itself locally.
 func (s *Server) sendPeerInfoToClient(target *net.UDPAddr) {
+	encoded := s.getEncodedPeerInfo()
+	s.sendCheckedRaw(encoded, target)
+}
+
+// peerInfoCacheTTL is how long cached encoded peer info remains valid.
+var peerInfoCacheTTL = peerInfoInterval
+
+// getEncodedPeerInfo returns the encoded PeerInfo packet, using a short-lived
+// cache to avoid redundant Marshal+Encode when multiple clients request the
+// peer list in quick succession (e.g. after a broadcast triggers re-requests).
+func (s *Server) getEncodedPeerInfo() []byte {
+	now := time.Now()
+
+	s.peerInfoMu.Lock()
+	// Return cached if still fresh
+	if s.peerInfoEncoded != nil && now.Sub(s.peerInfoCachedAt) < peerInfoCacheTTL {
+		encoded := s.peerInfoEncoded
+		s.peerInfoMu.Unlock()
+		return encoded
+	}
+	s.peerInfoMu.Unlock()
+
+	// Cache miss — rebuild
 	s.mu.RLock()
-	snapshot := make([]peerSnapshot, 0, len(s.clients))
+	peers := &protocol.PeerInfoPayload{}
 	for _, c := range s.clients {
-		snapshot = append(snapshot, peerSnapshot{
-			virtualIP:  c.VirtualIP,
-			publicAddr: c.PublicAddr,
-			username:   c.Username,
+		peers.Peers = append(peers.Peers, protocol.PeerInfoEntry{
+			VirtualIP:  c.VirtualIP,
+			PublicAddr: c.PublicAddr,
+			Username:   c.Username,
 		})
 	}
 	s.mu.RUnlock()
 
-	peers := &protocol.PeerInfoPayload{}
-	for _, sn := range snapshot {
-		peers.Peers = append(peers.Peers, protocol.PeerInfoEntry{
-			VirtualIP:  sn.virtualIP,
-			PublicAddr: sn.publicAddr,
-			Username:   sn.username,
-		})
-	}
-
 	encoded := protocol.EncodeChecked(protocol.TypePeerInfo, peers.Marshal())
-	s.sendCheckedRaw(encoded, target)
+
+	s.peerInfoMu.Lock()
+	s.peerInfoEncoded = encoded
+	s.peerInfoCachedAt = now
+	s.peerInfoMu.Unlock()
+
+	return encoded
 }
 
 // pingInterval is how often the server pings clients for RTT measurement.
