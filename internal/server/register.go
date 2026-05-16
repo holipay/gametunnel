@@ -6,8 +6,8 @@ import (
 	"time"
 
 	"github.com/holipay/gametunnel/internal/i18n"
-	"github.com/holipay/gametunnel-protocol/auth"
-	"github.com/holipay/gametunnel-protocol/protocol"
+	"github.com/holipay/gametunnel/internal/auth"
+	"github.com/holipay/gametunnel/internal/protocol"
 )
 
 const (

@@ -15,8 +15,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/holipay/gametunnel-protocol/auth"
-	"github.com/holipay/gametunnel-protocol/protocol"
+	"github.com/holipay/gametunnel/internal/auth"
+	"github.com/holipay/gametunnel/internal/protocol"
 	"github.com/holipay/gametunnel/internal/i18n"
 )
 
@@ -401,7 +401,7 @@ func (s *Server) keepaliveLoop(ctx context.Context) {
 		var staleClients []staleClient
 		var staleAuths []staleAuth
 		for key, c := range s.clients {
-			if now.Sub(c.LastSeen) > 45*time.Second {
+			if now.Sub(c.LastSeen) > 30*time.Second {
 				staleClients = append(staleClients, staleClient{key: key, c: c})
 			}
 		}

@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/holipay/gametunnel-protocol/protocol"
+	"github.com/holipay/gametunnel/internal/protocol"
 )
 
 // ── Mock TunDevice ─────────────────────────────────────────────
