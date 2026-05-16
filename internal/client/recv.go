@@ -90,7 +90,7 @@ func (t *Tunnel) handleServerData(ctx context.Context, msg *protocol.Message) {
 	case protocol.TypeData:
 		t.handleDataFromServer(msg.Payload)
 	case protocol.TypePing:
-		t.sendUDP(protocol.EncodeChecked(protocol.TypePong, msg.Payload), t.serverAddr)
+		t.sendCtrl(protocol.EncodeChecked(protocol.TypePong, msg.Payload), t.serverAddr)
 	case protocol.TypeHolePunch:
 		t.handleHolePunchReceived(msg.Payload)
 	}

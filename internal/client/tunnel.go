@@ -64,6 +64,7 @@ type TunConfig struct {
 type Tunnel struct {
 	conn           *net.UDPConn
 	sendCh         chan sendJob // dedicated channel for UDP sends (replaces connMu)
+	ctrlCh         chan sendJob // high-priority channel for control packets (never dropped)
 	serverAddr     *net.UDPAddr
 	tunDev         TunDevice
 	virtualIP      net.IP
@@ -96,6 +97,10 @@ type Tunnel struct {
 // Sized to absorb bursts without blocking callers.
 const sendChanSize = 4096
 
+// ctrlChanSize is the buffer size for the control packet channel.
+// Control packets (keepalive, pong, peer request) must never be dropped.
+const ctrlChanSize = 256
+
 // New creates a new Tunnel. Call Connect to start it.
 func New(cfg *Config) *Tunnel {
 	return &Tunnel{
@@ -104,6 +109,7 @@ func New(cfg *Config) *Tunnel {
 		roomPass: cfg.RoomPassword,
 		peers:    make(map[[4]byte]*Peer),
 		sendCh:   make(chan sendJob, sendChanSize),
+		ctrlCh:   make(chan sendJob, ctrlChanSize),
 	}
 }
 
@@ -303,14 +309,26 @@ func (t *Tunnel) sendLoop(ctx context.Context) {
 			// Drain remaining sends before exiting
 			for {
 				select {
+				case job := <-t.ctrlCh:
+					t.writeUDP(job.data, job.addr)
 				case job := <-t.sendCh:
 					t.writeUDP(job.data, job.addr)
 				default:
 					return
 				}
 			}
-		case job := <-t.sendCh:
+		case job := <-t.ctrlCh:
+			// Control packets (keepalive, pong, peer request) — always drain first
 			t.writeUDP(job.data, job.addr)
+		case job := <-t.sendCh:
+			// Data packets — only process when no control packets pending
+			select {
+			case ctrlJob := <-t.ctrlCh:
+				t.writeUDP(ctrlJob.data, ctrlJob.addr)
+				t.writeUDP(job.data, job.addr) // process the data packet too
+			default:
+				t.writeUDP(job.data, job.addr)
+			}
 		}
 	}
 }
@@ -338,6 +356,21 @@ func (t *Tunnel) sendUDP(data []byte, addr *net.UDPAddr) {
 		n := t.sendErrors.Add(1)
 		if n == 1 || n%100 == 0 {
 			log.Printf("%s", i18n.Format(i18n.T().LogSendFail, n, fmt.Errorf("send channel full")))
+		}
+	}
+}
+
+// sendCtrl enqueues a control packet (keepalive, pong, peer request, hole punch).
+// Control packets use a separate high-priority channel and are never dropped,
+// even when the data channel is saturated by game traffic.
+func (t *Tunnel) sendCtrl(data []byte, addr *net.UDPAddr) {
+	select {
+	case t.ctrlCh <- sendJob{data: data, addr: addr}:
+	default:
+		// Control channel full — log but don't block
+		n := t.sendErrors.Add(1)
+		if n == 1 || n%100 == 0 {
+			log.Printf("%s", i18n.Format(i18n.T().LogSendFail, n, fmt.Errorf("ctrl channel full")))
 		}
 	}
 }
