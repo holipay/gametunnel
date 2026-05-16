@@ -230,7 +230,7 @@ func (a *App) connectLoop() {
 			}
 		}
 
-		err := a.tunnel.Connect(a.ctx, a.cfg.ServerAddr, 1400, a.newTUN)
+		err := a.tunnel.Connect(a.ctx, a.cfg.ServerAddr, a.cfg.MTU, a.newTUN)
 		if a.ctx.Err() != nil {
 			return
 		}
