@@ -2,15 +2,17 @@
 
 // metric_windows.go — 使用 Windows IP Helper API 直接管理网卡 metric。
 //
-// 改用原始字节缓冲区操作 MIB_IPINTERFACE_ROW，避免 Go 结构体
-// 与 Windows SDK 结构体因字段对齐、版本差异导致的布局不匹配。
+// 改动点：
+//   - findAdapter 使用 ConvertInterfaceIndexToLuid 替代 GetIpInterfaceEntry
+//     （GetIpInterfaceEntry 在 wintun 适配器上读不到 UseAutomaticMetric）
+//   - checkAutoMetricDisabled 使用 PowerShell 验证（IP Helper API 对 wintun 不可靠）
 
 package tun
 
 import (
-	"encoding/binary"
 	"fmt"
 	"log"
+	"strings"
 	"syscall"
 	"unsafe"
 
@@ -21,8 +23,7 @@ var (
 	modIphlpapi = syscall.NewLazyDLL("iphlpapi.dll")
 
 	procGetAdaptersAddresses       = modIphlpapi.NewProc("GetAdaptersAddresses")
-	procGetIpInterfaceEntry        = modIphlpapi.NewProc("GetIpInterfaceEntry")
-	procSetIpInterfaceEntry        = modIphlpapi.NewProc("SetIpInterfaceEntry")
+	procConvertInterfaceIndexToLuid = modIphlpapi.NewProc("ConvertInterfaceIndexToLuid")
 )
 
 const (
@@ -31,18 +32,6 @@ const (
 	gaaFlagSkipMulticast    = 0x0004
 	gaaFlagSkipDNS          = 0x0008
 	gaaFlagSkipFriendlyName = 0x0020
-)
-
-// MIB_IPINTERFACE_ROW 相关偏移量（Windows 10+ 通用）。
-//
-// 来源: Windows SDK 10.0.26100.0 netioapi.h
-// 这些偏移量在 Windows 10/11 所有版本中保持稳定。
-const (
-	mibRowSize            = 416  // sizeof(MIB_IPINTERFACE_ROW) — Windows 10 1709+
-	offsetFamily          = 0    // ADDRESS_FAMILY (uint16)
-	offsetInterfaceLuid   = 8    // NET_LUID (uint64)
-	offsetInterfaceIndex  = 16   // NET_IFINDEX (uint32)
-	offsetUseAutoMetric   = 56   // ULONG UseAutomaticMetric
 )
 
 // ipAdapterAddresses 最小布局，用于枚举网卡。
@@ -114,6 +103,7 @@ func findAdapterNameByIndex(targetIdx uint32) (string, error) {
 }
 
 // findAdapter 按 FriendlyName 查找网卡，返回 ifIndex 和 LUID。
+// 使用 ConvertInterfaceIndexToLuid 获取 LUID（对 wintun 等虚拟适配器可靠）。
 func findAdapter(name string) (ifIndex uint32, luid uint64, err error) {
 	var bufLen uint32 = 15000
 	buf := make([]byte, bufLen)
@@ -138,16 +128,15 @@ func findAdapter(name string) (ifIndex uint32, luid uint64, err error) {
 	p := (*ipAdapterAddresses)(unsafe.Pointer(&buf[0]))
 	for p != nil {
 		if windows.UTF16PtrToString(p.FriendlyName) == name {
-			// 用 raw buffer 读取 LUID
-			row := make([]byte, mibRowSize)
-			binary.LittleEndian.PutUint16(row[offsetFamily:], syscall.AF_INET)
-			binary.LittleEndian.PutUint32(row[offsetInterfaceIndex:], p.IfIndex)
-			r1, _, _ := procGetIpInterfaceEntry.Call(uintptr(unsafe.Pointer(&row[0])))
+			// 用 ConvertInterfaceIndexToLuid 获取 LUID（不依赖 GetIpInterfaceEntry，wintun 兼容）
+			r1, _, _ := procConvertInterfaceIndexToLuid.Call(
+				uintptr(p.IfIndex),
+				uintptr(unsafe.Pointer(&luid)),
+			)
 			if r1 == 0 {
-				luid = binary.LittleEndian.Uint64(row[offsetInterfaceLuid:])
 				return p.IfIndex, luid, nil
 			}
-			return 0, 0, fmt.Errorf("GetIpInterfaceEntry(idx=%d): adapter found but not ready", p.IfIndex)
+			return 0, 0, fmt.Errorf("ConvertInterfaceIndexToLuid(idx=%d): ret=%d", p.IfIndex, r1)
 		}
 		p = p.Next
 	}
