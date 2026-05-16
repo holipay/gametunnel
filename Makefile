@@ -6,7 +6,7 @@
 .PHONY: all server client client-all clean install-server release release-client release-server release-openwrt test server-openwrt server-openwrt-arm64 server-openwrt-armv7
 
 BINARY_DIR := bin
-SERVER := $(BINARY_DIR)/gtunnel-server
+SERVER := $(BINARY_DIR)/gtunnel-server-linux-amd64
 VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
 LDFLAGS := -ldflags "-s -w -X main.Version=$(VERSION)"
 
