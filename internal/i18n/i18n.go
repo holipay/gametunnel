@@ -120,6 +120,7 @@ type Strings struct {
 	KickInvalidName    string // "用户名不合法"
 	KickInvalidRoom    string // "房间ID不合法"
 	KickRateLimit      string // "注册过于频繁，请稍后再试"
+	KickIPLimit        string // "同一IP连接数已达上限"
 	KickAuthPending    string // "认证进行中，请等待"
 	KickRoomFull       string // "房间已满"
 	KickDuplicateName  string // "同房间内已存在相同用户名的玩家，请更换用户名"
@@ -269,6 +270,7 @@ var zhStrings = &Strings{
 	KickInvalidName:   "用户名不合法",
 	KickInvalidRoom:   "房间ID不合法",
 	KickRateLimit:     "注册过于频繁，请稍后再试",
+	KickIPLimit:       "同一IP连接数已达上限",
 	KickAuthPending:   "认证进行中，请等待",
 	KickRoomFull:      "房间已满",
 	KickDuplicateName: "同房间内已存在相同用户名的玩家，请更换用户名",
@@ -417,6 +419,7 @@ var enStrings = &Strings{
 	KickInvalidName:   "Invalid username",
 	KickInvalidRoom:   "Invalid room ID",
 	KickRateLimit:     "Registration too frequent, please try again later",
+	KickIPLimit:       "Too many connections from this IP",
 	KickAuthPending:   "Authentication in progress, please wait",
 	KickRoomFull:      "Room is full",
 	KickDuplicateName: "A player with the same name already exists in this room, please change your name",

@@ -40,6 +40,14 @@ func (s *Server) handleDisconnect(from *net.UDPAddr) {
 	} else {
 		s.markIPFree(c.VirtualIP)
 		delete(s.clients, ip4Key(c.VirtualIP))
+		// Decrement per-IP connection count
+		ip := c.PublicAddr.IP.String()
+		s.ipConnMu.Lock()
+		s.ipConnCount[ip]--
+		if s.ipConnCount[ip] <= 0 {
+			delete(s.ipConnCount, ip)
+		}
+		s.ipConnMu.Unlock()
 	}
 	delete(s.addrMap, fromKey)
 	s.mu.Unlock()
