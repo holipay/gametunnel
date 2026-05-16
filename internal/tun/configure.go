@@ -117,6 +117,48 @@ func (d *Device) configure() error {
 	return nil
 }
 
+// ReconfigureRoutes re-applies routes without recreating the TUN device.
+// Called on reconnect — routes may have been modified by the OS during
+// disconnection (e.g. Windows Network Location Awareness service).
+func (d *Device) ReconfigureRoutes() {
+	mask := net.IP(d.subnetMask).String()
+	ip := d.virtualIP.String()
+
+	// Subnet route
+	subnet := d.virtualIP.Mask(d.subnetMask)
+	maskBits, _ := d.subnetMask.Size()
+	RunCmd("route", "add",
+		fmt.Sprintf("%s/%d", subnet, maskBits), "mask", mask, ip, "metric", "1")
+
+	// Global broadcast
+	RunCmd("route", "add",
+		"255.255.255.255", "mask", "255.255.255.255", ip, "metric", "1")
+
+	// Subnet broadcast
+	subnetBroadcast := net.IP(make([]byte, 4))
+	for i := 0; i < 4; i++ {
+		subnetBroadcast[i] = subnet[i] | ^d.subnetMask[i]
+	}
+	RunCmd("route", "add",
+		subnetBroadcast.String(), "mask", mask, ip, "metric", "1")
+
+	// mDNS multicast
+	RunCmd("route", "add",
+		"224.0.0.251", "mask", "255.255.255.255", ip, "metric", "1")
+
+	// Server exclusion route
+	if d.serverPublicIP != nil {
+		gw := d.detectPhysicalGateway()
+		if gw != "" {
+			d.physicalGateway = gw
+			RunCmd("route", "add",
+				d.serverPublicIP.String(), "mask", "255.255.255.255", gw, "metric", "1")
+		}
+	}
+
+	log.Printf("[tun] routes reconfigured on reconnect")
+}
+
 // applyMetricAPI 通过 IP Helper API 禁用 TUN + 物理网卡的 AutomaticMetric。
 func (d *Device) applyMetricAPI() error {
 	idx, luid, err := findAdapter(d.name)

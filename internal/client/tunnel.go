@@ -43,6 +43,13 @@ type TunDevice interface {
 	Close() error
 }
 
+// RouteConfigurator is an optional interface for TUN devices that support
+// reconfiguring routes without recreation. Used on reconnect to re-apply
+// routes that may have been modified by the OS during disconnection.
+type RouteConfigurator interface {
+	ReconfigureRoutes()
+}
+
 // TunConfig holds the parameters needed to create a TUN device.
 // Populated by Connect after successful registration.
 type TunConfig struct {
@@ -139,6 +146,10 @@ func (t *Tunnel) Connect(ctx context.Context, serverAddr string, mtu int, newTUN
 	switch {
 	case tunAlive && !ipChanged:
 		log.Printf("%s", i18n.Format(i18n.T().LogReuseTUN, t.virtualIP))
+		// Re-apply routes that may have been modified by the OS during disconnection
+		if rc, ok := t.tunDev.(RouteConfigurator); ok {
+			rc.ReconfigureRoutes()
+		}
 
 	case tunAlive && ipChanged:
 		log.Printf("%s", i18n.Format(i18n.T().LogIPChanged, t.lastAssignedIP, t.virtualIP))
