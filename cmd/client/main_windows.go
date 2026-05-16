@@ -113,7 +113,7 @@ func requestAdmin() {
 	verb, _ := windows.UTF16PtrFromString("runas")
 	exePath, _ := windows.UTF16PtrFromString(exe)
 
-	if err := windows.ShellExecute(0, verb, exePath, nil, nil, windows.SW_SHOWNORMAL); err != nil {
+	if err := windows.ShellExecute(0, verb, exePath, nil, nil, windows.SW_HIDE); err != nil {
 		fmt.Fprintf(os.Stderr, i18n.T().ErrElevateFailed, err)
 		os.Exit(1)
 	}
