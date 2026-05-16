@@ -75,7 +75,10 @@ type Server struct {
 	pktCh   chan pktJob
 
 	// PeerInfo batching: coalesce rapid join/leave into periodic broadcasts
-	peerInfoDirty atomic.Bool // set on join/leave, checked by peerInfoLoop
+	peerInfoDirty    atomic.Bool // set on join/leave, checked by peerInfoLoop
+	peerInfoMu       sync.Mutex  // protects peerInfo cache
+	peerInfoEncoded  []byte      // cached encoded PeerInfo packet
+	peerInfoCachedAt time.Time   // when the cache was last refreshed
 
 	// Rate limiting: per-client packet count per window
 	rateMu    sync.Mutex
