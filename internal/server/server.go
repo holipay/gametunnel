@@ -336,37 +336,46 @@ func (s *Server) keepaliveLoop(ctx context.Context) {
 
 		now := time.Now()
 
-		// Phase 1: scan under RLock (non-blocking for packet processing)
+		// Phase 1: scan under RLock — collect stale entries with all data
+		// needed for deletion, so Phase 2 only does verify+delete (no re-scan).
 		s.mu.RLock()
-		var staleClients [][4]byte
-		var staleAuth []rateKey
+		type staleClient struct {
+			key [4]byte
+			c   *Client
+		}
+		type staleAuth struct {
+			key rateKey
+			c   *Client
+		}
+		var staleClients []staleClient
+		var staleAuths []staleAuth
 		for key, c := range s.clients {
 			if now.Sub(c.LastSeen) > 45*time.Second {
-				staleClients = append(staleClients, key)
+				staleClients = append(staleClients, staleClient{key: key, c: c})
 			}
 		}
 		for addrKey, c := range s.addrMap {
 			if c.auth == authChallengeSent && now.Sub(c.challengeAt) > 30*time.Second {
-				staleAuth = append(staleAuth, addrKey)
+				staleAuths = append(staleAuths, staleAuth{key: addrKey, c: c})
 			}
 		}
 		s.mu.RUnlock()
 
-		if len(staleClients) == 0 && len(staleAuth) == 0 {
+		if len(staleClients) == 0 && len(staleAuths) == 0 {
 			continue
 		}
 
-		// Phase 2: delete under WLock (re-verify stale entries)
+		// Phase 2: verify + delete under WLock (no re-scan, just check existence).
 		s.mu.Lock()
 		changed := false
-		for _, key := range staleClients {
-			if c, ok := s.clients[key]; ok && now.Sub(c.LastSeen) > 45*time.Second {
-				log.Printf("%s", i18n.Format(i18n.T().ServerPeerLeave, c.Username, c.VirtualIP))
-				s.markIPFree(c.VirtualIP)
-				delete(s.clients, key)
-				delete(s.addrMap, addrToRateKey(c.PublicAddr))
+		for _, sc := range staleClients {
+			if cur, ok := s.clients[sc.key]; ok && cur == sc.c {
+				log.Printf("%s", i18n.Format(i18n.T().ServerPeerLeave, sc.c.Username, sc.c.VirtualIP))
+				s.markIPFree(sc.c.VirtualIP)
+				delete(s.clients, sc.key)
+				delete(s.addrMap, addrToRateKey(sc.c.PublicAddr))
 				// Decrement per-IP connection count
-				ip := c.PublicAddr.IP.String()
+				ip := sc.c.PublicAddr.IP.String()
 				s.ipConnMu.Lock()
 				s.ipConnCount[ip]--
 				if s.ipConnCount[ip] <= 0 {
@@ -376,9 +385,9 @@ func (s *Server) keepaliveLoop(ctx context.Context) {
 				changed = true
 			}
 		}
-		for _, addrKey := range staleAuth {
-			if c, ok := s.addrMap[addrKey]; ok && c.auth == authChallengeSent && now.Sub(c.challengeAt) > 30*time.Second {
-				delete(s.addrMap, addrKey)
+		for _, sa := range staleAuths {
+			if cur, ok := s.addrMap[sa.key]; ok && cur == sa.c {
+				delete(s.addrMap, sa.key)
 				s.pendingAuth--
 			}
 		}
