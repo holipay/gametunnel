@@ -12,6 +12,9 @@ import (
 )
 
 // Device represents an active TUN device with its virtual IP (Windows).
+//
+// TODO: batch=32 for high-throughput scenarios (>100 pps). Current batch=1 is
+// fine for games but wastes the wireguard/tun batch interface for bulk transfer.
 type Device struct {
 	tunDev          tun.Device
 	name            string
