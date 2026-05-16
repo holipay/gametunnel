@@ -3,7 +3,7 @@
 # Server: Linux / Windows / OpenWrt
 # Client: Windows
 
-.PHONY: all server client client-all clean install-server release release-client release-server release-openwrt test server-openwrt server-openwrt-arm64 server-openwrt-armv7
+.PHONY: all server client client-all clean install-server release release-client release-server release-openwrt test server-openwrt server-openwrt-arm64 server-openwrt-armv7 vendor vendor-check
 
 BINARY_DIR := bin
 SERVER := $(BINARY_DIR)/gtunnel-server-linux-amd64
@@ -69,6 +69,18 @@ client-all: client client-windows-x86
 
 test:
 	go test -v -count=1 ./...
+
+# ── Vendor (dependency lock) ────────────────────────────────────
+# Locks all dependencies into vendor/ for reproducible builds.
+# Commit vendor/ after running this.
+
+vendor:
+	go mod vendor
+	@echo "  Dependencies vendored. Commit the vendor/ directory."
+
+vendor-check:
+	@go mod verify
+	@echo "  All dependencies verified."
 
 run-server: server
 	sudo $(SERVER) -addr :4700 -subnet 10.10.0.0/24

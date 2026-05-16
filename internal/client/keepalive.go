@@ -65,7 +65,7 @@ func (t *Tunnel) startHolePunch(ctx context.Context, peerIP net.IP) {
 				return
 			default:
 			}
-			t.sendUDP(packet, peer.PublicAddr)
+			t.sendCtrl(packet, peer.PublicAddr)
 			time.Sleep(interval)
 		}
 
@@ -114,7 +114,7 @@ func (t *Tunnel) handleHolePunchReceived(payload []byte) {
 		packet := protocol.EncodeChecked(protocol.TypeHolePunch, punchPayload)
 
 		for i := 0; i < holePunchBurstPerPhase; i++ {
-			t.sendUDP(packet, peer.PublicAddr)
+			t.sendCtrl(packet, peer.PublicAddr)
 			time.Sleep(50 * time.Millisecond)
 		}
 	}()
@@ -136,7 +136,7 @@ func (t *Tunnel) hasDirectPeerTraffic(peerIP net.IP) bool {
 // If the server appears dead for too long, the tunnel context is cancelled
 // to trigger a reconnect.
 func (t *Tunnel) keepaliveLoop(ctx context.Context) {
-	const serverTimeout = 45 * time.Second // 3 missed keepalives
+	const serverTimeout = 30 * time.Second // 3 missed keepalives
 
 	ticker := time.NewTicker(10 * time.Second)
 	defer ticker.Stop()
@@ -147,7 +147,7 @@ func (t *Tunnel) keepaliveLoop(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			t.sendUDP(packet, t.serverAddr)
+			t.sendCtrl(packet, t.serverAddr)
 
 			// Check if server is still alive
 			lastSeen := t.lastServerResponse.Load()
@@ -170,7 +170,7 @@ func (t *Tunnel) peerDiscoveryLoop(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			t.sendUDP(packet, t.serverAddr)
+			t.sendCtrl(packet, t.serverAddr)
 		}
 	}
 }
@@ -296,6 +296,6 @@ func (t *Tunnel) sendP2PKeepalives() {
 	packet := protocol.EncodeChecked(protocol.TypeHolePunch, payload)
 
 	for _, peer := range directPeers {
-		t.sendUDP(packet, peer.PublicAddr)
+		t.sendCtrl(packet, peer.PublicAddr)
 	}
 }
