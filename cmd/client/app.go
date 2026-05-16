@@ -18,6 +18,7 @@ type App struct {
 	cfg        *client.Config
 	tunnel     *client.Tunnel
 	mu         sync.RWMutex
+	dialogMu   sync.Mutex // serializes Win32 modal dialogs (settings + error)
 	connecting bool
 	lastErr    string
 

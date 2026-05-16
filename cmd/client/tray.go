@@ -52,6 +52,8 @@ func (tr *Tray) setup() {
 
 	// Wire up connection failure callback: show error dialog after fast retries
 	tr.app.onConnFailed = func(errMsg string) bool {
+		tr.app.dialogMu.Lock()
+		defer tr.app.dialogMu.Unlock()
 		return showConnErrorDialog(errMsg)
 	}
 
@@ -81,6 +83,8 @@ func (tr *Tray) setup() {
 			select {
 			case <-mSettings.ClickedCh:
 				go func() {
+					tr.app.dialogMu.Lock()
+					defer tr.app.dialogMu.Unlock()
 					status := tr.app.GetStatus()
 					statusText := i18n.T().DlgStatusIdle
 					if status.Connected {
@@ -122,6 +126,8 @@ func (tr *Tray) setup() {
 
 func (tr *Tray) doConnect() {
 	if tr.app.cfg.ServerAddr == "" {
+		tr.app.dialogMu.Lock()
+		defer tr.app.dialogMu.Unlock()
 		statusText := i18n.T().TrayNoServer
 		if showSettingsDialog(statusText) {
 			cfg := client.LoadConfig()

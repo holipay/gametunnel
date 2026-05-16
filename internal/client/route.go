@@ -30,7 +30,11 @@ func (t *Tunnel) routePacket(pkt []byte, srcIP, dstIP net.IP) {
 
 	if ok && peer.PublicAddr != nil && peer.DirectReach.Load() {
 		// P2P direct path confirmed — send directly for low latency.
-		dp := &protocol.DataPayload{SrcIP: srcIP, DstIP: dstIP, Data: pkt}
+		data := pkt
+		if t.encCipher != nil {
+			data = t.encCipher.Encrypt(pkt)
+		}
+		dp := &protocol.DataPayload{SrcIP: srcIP, DstIP: dstIP, Data: data}
 		t.sendUDP(protocol.EncodeChecked(protocol.TypeData, dp.Marshal()), peer.PublicAddr)
 	} else {
 		// Fallback: relay through server.
@@ -40,7 +44,11 @@ func (t *Tunnel) routePacket(pkt []byte, srcIP, dstIP net.IP) {
 
 // sendToServer sends a packet via the server relay.
 func (t *Tunnel) sendToServer(pkt []byte, srcIP, dstIP net.IP) {
-	dp := &protocol.DataPayload{SrcIP: srcIP, DstIP: dstIP, Data: pkt}
+	data := pkt
+	if t.encCipher != nil {
+		data = t.encCipher.Encrypt(pkt)
+	}
+	dp := &protocol.DataPayload{SrcIP: srcIP, DstIP: dstIP, Data: data}
 	encoded := protocol.EncodeChecked(protocol.TypeData, dp.Marshal())
 	t.sendUDP(encoded, t.serverAddr)
 }

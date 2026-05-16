@@ -19,6 +19,9 @@ import (
 
 // configure 分配 IP、设置路由、确保广播走 TUN。
 func (d *Device) configure() error {
+	// 幂等化：先清理可能残留的旧路由（程序崩溃后不会执行 CleanupRoutes）。
+	d.CleanupRoutes()
+
 	mask := net.IP(d.subnetMask).String()
 	ip := d.virtualIP.String()
 

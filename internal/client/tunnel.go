@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/holipay/gametunnel-protocol/protocol"
+	"github.com/holipay/gametunnel/internal/crypto"
 	"github.com/holipay/gametunnel/internal/i18n"
 )
 
@@ -80,6 +81,10 @@ type Tunnel struct {
 
 	// Server liveness tracking — updated by handleServerData
 	lastServerResponse atomic.Pointer[time.Time]
+
+	// End-to-end encryption (nil when no password)
+	encCipher *crypto.Cipher // for sending (client→server/client)
+	decCipher *crypto.Cipher // for receiving (server/client→client)
 
 	// TUN reuse state — persists across Connect() calls
 	lastAssignedIP net.IP                             // virtual IP from last registration

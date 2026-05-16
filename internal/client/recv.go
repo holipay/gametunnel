@@ -6,6 +6,7 @@ import (
 	"net"
 	"time"
 
+	"github.com/holipay/gametunnel/internal/crypto"
 	"github.com/holipay/gametunnel/internal/i18n"
 	"github.com/holipay/gametunnel-protocol/protocol"
 )
@@ -126,7 +127,16 @@ func (t *Tunnel) handleDirectData(from *net.UDPAddr, msg *protocol.Message) {
 	// Mark P2P direct path confirmed — this is the legitimate DirectReach signal
 	peer.DirectReach.Store(true)
 
-	if _, err := t.tunDev.Write(dp.Data); err != nil {
+	// Decrypt if encrypted
+	outData := dp.Data
+	if t.decCipher != nil && crypto.IsEncrypted(dp.Data) {
+		outData, err = t.decCipher.Decrypt(dp.Data)
+		if err != nil {
+			return
+		}
+	}
+
+	if _, err := t.tunDev.Write(outData); err != nil {
 		log.Printf(i18n.T().LogTUNWriteFail, err)
 	}
 }
@@ -221,7 +231,17 @@ func (t *Tunnel) handleDataFromServer(payload []byte) {
 		}
 	}
 
-	if _, err := t.tunDev.Write(dp.Data); err != nil {
+	// Decrypt if encrypted
+	outData := dp.Data
+	if t.decCipher != nil && crypto.IsEncrypted(dp.Data) {
+		outData, err = t.decCipher.Decrypt(dp.Data)
+		if err != nil {
+			// Decrypt failure — drop packet (tampered or wrong key)
+			return
+		}
+	}
+
+	if _, err := t.tunDev.Write(outData); err != nil {
 		log.Printf(i18n.T().LogTUNWriteFail, err)
 	}
 }
