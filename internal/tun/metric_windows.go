@@ -133,7 +133,7 @@ func findAdapter(name string) (ifIndex uint32, luid uint64, err error) {
 				luid = binary.LittleEndian.Uint64(row[offsetInterfaceLuid:])
 				return p.IfIndex, luid, nil
 			}
-			return p.IfIndex, 0, nil
+			return 0, 0, fmt.Errorf("GetIpInterfaceEntry(idx=%d): adapter found but not ready", p.IfIndex)
 		}
 		p = p.Next
 	}
