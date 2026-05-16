@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/holipay/gametunnel/internal/i18n"
-	"github.com/holipay/gametunnel-protocol/protocol"
+	"github.com/holipay/gametunnel/internal/protocol"
 )
 
 // holePunchIntervals defines progressive send intervals for hole punching.

@@ -9,7 +9,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/holipay/gametunnel-protocol/protocol"
+	"github.com/holipay/gametunnel/internal/protocol"
 	"github.com/holipay/gametunnel/internal/crypto"
 	"github.com/holipay/gametunnel/internal/i18n"
 )
@@ -361,13 +361,13 @@ func (t *Tunnel) sendUDP(data []byte, addr *net.UDPAddr) {
 }
 
 // sendCtrl enqueues a control packet (keepalive, pong, peer request, hole punch).
-// Control packets use a separate high-priority channel and are never dropped,
-// even when the data channel is saturated by game traffic.
+// Control packets use a separate high-priority channel with a short blocking window
+// to avoid dropping critical keepalive packets under burst load.
 func (t *Tunnel) sendCtrl(data []byte, addr *net.UDPAddr) {
 	select {
 	case t.ctrlCh <- sendJob{data: data, addr: addr}:
-	default:
-		// Control channel full — log but don't block
+	case <-time.After(50 * time.Millisecond):
+		// Channel full after 50ms — drop to avoid blocking caller indefinitely
 		n := t.sendErrors.Add(1)
 		if n == 1 || n%100 == 0 {
 			log.Printf("%s", i18n.Format(i18n.T().LogSendFail, n, fmt.Errorf("ctrl channel full")))

@@ -3,7 +3,7 @@ package server
 import (
 	"net"
 
-	"github.com/holipay/gametunnel-protocol/protocol"
+	"github.com/holipay/gametunnel/internal/protocol"
 )
 
 // maxInlineTargets is the number of peer addresses we can hold on the stack
