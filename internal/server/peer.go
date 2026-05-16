@@ -160,7 +160,8 @@ func (s *Server) getEncodedPeerInfo() []byte {
 // pingInterval is how often the server pings clients for RTT measurement.
 const pingInterval = 5 * time.Second
 
-// pingLoop periodically sends TypePing to all authenticated clients.
+// pingLoop periodically sends TypePing to all authenticated clients
+// and tracks timeout (missed pong) for loss rate calculation.
 func (s *Server) pingLoop(ctx context.Context) {
 	ticker := time.NewTicker(pingInterval)
 	defer ticker.Stop()
@@ -172,29 +173,38 @@ func (s *Server) pingLoop(ctx context.Context) {
 		case <-ticker.C:
 		}
 
-		s.mu.RLock()
+		now := time.Now()
+
+		s.mu.Lock()
 		if len(s.clients) == 0 {
-			s.mu.RUnlock()
+			s.mu.Unlock()
 			continue
 		}
-		snapshot := make([]peerSnapshot, 0, len(s.clients))
-		for _, c := range s.clients {
-			snapshot = append(snapshot, peerSnapshot{
-				publicAddr: c.PublicAddr,
-			})
-		}
-		s.mu.RUnlock()
 
-		ts := time.Now().UnixNano()
+		// Mark previous pings as missed if no pong received within 2*interval.
+		for _, c := range s.clients {
+			if !c.lastPingSent.IsZero() && now.Sub(c.lastPingSent) > 2*pingInterval {
+				c.pingHistory[c.pingIdx%pingHistorySize] = 0 // missed
+				c.pingIdx++
+			}
+		}
+
+		// Send pings and record sequence/time.
+		ts := now.UnixNano()
 		ping := &protocol.PingPayload{Timestamp: ts}
 		encoded := protocol.EncodeChecked(protocol.TypePing, ping.Marshal())
-		for _, sn := range snapshot {
-			s.sendCheckedRaw(encoded, sn.publicAddr)
+		for _, c := range s.clients {
+			c.pingSeq++
+			c.lastPingSent = now
+			c.lastPingSeq = c.pingSeq
+			s.sendCheckedRaw(encoded, c.PublicAddr)
 		}
+		s.mu.Unlock()
 	}
 }
 
-// handlePong processes a latency pong response and updates client RTT.
+// handlePong processes a latency pong response and updates client RTT,
+// jitter, and loss stats.
 func (s *Server) handlePong(payload []byte, from *net.UDPAddr) {
 	ping, err := protocol.UnmarshalPing(payload)
 	if err != nil {
@@ -209,6 +219,8 @@ func (s *Server) handlePong(payload []byte, from *net.UDPAddr) {
 	s.mu.Lock()
 	if c := s.addrMap[addrToRateKey(from)]; c != nil {
 		c.RTT = rtt
+		c.pingHistory[c.pingIdx%pingHistorySize] = rtt
+		c.pingIdx++
 	}
 	s.mu.Unlock()
 }

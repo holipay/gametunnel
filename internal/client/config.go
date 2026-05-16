@@ -17,6 +17,7 @@ type Config struct {
 	RoomID       string
 	RoomPassword string
 	Lang         string // "zh" or "en", default "zh"
+	MTU          int    // tunnel MTU, default 1400
 }
 
 // exeDir returns the directory containing the executable.
@@ -54,6 +55,7 @@ func LoadConfig() *Config {
 	cfg := &Config{
 		PlayerName: hostname,
 		RoomID:     "default",
+		MTU:        1400,
 	}
 
 	// Try portable config.ini first
@@ -82,6 +84,8 @@ func SaveConfig(cfg *Config) error {
 	fmt.Fprintf(&b, "password=%s\n", cfg.RoomPassword)
 	fmt.Fprintln(&b, "# Language (zh or en)")
 	fmt.Fprintf(&b, "lang=%s\n", cfg.Lang)
+	fmt.Fprintln(&b, "# Tunnel MTU (576-9000, default 1400)")
+	fmt.Fprintf(&b, "mtu=%d\n", cfg.MTU)
 	return os.WriteFile(path, []byte(b.String()), 0644)
 }
 
@@ -130,6 +134,11 @@ func loadINI(path string, cfg *Config) bool {
 			if value != "" {
 				cfg.Lang = value
 			}
+		case "mtu":
+			var v int
+			if _, err := fmt.Sscanf(value, "%d", &v); err == nil && v >= 576 && v <= 9000 {
+				cfg.MTU = v
+			}
 		}
 	}
 	return true
@@ -148,6 +157,7 @@ func loadJSON(path string, cfg *Config) {
 		RoomPassword string `json:"room_password,omitempty"`
 		AutoConnect  *bool  `json:"auto_connect,omitempty"`
 		Lang         string `json:"lang,omitempty"`
+		MTU          int    `json:"mtu,omitempty"`
 	}
 	var r raw
 	if json.Unmarshal(data, &r) == nil {
@@ -163,6 +173,9 @@ func loadJSON(path string, cfg *Config) {
 		cfg.RoomPassword = r.RoomPassword
 		if r.Lang != "" {
 			cfg.Lang = r.Lang
+		}
+		if r.MTU >= 576 && r.MTU <= 9000 {
+			cfg.MTU = r.MTU
 		}
 	}
 }
