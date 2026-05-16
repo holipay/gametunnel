@@ -30,13 +30,15 @@ func addrToRateKey(addr *net.UDPAddr) rateKey {
 func (s *Server) checkRate(addr *net.UDPAddr) bool {
 	key := addrToRateKey(addr)
 	s.rateMu.Lock()
-	s.rateCount[key]++
-	ok := s.rateCount[key] <= rateLimit
+	s.rateBuf[0][key]++
+	ok := s.rateBuf[0][key] <= rateLimit
 	s.rateMu.Unlock()
 	return ok
 }
 
-// rateLimitLoop resets the per-client packet counter every second.
+// rateLimitLoop resets the per-client packet counter every second
+// using a double-buffer swap: swap pointers under lock (O(1)), then
+// clear the stale buffer outside the lock to avoid contention.
 func (s *Server) rateLimitLoop(ctx context.Context) {
 	s.rateTick = time.NewTicker(rateInterval)
 	defer s.rateTick.Stop()
@@ -46,11 +48,12 @@ func (s *Server) rateLimitLoop(ctx context.Context) {
 			return
 		case <-s.rateTick.C:
 			s.rateMu.Lock()
-			// Clear map without reallocating — reuse existing memory
-			for k := range s.rateCount {
-				delete(s.rateCount, k)
-			}
+			s.rateBuf[0], s.rateBuf[1] = s.rateBuf[1], s.rateBuf[0]
 			s.rateMu.Unlock()
+			// Clear stale buffer outside the lock — no contention with checkRate.
+			for k := range s.rateBuf[1] {
+				delete(s.rateBuf[1], k)
+			}
 		}
 	}
 }
@@ -60,13 +63,14 @@ func (s *Server) rateLimitLoop(ctx context.Context) {
 // checkRegRate returns true if the IP has not exceeded the registration rate limit.
 func (s *Server) checkRegRate(ip string) bool {
 	s.regMu.Lock()
-	s.regCount[ip]++
-	ok := s.regCount[ip] <= s.maxRegPerIP
+	s.regBuf[0][ip]++
+	ok := s.regBuf[0][ip] <= s.maxRegPerIP
 	s.regMu.Unlock()
 	return ok
 }
 
-// regRateLimitLoop resets the per-IP registration counter every second.
+// regRateLimitLoop resets the per-IP registration counter every second
+// using a double-buffer swap.
 func (s *Server) regRateLimitLoop(ctx context.Context) {
 	s.regTick = time.NewTicker(time.Second)
 	defer s.regTick.Stop()
@@ -76,10 +80,11 @@ func (s *Server) regRateLimitLoop(ctx context.Context) {
 			return
 		case <-s.regTick.C:
 			s.regMu.Lock()
-			for k := range s.regCount {
-				delete(s.regCount, k)
-			}
+			s.regBuf[0], s.regBuf[1] = s.regBuf[1], s.regBuf[0]
 			s.regMu.Unlock()
+			for k := range s.regBuf[1] {
+				delete(s.regBuf[1], k)
+			}
 		}
 	}
 }
