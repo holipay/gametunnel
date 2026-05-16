@@ -61,6 +61,16 @@ func (s *Server) handleRegister(payload []byte, from *net.UDPAddr) {
 		return
 	}
 
+	// Per-IP connection count limit
+	s.ipConnMu.Lock()
+	ipCount := s.ipConnCount[clientIP]
+	s.ipConnMu.Unlock()
+	if ipCount >= s.maxPerIP {
+		s.mu.Unlock()
+		s.sendKick(from, t.KickIPLimit)
+		return
+	}
+
 	// Capacity check
 	if len(s.clients) >= s.maxPlayers {
 		s.mu.Unlock()
@@ -119,6 +129,13 @@ func (s *Server) registerClientLocked(reg *protocol.RegisterPayload, from *net.U
 	}
 	s.clients[ip4Key(vip)] = c
 	s.addrMap[addrToRateKey(from)] = c
+
+	// Track per-IP connection count
+	clientIP := from.IP.String()
+	s.ipConnMu.Lock()
+	s.ipConnCount[clientIP]++
+	s.ipConnMu.Unlock()
+
 	log.Printf(t.LogPlayerJoin, reg.Username, from, vip, len(s.clients))
 
 	selfIP := vip

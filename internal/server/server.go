@@ -95,6 +95,11 @@ type Server struct {
 	regTick     *time.Ticker
 	maxRegPerIP int
 
+	// Per-IP connection count limit (prevents one IP from filling the room)
+	ipConnMu   sync.Mutex
+	ipConnCount map[string]int
+	maxPerIP   int
+
 	// Diagnostics
 	sendErrors atomic.Int64 // send failure counter
 }
@@ -114,6 +119,7 @@ type Config struct {
 	StatusAddr string // HTTP status address (e.g. ":4701"), empty = disabled
 	Version    string
 	Lang       i18n.Lang
+	MaxPerIP   int // max connections per IP (0 = use default 3)
 }
 
 // New creates a new Server. Call Run() to start it.
@@ -176,6 +182,11 @@ func New(cfg Config) (*Server, error) {
 		maxPending:  cfg.MaxPlayers * 3,
 		regCount:    make(map[string]int),
 		maxRegPerIP: 5,
+		ipConnCount: make(map[string]int),
+		maxPerIP:    cfg.MaxPerIP,
+	}
+	if s.maxPerIP <= 0 {
+		s.maxPerIP = 3
 	}
 	s.markIPUsed(net.IPv4(serverIP[0], serverIP[1], serverIP[2], 0))   // network address
 	s.markIPUsed(serverIP)                                             // server IP
@@ -351,6 +362,14 @@ func (s *Server) keepaliveLoop(ctx context.Context) {
 				s.markIPFree(c.VirtualIP)
 				delete(s.clients, key)
 				delete(s.addrMap, addrToRateKey(c.PublicAddr))
+				// Decrement per-IP connection count
+				ip := c.PublicAddr.IP.String()
+				s.ipConnMu.Lock()
+				s.ipConnCount[ip]--
+				if s.ipConnCount[ip] <= 0 {
+					delete(s.ipConnCount, ip)
+				}
+				s.ipConnMu.Unlock()
 				changed = true
 			}
 		}
