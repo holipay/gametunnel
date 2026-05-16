@@ -38,6 +38,11 @@ const stalePeerCheckInterval = 30 * time.Second
 // from the same peer. Prevents amplification attacks.
 const holePunchBackoff = 5 * time.Second
 
+// p2pKeepaliveInterval is how often we send a keepalive packet to peers
+// with confirmed DirectReach. Keeps NAT mappings alive so the P2P path
+// doesn't silently expire and fall back to relay.
+const p2pKeepaliveInterval = 15 * time.Second
+
 // startHolePunch initiates a multi-phase hole punch to a peer.
 // It runs until all phases complete or the context is cancelled.
 func (t *Tunnel) startHolePunch(ctx context.Context, peerIP net.IP) {
@@ -247,4 +252,50 @@ func (t *Tunnel) retryFailedHolePunches(ctx context.Context) {
 func (t *Tunnel) markServerResponse() {
 	now := time.Now()
 	t.lastServerResponse.Store(&now)
+}
+
+// p2pKeepaliveLoop sends periodic keepalive packets to peers with confirmed
+// DirectReach to prevent NAT mappings from expiring. Without this, UDP NAT
+// entries typically expire in 30-120 seconds, causing P2P paths to silently
+// fail and fall back to server relay.
+//
+// Uses the existing hole punch packet — the peer's rate limiter (5s backoff)
+// prevents amplification, so the extra traffic is minimal (~4 packets/min/peer).
+func (t *Tunnel) p2pKeepaliveLoop(ctx context.Context) {
+	ticker := time.NewTicker(p2pKeepaliveInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			t.sendP2PKeepalives()
+		}
+	}
+}
+
+// sendP2PKeepalives sends a keepalive to each peer with DirectReach=true.
+func (t *Tunnel) sendP2PKeepalives() {
+	t.mu.RLock()
+	var directPeers []*Peer
+	for _, peer := range t.peers {
+		if peer.DirectReach.Load() && peer.PublicAddr != nil {
+			directPeers = append(directPeers, peer)
+		}
+	}
+	t.mu.RUnlock()
+
+	if len(directPeers) == 0 {
+		return
+	}
+
+	// Reuse hole punch packet — lightweight, peer already handles it.
+	payload := make([]byte, 4)
+	copy(payload, t.virtualIP.To4())
+	packet := protocol.EncodeChecked(protocol.TypeHolePunch, payload)
+
+	for _, peer := range directPeers {
+		t.sendUDP(packet, peer.PublicAddr)
+	}
 }
