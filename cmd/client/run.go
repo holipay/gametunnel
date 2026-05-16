@@ -32,10 +32,18 @@ func run(cfg *client.Config, tunFactory func(client.TunConfig) (client.TunDevice
 	RunTray(app)
 }
 
+// maxLogSize is the maximum log file size before rotation (1 MB).
+const maxLogSize = 1 * 1024 * 1024
+
 func setupLog() *os.File {
 	logDir := filepath.Join(appDataPath(), "GameTunnel")
 	os.MkdirAll(logDir, 0755)
 	logPath := filepath.Join(logDir, "gametunnel.log")
+
+	// Rotate: if log exceeds maxLogSize, truncate on open.
+	if info, err := os.Stat(logPath); err == nil && info.Size() > maxLogSize {
+		os.Remove(logPath)
+	}
 
 	f, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
 	if err != nil {
