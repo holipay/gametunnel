@@ -23,7 +23,6 @@ var (
 	procGetAdaptersAddresses       = modIphlpapi.NewProc("GetAdaptersAddresses")
 	procGetIpInterfaceEntry        = modIphlpapi.NewProc("GetIpInterfaceEntry")
 	procSetIpInterfaceEntry        = modIphlpapi.NewProc("SetIpInterfaceEntry")
-	procInitializeIpInterfaceEntry = modIphlpapi.NewProc("InitializeIpInterfaceEntry")
 )
 
 const (
@@ -67,51 +66,51 @@ type ipAdapterAddresses struct {
 	OperStatus      uint32 // 1 = IfOperStatusUp
 }
 
-// setMetricAPI 通过 IP Helper API 禁用指定网卡的 AutomaticMetric。
+// setMetricAPI 通过 netsh 禁用指定网卡的 AutomaticMetric 并设置 metric 值。
 //
-// 使用原始字节缓冲区代替 Go 结构体，确保字段偏移量与 Windows SDK 完全一致。
-// 正确流程: InitializeIpInterfaceEntry → 设置 LUID → GetIpInterfaceEntry → 修改 → SetIpInterfaceEntry。
+// 直接调用 SetIpInterfaceEntry 对 wintun 虚拟适配器返回 ret=87，
+// 因此改用 netsh 命令行方式，经测试可靠工作。
 func setMetricAPI(ifIndex uint32, luid uint64) error {
-	// 分配足够大的缓冲区
-	row := make([]byte, mibRowSize)
-
-	// InitializeIpInterfaceEntry 将整行初始化为默认值，
-	// 避免 SetIpInterfaceEntry 因内部字段未初始化而返回 ERROR_INVALID_PARAMETER。
-	r1, _, e1 := procInitializeIpInterfaceEntry.Call(uintptr(unsafe.Pointer(&row[0])))
-	if r1 != 0 {
-		log.Printf("[tun] InitializeIpInterfaceEntry failed: ret=%d err=%v", r1, e1)
-		return fmt.Errorf("InitializeIpInterfaceEntry: ret=%d", r1)
-	}
-	log.Printf("[tun] InitializeIpInterfaceEntry OK")
-
-	// 设置 Family = AF_INET (2)
-	binary.LittleEndian.PutUint16(row[offsetFamily:], syscall.AF_INET)
-
-	// 设置 InterfaceLuid
-	binary.LittleEndian.PutUint64(row[offsetInterfaceLuid:], luid)
-
-	// 设置 InterfaceIndex
-	binary.LittleEndian.PutUint32(row[offsetInterfaceIndex:], ifIndex)
-
-	// GetIpInterfaceEntry 填充整行
-	r1, _, e1 = procGetIpInterfaceEntry.Call(uintptr(unsafe.Pointer(&row[0])))
-	if r1 != 0 {
-		return fmt.Errorf("GetIpInterfaceEntry(idx=%d): ret=%d err=%v", ifIndex, r1, e1)
+	// 通过 ifIndex 找到接口名称
+	name, err := findAdapterNameByIndex(ifIndex)
+	if err != nil {
+		return fmt.Errorf("find adapter name: %w", err)
 	}
 
-	apiLuid := binary.LittleEndian.Uint64(row[offsetInterfaceLuid:])
-	apiAutoMetric := binary.LittleEndian.Uint32(row[offsetUseAutoMetric:])
-	log.Printf("[tun] GetIpInterfaceEntry OK: apiLuid=%d apiAutoMetric=%d", apiLuid, apiAutoMetric)
-
-	// 修改 UseAutomaticMetric = 0 (禁用自动 metric)
-	binary.LittleEndian.PutUint32(row[offsetUseAutoMetric:], 0)
-
-	// SetIpInterfaceEntry 写回
-	r1, _, e1 = procSetIpInterfaceEntry.Call(uintptr(unsafe.Pointer(&row[0])))
-	if r1 != 0 {
-		return fmt.Errorf("SetIpInterfaceEntry(idx=%d): ret=%d err=%v", ifIndex, r1, e1)
+	// netsh interface ip set interface "name" metric=1
+	if err := RunCmd("netsh", "interface", "ip", "set", "interface",
+		fmt.Sprintf("name=%s", name), "metric=1"); err != nil {
+		return fmt.Errorf("netsh set metric: %w", err)
 	}
+
+	log.Printf("[tun] AutomaticMetric disabled via netsh: %s (idx=%d)", name, ifIndex)
 	return nil
+}
+
+// findAdapterNameByIndex 通过接口索引查找 FriendlyName。
+func findAdapterNameByIndex(targetIdx uint32) (string, error) {
+	var bufLen uint32 = 15000
+	buf := make([]byte, bufLen)
+
+	r1, _, _ := procGetAdaptersAddresses.Call(
+		uintptr(syscall.AF_INET),
+		uintptr(gaaFlagSkipUnicast|gaaFlagSkipAnycast|gaaFlagSkipMulticast|gaaFlagSkipDNS),
+		0,
+		uintptr(unsafe.Pointer(&buf[0])),
+		uintptr(unsafe.Pointer(&bufLen)),
+	)
+	if r1 != 0 {
+		return "", fmt.Errorf("GetAdaptersAddresses: ret=%d", r1)
+	}
+
+	p := (*ipAdapterAddresses)(unsafe.Pointer(&buf[0]))
+	for p != nil {
+		if p.IfIndex == targetIdx {
+			return windows.UTF16PtrToString(p.FriendlyName), nil
+		}
+		p = p.Next
+	}
+	return "", fmt.Errorf("adapter with index %d not found", targetIdx)
 }
 
 // findAdapter 按 FriendlyName 查找网卡，返回 ifIndex 和 LUID。
