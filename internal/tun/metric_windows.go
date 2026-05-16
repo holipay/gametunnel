@@ -20,9 +20,10 @@ import (
 var (
 	modIphlpapi = syscall.NewLazyDLL("iphlpapi.dll")
 
-	procGetAdaptersAddresses = modIphlpapi.NewProc("GetAdaptersAddresses")
-	procGetIpInterfaceEntry  = modIphlpapi.NewProc("GetIpInterfaceEntry")
-	procSetIpInterfaceEntry  = modIphlpapi.NewProc("SetIpInterfaceEntry")
+	procGetAdaptersAddresses       = modIphlpapi.NewProc("GetAdaptersAddresses")
+	procGetIpInterfaceEntry        = modIphlpapi.NewProc("GetIpInterfaceEntry")
+	procSetIpInterfaceEntry        = modIphlpapi.NewProc("SetIpInterfaceEntry")
+	procInitializeIpInterfaceEntry = modIphlpapi.NewProc("InitializeIpInterfaceEntry")
 )
 
 const (
@@ -69,9 +70,17 @@ type ipAdapterAddresses struct {
 // setMetricAPI 通过 IP Helper API 禁用指定网卡的 AutomaticMetric。
 //
 // 使用原始字节缓冲区代替 Go 结构体，确保字段偏移量与 Windows SDK 完全一致。
+// 正确流程: InitializeIpInterfaceEntry → 设置 LUID → GetIpInterfaceEntry → 修改 → SetIpInterfaceEntry。
 func setMetricAPI(ifIndex uint32, luid uint64) error {
 	// 分配足够大的缓冲区
 	row := make([]byte, mibRowSize)
+
+	// InitializeIpInterfaceEntry 将整行初始化为默认值，
+	// 避免 SetIpInterfaceEntry 因内部字段未初始化而返回 ERROR_INVALID_PARAMETER。
+	r1, _, _ := procInitializeIpInterfaceEntry.Call(uintptr(unsafe.Pointer(&row[0])))
+	if r1 != 0 {
+		return fmt.Errorf("InitializeIpInterfaceEntry: ret=%d", r1)
+	}
 
 	// 设置 Family = AF_INET (2)
 	binary.LittleEndian.PutUint16(row[offsetFamily:], syscall.AF_INET)
@@ -133,7 +142,7 @@ func findAdapter(name string) (ifIndex uint32, luid uint64, err error) {
 				luid = binary.LittleEndian.Uint64(row[offsetInterfaceLuid:])
 				return p.IfIndex, luid, nil
 			}
-			return p.IfIndex, 0, nil
+			return 0, 0, fmt.Errorf("GetIpInterfaceEntry(idx=%d): adapter found but not ready", p.IfIndex)
 		}
 		p = p.Next
 	}
