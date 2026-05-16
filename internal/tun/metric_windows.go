@@ -77,10 +77,12 @@ func setMetricAPI(ifIndex uint32, luid uint64) error {
 
 	// InitializeIpInterfaceEntry 将整行初始化为默认值，
 	// 避免 SetIpInterfaceEntry 因内部字段未初始化而返回 ERROR_INVALID_PARAMETER。
-	r1, _, _ := procInitializeIpInterfaceEntry.Call(uintptr(unsafe.Pointer(&row[0])))
+	r1, _, e1 := procInitializeIpInterfaceEntry.Call(uintptr(unsafe.Pointer(&row[0])))
 	if r1 != 0 {
+		log.Printf("[tun] InitializeIpInterfaceEntry failed: ret=%d err=%v", r1, e1)
 		return fmt.Errorf("InitializeIpInterfaceEntry: ret=%d", r1)
 	}
+	log.Printf("[tun] InitializeIpInterfaceEntry OK")
 
 	// 设置 Family = AF_INET (2)
 	binary.LittleEndian.PutUint16(row[offsetFamily:], syscall.AF_INET)
@@ -92,10 +94,14 @@ func setMetricAPI(ifIndex uint32, luid uint64) error {
 	binary.LittleEndian.PutUint32(row[offsetInterfaceIndex:], ifIndex)
 
 	// GetIpInterfaceEntry 填充整行
-	r1, _, e1 := procGetIpInterfaceEntry.Call(uintptr(unsafe.Pointer(&row[0])))
+	r1, _, e1 = procGetIpInterfaceEntry.Call(uintptr(unsafe.Pointer(&row[0])))
 	if r1 != 0 {
 		return fmt.Errorf("GetIpInterfaceEntry(idx=%d): ret=%d err=%v", ifIndex, r1, e1)
 	}
+
+	apiLuid := binary.LittleEndian.Uint64(row[offsetInterfaceLuid:])
+	apiAutoMetric := binary.LittleEndian.Uint32(row[offsetUseAutoMetric:])
+	log.Printf("[tun] GetIpInterfaceEntry OK: apiLuid=%d apiAutoMetric=%d", apiLuid, apiAutoMetric)
 
 	// 修改 UseAutomaticMetric = 0 (禁用自动 metric)
 	binary.LittleEndian.PutUint32(row[offsetUseAutoMetric:], 0)
