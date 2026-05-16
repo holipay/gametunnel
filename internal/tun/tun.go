@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"os/exec"
+	"syscall"
 
 	"golang.zx2c4.com/wireguard/tun"
 )
@@ -93,6 +94,7 @@ func (d *Device) Write(data []byte) (int, error) {
 
 func runCmdOutput(name string, args ...string) (string, error) {
 	cmd := exec.Command(name, args...)
+	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return string(out), fmt.Errorf("%s %v: %w (%s)", name, args, err, string(out))
