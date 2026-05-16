@@ -25,7 +25,7 @@ const holePunchBurstPerPhase = 5
 // holePunchRetryInterval is how often we retry hole punching for peers
 // that haven't achieved DirectReach. NAT mappings can expire or change,
 // so periodic retries improve reliability.
-const holePunchRetryInterval = 60 * time.Second
+const holePunchRetryInterval = 25 * time.Second
 
 // stalePeerGracePeriod is how long a peer can be absent from the server's
 // peer list before we consider it stale and remove it.

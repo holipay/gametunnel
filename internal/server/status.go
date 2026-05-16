@@ -33,6 +33,8 @@ type ConnectionInfo struct {
 	PublicAddr string `json:"public_addr"`
 	Idle       string `json:"idle"`
 	Ping       string `json:"ping"`
+	Loss       string `json:"loss"`
+	Jitter     string `json:"jitter"`
 }
 
 func (s *Server) startStatusServer(ctx context.Context, addr string) {
@@ -130,8 +132,8 @@ const statusHTML = `<!DOCTYPE html>
   <div class="stat"><div class="num">{{.Version}}</div><div class="label">{{.T.StatusVersion}}</div></div>
 </div>
 {{if .Connections}}
-<table><tr><th>{{.T.StatusTablePlayer}}</th><th>{{.T.StatusTableVIP}}</th><th>{{.T.StatusTableAddr}}</th><th>{{.T.StatusTablePing}}</th><th>{{.T.StatusTableIdle}}</th></tr>
-{{range .Connections}}<tr><td>{{.Username}}</td><td>{{.VirtualIP}}</td><td>{{.PublicAddr}}</td><td>{{.Ping}}</td><td>{{.Idle}}</td></tr>
+<table><tr><th>{{.T.StatusTablePlayer}}</th><th>{{.T.StatusTableVIP}}</th><th>{{.T.StatusTableAddr}}</th><th>{{.T.StatusTablePing}}</th><th>Loss</th><th>Jitter</th><th>{{.T.StatusTableIdle}}</th></tr>
+{{range .Connections}}<tr><td>{{.Username}}</td><td>{{.VirtualIP}}</td><td>{{.PublicAddr}}</td><td>{{.Ping}}</td><td>{{.Loss}}</td><td>{{.Jitter}}</td><td>{{.Idle}}</td></tr>
 {{end}}</table>
 {{else}}
 <p style="color:#666">{{.T.StatusNoPlayers}}</p>
@@ -160,12 +162,23 @@ func (s *Server) buildStatusInfo() StatusInfo {
 		if c.RTT > 0 {
 			pingStr = fmt.Sprintf("%dms", c.RTT.Milliseconds())
 		}
+		lossRate, jitter := c.PingStats()
+		lossStr := "--"
+		if c.pingIdx > 0 {
+			lossStr = fmt.Sprintf("%.0f%%", lossRate*100)
+		}
+		jitterStr := "--"
+		if jitter > 0 {
+			jitterStr = fmt.Sprintf("%dms", jitter.Milliseconds())
+		}
 		conns = append(conns, ConnectionInfo{
 			Username:   c.Username,
 			VirtualIP:  c.VirtualIP.String(),
 			PublicAddr: pubAddr,
 			Idle:       idleStr,
 			Ping:       pingStr,
+			Loss:       lossStr,
+			Jitter:     jitterStr,
 		})
 	}
 
