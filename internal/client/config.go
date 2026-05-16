@@ -3,6 +3,7 @@ package client
 import (
 	"encoding/json"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -66,6 +67,35 @@ func LoadConfig() *Config {
 	// Fall back to legacy JSON config
 	loadJSON(LegacyConfigPath(), cfg)
 	return cfg
+}
+
+// ValidateServerAddr checks that the server address is in host:port format.
+// Returns a user-friendly error if invalid.
+func ValidateServerAddr(addr string) error {
+	if addr == "" {
+		return fmt.Errorf("server address is empty")
+	}
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		// Missing port — suggest adding :4700
+		if !strings.Contains(addr, ":") {
+			return fmt.Errorf("server address %q missing port (use %s:4700)", addr, addr)
+		}
+		return fmt.Errorf("invalid server address %q: %v", addr, err)
+	}
+	if host == "" {
+		return fmt.Errorf("server address has empty host")
+	}
+	if port == "" {
+		return fmt.Errorf("server address has empty port")
+	}
+	// Validate port is numeric
+	for _, c := range port {
+		if c < '0' || c > '9' {
+			return fmt.Errorf("invalid port %q in server address", port)
+		}
+	}
+	return nil
 }
 
 // SaveConfig writes the config to config.ini next to the exe.

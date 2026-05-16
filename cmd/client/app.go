@@ -200,6 +200,12 @@ func (a *App) statusLoop(ctx context.Context) {
 // After fastRetries (3) rapid attempts, it pauses and calls onConnFailed
 // to let the user decide: retry, edit settings, or stop.
 func (a *App) connectLoop() {
+	// Validate server address format before attempting connection
+	if err := client.ValidateServerAddr(a.cfg.ServerAddr); err != nil {
+		log.Printf("Invalid server address: %v", err)
+		return
+	}
+
 	// Start status polling for this connection session
 	pollCtx, pollCancel := context.WithCancel(a.ctx)
 	defer pollCancel()
