@@ -155,20 +155,17 @@ func findAdapter(name string) (ifIndex uint32, luid uint64, err error) {
 }
 
 // checkAutoMetricDisabled 检查网卡的 AutomaticMetric 是否已禁用。
+// 通过 PowerShell 检查，因为 IP Helper API 的 GetIpInterfaceEntry
+// 在 wintun 虚拟适配器上返回的 UseAutomaticMetric 字段不可靠。
 func checkAutoMetricDisabled(name string) bool {
-	idx, luid, err := findAdapter(name)
+	out, err := runCmdOutput("powershell", "-NoProfile", "-Command",
+		fmt.Sprintf("(Get-NetIPInterface -InterfaceAlias '%s' -ErrorAction SilentlyContinue).AutomaticMetric", name))
 	if err != nil {
 		return false
 	}
-	row := make([]byte, mibRowSize)
-	binary.LittleEndian.PutUint16(row[offsetFamily:], syscall.AF_INET)
-	binary.LittleEndian.PutUint64(row[offsetInterfaceLuid:], luid)
-	binary.LittleEndian.PutUint32(row[offsetInterfaceIndex:], idx)
-	r1, _, _ := procGetIpInterfaceEntry.Call(uintptr(unsafe.Pointer(&row[0])))
-	if r1 != 0 {
-		return false
-	}
-	return binary.LittleEndian.Uint32(row[offsetUseAutoMetric:]) == 0
+	// 输出为空或 "Disabled" 表示已禁用
+	out = strings.TrimSpace(strings.ToLower(out))
+	return out == "" || out == "disabled" || out == "0"
 }
 
 // disableAllPhysicalAutoMetric 枚举所有活跃物理网卡并禁用其 AutomaticMetric。
