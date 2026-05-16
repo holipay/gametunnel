@@ -30,6 +30,7 @@ func main() {
 	maxPlayers := flag.Int("max", 10, "max players")
 	roomPass := flag.String("password", "", "room password (empty = no auth)")
 	statusAddr := flag.String("status-addr", "", "status page address (HTTP), e.g. :4701")
+	maxPerIP := flag.Int("max-per-ip", 3, "max connections per IP address")
 	langFlag := flag.String("lang", "zh", "language (zh or en)")
 	versionFlag := flag.Bool("version", false, "show version")
 	flag.Parse()
@@ -63,6 +64,7 @@ func main() {
 		StatusAddr: *statusAddr,
 		Version:    Version,
 		Lang:       i18n.ParseLang(*langFlag),
+		MaxPerIP:   *maxPerIP,
 	})
 	if err != nil {
 		log.Fatalf(t.ServerStartFail, err)
