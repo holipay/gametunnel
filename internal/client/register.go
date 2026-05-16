@@ -9,6 +9,7 @@ import (
 
 	"github.com/holipay/gametunnel-protocol/auth"
 	"github.com/holipay/gametunnel-protocol/protocol"
+	"github.com/holipay/gametunnel/internal/crypto"
 	"github.com/holipay/gametunnel/internal/i18n"
 )
 
@@ -116,6 +117,21 @@ func (t *Tunnel) handleAssignIP(payload []byte) error {
 		Mask: t.subnetMask,
 	}
 	t.serverIP4 = ip4Key(t.serverIP)
+
+	// Initialize end-to-end encryption if password is set
+	if t.roomPass != "" {
+		key := auth.DeriveKey(t.roomPass, t.roomID)
+		if key != nil {
+			if t.encCipher, err = crypto.NewCipher(key, crypto.DirClientToServer); err != nil {
+				return fmt.Errorf("init encrypt cipher: %w", err)
+			}
+			if t.decCipher, err = crypto.NewCipher(key, crypto.DirServerToClient); err != nil {
+				return fmt.Errorf("init decrypt cipher: %w", err)
+			}
+			log.Printf("[tunnel] encryption enabled (ChaCha20-Poly1305)")
+		}
+	}
+
 	return nil
 }
 
