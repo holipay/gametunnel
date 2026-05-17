@@ -60,23 +60,6 @@ logread | grep gtunnel               # View logs
 
 > **Recommended devices**: NanoPi R2S/R4S (ARM64, budget-friendly), Raspberry Pi 4/5, GL.iNet series. Low-end MIPS routers are not recommended.
 
-#### Windows
-
-1. Download `GameTunnel-Server-windows-amd64.zip` from [Releases](https://github.com/holipay/gametunnel/releases)
-2. Extract to any folder
-3. Open PowerShell / CMD as Administrator and run:
-
-```powershell
-.\gtunnel-server.exe -addr :4700
-```
-
-Or build from source:
-```bash
-make server-windows-amd64
-# 32-bit Windows (older PCs)
-make server-windows-x86
-```
-
 ### Player (Windows PC)
 
 **Option 1: Download archive (recommended)**
@@ -203,9 +186,6 @@ ufw allow 4700/udp
 # firewalld
 firewall-cmd --add-port=4700/udp --permanent
 firewall-cmd --reload
-
-# Windows (PowerShell as Admin)
-New-NetFirewallRule -DisplayName "GameTunnel" -Direction Inbound -Protocol UDP -LocalPort 4700 -Action Allow
 ```
 
 ## FAQ
@@ -223,7 +203,7 @@ A: Depends on the round-trip to the server. With a domestic VPS, typically 20-50
 A: All IP-based LAN games. Broadcast forwarding is built-in, supporting games that rely on UDP broadcast discovery (e.g. StarCraft, Red Alert, Age of Empires, etc.).
 
 **Q: Which operating systems are supported?**
-A: Server: Linux, Windows, and OpenWrt routers (mid-to-high-end ARM devices). Client: Windows 10+.
+A: Server: Linux and OpenWrt routers (mid-to-high-end ARM devices). Client: Windows 10+.
 
 **Q: Is data secure?**
 A: Authentication is secure (HMAC-SHA256 + HKDF), but game data is transmitted in plaintext. Use WireGuard for encryption.
@@ -239,9 +219,6 @@ A: Authentication is secure (HMAC-SHA256 + HKDF), but game data is transmitted i
 ```bash
 # Build server (Linux)
 make server
-
-# Build server (Windows, cross-compilable)
-make server-windows-amd64
 
 # Build OpenWrt server (ARM64 / ARMv7)
 make server-openwrt-arm64
