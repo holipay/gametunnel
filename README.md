@@ -153,6 +153,7 @@ gtunnel-server -addr :4700 -subnet 10.10.0.0/24 -max 10 -password secret
 | `-max` | `10` | 最大玩家数 |
 | `-password` | _(空)_ | 房间密码（留空=无认证） |
 | `-status-addr` | _(禁用)_ | 状态页面地址 (HTTP)，如 `:4701` |
+| `-status-token` | _(空)_ | 状态页访问令牌（留空=无认证） |
 | `-lang` | `zh` | 语言（`zh` 中文 / `en` 英文） |
 | `-version` | | 显示版本 |
 

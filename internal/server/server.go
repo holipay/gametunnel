@@ -115,9 +115,10 @@ type Server struct {
 	maxPlayers int
 	serverIP   net.IP
 	ipBitmap   []uint64 // bitmap for O(1) IP allocation (256 bits for /24)
-	roomPass   string   // room password (empty = no auth)
-	statusAddr string   // HTTP status address, empty = disabled
-	version    string
+	roomPass    string   // room password (empty = no auth)
+	statusAddr  string   // HTTP status address, empty = disabled
+	statusToken string   // status page access token, empty = no auth
+	version     string
 	lang       i18n.Lang
 	startTime  time.Time
 
@@ -170,7 +171,8 @@ type Config struct {
 	Subnet     *net.IPNet
 	MaxPlayers int
 	RoomPass   string
-	StatusAddr string // HTTP status address (e.g. ":4701"), empty = disabled
+	StatusAddr  string // HTTP status address (e.g. ":4701"), empty = disabled
+	StatusToken string // status page access token, empty = no auth
 	Version    string
 	Lang       i18n.Lang
 	MaxPerIP   int // max connections per IP (0 = use default 3)
@@ -227,6 +229,7 @@ func New(cfg Config) (*Server, error) {
 		ipBitmap:    make([]uint64, 4), // 256 bits for /24 subnet
 		roomPass:    cfg.RoomPass,
 		statusAddr:  cfg.StatusAddr,
+		statusToken: cfg.StatusToken,
 		version:     cfg.Version,
 		lang:        cfg.Lang,
 		startTime:   time.Now(),

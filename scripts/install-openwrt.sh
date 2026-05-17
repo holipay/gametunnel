@@ -12,6 +12,7 @@
 #   MAX_PLAYERS   - 最大玩家数 (默认 10)
 #   ROOM_PASSWORD - 房间密码 (默认: 无)
 #   STATUS_ADDR   - 状态页面地址 (默认: 禁用，如 :4701)
+#   STATUS_TOKEN  - 状态页访问令牌 (默认: 无)
 
 set -e
 
@@ -24,6 +25,7 @@ SUBNET="${SUBNET:-10.10.0.0/24}"
 MAX_PLAYERS="${MAX_PLAYERS:-10}"
 ROOM_PASSWORD="${ROOM_PASSWORD:-}"
 STATUS_ADDR="${STATUS_ADDR:-}"
+STATUS_TOKEN="${STATUS_TOKEN:-}"
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" 2>/dev/null && pwd || pwd)"
 
@@ -181,6 +183,7 @@ SUBNET="${SUBNET}"
 MAX_PLAYERS="${MAX_PLAYERS}"
 ROOM_PASSWORD="${ROOM_PASSWORD}"
 STATUS_ADDR="${STATUS_ADDR}"
+STATUS_TOKEN="${STATUS_TOKEN}"
 EOF
 chmod 0600 "$CONFIG_FILE"
 echo "  ✅ 配置已写入 $CONFIG_FILE"
@@ -205,6 +208,7 @@ start_service() {
     local max_players="10"
     local room_password=""
     local status_addr=""
+    local status_token=""
 
     [ -f "$CONFIG" ] && . "$CONFIG"
 
@@ -219,6 +223,7 @@ start_service() {
         -max "$max_players"
     [ -n "$ROOM_PASSWORD" ] && procd_append_param command -password "$ROOM_PASSWORD"
     [ -n "$STATUS_ADDR" ] && procd_append_param command -status-addr "$STATUS_ADDR"
+    [ -n "$STATUS_TOKEN" ] && procd_append_param command -status-token "$STATUS_TOKEN"
     procd_set_param respawn 3600 5 5
     procd_set_param stdout 1
     procd_set_param stderr 1

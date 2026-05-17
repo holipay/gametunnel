@@ -69,7 +69,35 @@ func (s *Server) startStatusServer(ctx context.Context, addr string) {
 	}()
 }
 
+// checkStatusToken validates the request token against the configured
+// statusToken. Returns true if no token is configured (open access) or
+// if the token matches. Supports query param ?token=xxx and
+// Authorization: Bearer xxx header.
+func (s *Server) checkStatusToken(r *http.Request) bool {
+	if s.statusToken == "" {
+		return true // no token configured, open access
+	}
+
+	// Check query parameter (works for both HTML and API)
+	if t := r.URL.Query().Get("token"); t == s.statusToken {
+		return true
+	}
+
+	// Check Authorization header (API use)
+	if auth := r.Header.Get("Authorization"); strings.HasPrefix(auth, "Bearer ") {
+		if auth[7:] == s.statusToken {
+			return true
+		}
+	}
+
+	return false
+}
+
 func (s *Server) handleStatusJSON(w http.ResponseWriter, r *http.Request) {
+	if !s.checkStatusToken(r) {
+		http.Error(w, "403 forbidden: invalid or missing token", http.StatusForbidden)
+		return
+	}
 	info := s.buildStatusInfo()
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.Header().Set("Access-Control-Allow-Origin", "*")
@@ -77,6 +105,10 @@ func (s *Server) handleStatusJSON(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleStatusHTML(w http.ResponseWriter, r *http.Request) {
+	if !s.checkStatusToken(r) {
+		http.Error(w, "403 forbidden: invalid or missing token", http.StatusForbidden)
+		return
+	}
 	info := s.buildStatusInfo()
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 
