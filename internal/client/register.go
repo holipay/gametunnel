@@ -129,6 +129,10 @@ func (t *Tunnel) handleAssignIP(payload []byte) error {
 	}
 	t.serverIPKey = ipKey(t.serverIP)
 
+	// Cache the hole punch packet once — reused by startHolePunch,
+	// handleHolePunchReceived, and sendP2PKeepalives.
+	t.cachedPunchPacket = protocol.EncodeChecked(protocol.TypeHolePunch, t.virtualIP.To4())
+
 	// Initialize end-to-end encryption if password is set
 	if t.roomPass != "" {
 		key := auth.DeriveKey(t.roomPass, t.roomID)

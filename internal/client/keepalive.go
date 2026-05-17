@@ -53,10 +53,8 @@ func (t *Tunnel) startHolePunch(ctx context.Context, peerIP net.IP) {
 		return
 	}
 
-	// Build punch packet with OUR virtualIP so the peer knows who we are
-	punchPayload := make([]byte, 4)
-	copy(punchPayload, t.virtualIP.To4())
-	packet := protocol.EncodeChecked(protocol.TypeHolePunch, punchPayload)
+	// Use cached hole punch packet (built once in handleAssignIP)
+	packet := t.cachedPunchPacket
 
 	for phase, interval := range holePunchIntervals {
 		for i := 0; i < holePunchBurstPerPhase; i++ {
@@ -109,10 +107,7 @@ func (t *Tunnel) handleHolePunchReceived(payload []byte) {
 
 	// Punch back in a goroutine — don't block the receive loop.
 	go func() {
-		punchPayload := make([]byte, 4)
-		copy(punchPayload, t.virtualIP.To4())
-		packet := protocol.EncodeChecked(protocol.TypeHolePunch, punchPayload)
-
+		packet := t.cachedPunchPacket
 		for i := 0; i < holePunchBurstPerPhase; i++ {
 			t.sendCtrl(packet, peer.PublicAddr)
 			time.Sleep(50 * time.Millisecond)
@@ -290,10 +285,8 @@ func (t *Tunnel) sendP2PKeepalives() {
 		return
 	}
 
-	// Reuse hole punch packet — lightweight, peer already handles it.
-	payload := make([]byte, 4)
-	copy(payload, t.virtualIP.To4())
-	packet := protocol.EncodeChecked(protocol.TypeHolePunch, payload)
+	// Reuse cached hole punch packet — built once in handleAssignIP.
+	packet := t.cachedPunchPacket
 
 	for _, peer := range directPeers {
 		t.sendCtrl(packet, peer.PublicAddr)

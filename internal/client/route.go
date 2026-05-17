@@ -35,7 +35,10 @@ func (t *Tunnel) routePacket(pkt []byte, srcIP, dstIP net.IP) {
 			data = t.encCipher.Encrypt(pkt)
 		}
 		dp := &protocol.DataPayload{SrcIP: srcIP, DstIP: dstIP, Data: data}
-		t.sendUDP(protocol.EncodeChecked(protocol.TypeData, dp.Marshal()), peer.PublicAddr)
+		// Pre-allocate dst buffer for single-append encoding
+		dst := make([]byte, 0, protocol.HeaderLen+dp.MarshalSize()+protocol.ChecksumLen)
+		encoded := protocol.AppendEncodeChecked(dst, protocol.TypeData, dp.Marshal())
+		t.sendUDP(encoded, peer.PublicAddr)
 	} else {
 		// Fallback: relay through server.
 		t.sendToServer(pkt, srcIP, dstIP)
@@ -49,6 +52,7 @@ func (t *Tunnel) sendToServer(pkt []byte, srcIP, dstIP net.IP) {
 		data = t.encCipher.Encrypt(pkt)
 	}
 	dp := &protocol.DataPayload{SrcIP: srcIP, DstIP: dstIP, Data: data}
-	encoded := protocol.EncodeChecked(protocol.TypeData, dp.Marshal())
+	dst := make([]byte, 0, protocol.HeaderLen+dp.MarshalSize()+protocol.ChecksumLen)
+	encoded := protocol.AppendEncodeChecked(dst, protocol.TypeData, dp.Marshal())
 	t.sendUDP(encoded, t.serverAddr)
 }

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"math/rand"
 	"net"
 	"sync"
 	"time"
@@ -226,10 +227,15 @@ func (a *App) connectLoop() {
 
 	for attempt := 0; ; attempt++ {
 		if attempt > 0 {
-			delay := baseDelay << (attempt - 1)
+			// Linear backoff with jitter: 2s, 3s, 4s, 5s... capped at maxDelay.
+			// Gentler than exponential for better UX during server restarts.
+			delay := baseDelay + time.Duration(attempt)*baseDelay/2
 			if delay > maxDelay {
 				delay = maxDelay
 			}
+			// Add ±20% jitter to avoid thundering herd
+			jitter := time.Duration(rand.Int63n(int64(delay) / 5))
+			delay = delay - delay/10 + jitter
 			select {
 			case <-a.ctx.Done():
 				return

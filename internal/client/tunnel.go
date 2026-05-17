@@ -107,6 +107,10 @@ type Tunnel struct {
 	// Server liveness tracking — updated by handleServerData
 	lastServerResponse atomic.Pointer[time.Time]
 
+	// Cached hole punch packet — built once on Connect, reused by
+	// startHolePunch, handleHolePunchReceived, and sendP2PKeepalives.
+	cachedPunchPacket []byte
+
 	// End-to-end encryption (nil when no password)
 	encCipher *crypto.Cipher // for sending (client→server/client)
 	decCipher *crypto.Cipher // for receiving (server/client→client)
