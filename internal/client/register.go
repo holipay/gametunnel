@@ -143,6 +143,9 @@ func (t *Tunnel) handleAssignIP(payload []byte) error {
 			if t.decCipher, err = crypto.NewCipher(key, crypto.DirServerToClient); err != nil {
 				return fmt.Errorf("init decrypt cipher: %w", err)
 			}
+			if t.p2pCipher, err = crypto.NewCipher(key, crypto.DirClientToClient); err != nil {
+				return fmt.Errorf("init p2p cipher: %w", err)
+			}
 			log.Printf("[tunnel] encryption enabled (ChaCha20-Poly1305)")
 		}
 	}

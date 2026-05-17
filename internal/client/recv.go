@@ -133,10 +133,11 @@ func (t *Tunnel) handleDirectData(from *net.UDPAddr, msg *protocol.Message) {
 	// Mark P2P direct path confirmed — this is the legitimate DirectReach signal
 	peer.DirectReach.Store(true)
 
-	// Decrypt if encrypted
+	// Decrypt if encrypted — P2P uses p2pCipher (DirClientToClient),
+	// not decCipher (DirServerToClient) which is for relay path only.
 	outData := dp.Data
-	if t.decCipher != nil && crypto.IsEncrypted(dp.Data) {
-		outData, err = t.decCipher.Decrypt(dp.Data)
+	if t.p2pCipher != nil && crypto.IsEncrypted(dp.Data) {
+		outData, err = t.p2pCipher.Decrypt(dp.Data)
 		if err != nil {
 			protocol.PutDataPayload(dp)
 			return

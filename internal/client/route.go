@@ -30,9 +30,10 @@ func (t *Tunnel) routePacket(pkt []byte, srcIP, dstIP net.IP) {
 
 	if ok && peer.PublicAddr != nil && peer.DirectReach.Load() {
 		// P2P direct path confirmed — send directly for low latency.
+		// Use p2pCipher (DirClientToClient) so both sides build the same nonce.
 		data := pkt
-		if t.encCipher != nil {
-			data = t.encCipher.Encrypt(pkt)
+		if t.p2pCipher != nil {
+			data = t.p2pCipher.Encrypt(pkt)
 		}
 		dp := &protocol.DataPayload{SrcIP: srcIP, DstIP: dstIP, Data: data}
 		// Pre-allocate dst buffer for single-append encoding
