@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"path/filepath"
+	"strings"
 	"syscall"
 	"unsafe"
 
@@ -17,18 +19,29 @@ import (
 )
 
 var (
-	kernel32             = syscall.NewLazyDLL("kernel32.dll")
-	procGetConsoleWindow = kernel32.NewProc("GetConsoleWindow")
-	procCreateMutexW     = kernel32.NewProc("CreateMutexW")
-	procCloseHandle      = kernel32.NewProc("CloseHandle")
-	user32               = syscall.NewLazyDLL("user32.dll")
-	procShowWindow       = user32.NewProc("ShowWindow")
-
-	// mutexHandle holds the single-instance mutex; released on process exit.
-	mutexHandle uintptr
+	kernel32                = syscall.NewLazyDLL("kernel32.dll")
+	procGetConsoleWindow    = kernel32.NewProc("GetConsoleWindow")
+	procCloseHandle         = kernel32.NewProc("CloseHandle")
+	procCreateToolhelp32    = kernel32.NewProc("CreateToolhelp32Snapshot")
+	procProcess32First      = kernel32.NewProc("Process32FirstW")
+	procProcess32Next       = kernel32.NewProc("Process32NextW")
+	user32                  = syscall.NewLazyDLL("user32.dll")
+	procShowWindow          = user32.NewProc("ShowWindow")
 )
 
-const errorAlreadyExists = 183
+// processEntry32 matches the Win32 PROCESSENTRY32W structure.
+type processEntry32 struct {
+	Size            uint32
+	Usage           uint32
+	ProcessID       uint32
+	DefaultHeapID   uintptr
+	ModuleID        uint32
+	Threads         uint32
+	ParentProcessID uint32
+	PriorityClass   int32
+	Flags           uint32
+	ExeFile         [260]uint16
+}
 
 func main() {
 	windows.SetConsoleOutputCP(65001)
@@ -68,25 +81,65 @@ func main() {
 	run(cfg, tunFactory)
 }
 
-// checkSingleInstance creates a named mutex. If the mutex already exists,
-// another instance is running — show an error and exit.
+// checkSingleInstance enumerates running processes to detect another
+// gtunnel-client instance. This replaces the previous Global\ mutex approach
+// which failed when the elevated (runas) process ran in a different security
+// context than the original mutex holder.
 func checkSingleInstance() {
-	name, _ := windows.UTF16PtrFromString("Global\\GameTunnel_SingleInstance")
-	handle, _, _ := procCreateMutexW.Call(0, 0, uintptr(unsafe.Pointer(name)))
-	if handle == 0 {
-		return // CreateMutex failed silently; let the app run
+	if !isAnotherInstanceRunning() {
+		return
 	}
-	mutexHandle = handle
+	windows.MessageBox(0,
+		windows.StringToUTF16Ptr("GameTunnel 已经在运行中，请检查右下角系统托盘图标。\nGameTunnel is already running. Check the system tray icon."),
+		windows.StringToUTF16Ptr("GameTunnel"),
+		windows.MB_OK|windows.MB_ICONWARNING)
+	os.Exit(0)
+}
 
-	// If GetLastError returns ERROR_ALREADY_EXISTS, another instance holds the mutex
-	err := windows.GetLastError()
-	if err != nil && err == syscall.Errno(errorAlreadyExists) {
-		windows.MessageBox(0,
-			windows.StringToUTF16Ptr("GameTunnel 已经在运行中，请检查右下角系统托盘图标。\nGameTunnel is already running. Check the system tray icon."),
-			windows.StringToUTF16Ptr("GameTunnel"),
-			windows.MB_OK|windows.MB_ICONWARNING)
-		os.Exit(0)
+// isAnotherInstanceRunning checks if another gtunnel-client process is already
+// running by enumerating processes via CreateToolhelp32Snapshot. It compares
+// each process's executable name case-insensitively against our own.
+func isAnotherInstanceRunning() bool {
+	// Determine our own executable name for comparison.
+	selfExe, err := os.Executable()
+	if err != nil {
+		return false // can't determine; allow startup
 	}
+	selfName := strings.ToLower(filepath.Base(selfExe))
+
+	snapshot, _, _ := procCreateToolhelp32.Call(
+		uintptr(0x00000002), // TH32CS_SNAPPROCESS
+		0,
+	)
+	if snapshot == 0 || snapshot == uintptr(syscall.InvalidHandle) {
+		return false // snapshot failed; allow startup
+	}
+	defer procCloseHandle.Call(snapshot)
+
+	var entry processEntry32
+	entry.Size = uint32(unsafe.Sizeof(entry))
+
+	ret, _, _ := procProcess32First.Call(snapshot, uintptr(unsafe.Pointer(&entry)))
+	if ret == 0 {
+		return false
+	}
+
+	currentPID := uint32(os.Getpid())
+
+	for {
+		pid := entry.ProcessID
+		if pid != currentPID {
+			name := windows.UTF16PtrToString(&entry.ExeFile[0])
+			if strings.ToLower(name) == selfName {
+				return true
+			}
+		}
+		ret, _, _ = procProcess32Next.Call(snapshot, uintptr(unsafe.Pointer(&entry)))
+		if ret == 0 {
+			break
+		}
+	}
+	return false
 }
 
 // hideConsole hides the console window.
