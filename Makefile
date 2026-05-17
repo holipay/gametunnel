@@ -1,6 +1,6 @@
 # GameTunnel Makefile
 #
-# Server: Linux / Windows / OpenWrt
+# Server: Linux / OpenWrt
 # Client: Windows
 
 .PHONY: all server client client-all clean install-server release release-client release-server release-openwrt test server-openwrt server-openwrt-arm64 server-openwrt-armv7 vendor vendor-check
@@ -112,18 +112,8 @@ release-client: client client-windows-x86
 	rm -rf $(BINARY_DIR)/release-x86
 	@echo "  Created $(BINARY_DIR)/GameTunnel-Client-windows-x86.zip"
 
-release-server: server-linux-amd64 server-windows-amd64 server-windows-x86
+release-server: server-linux-amd64
 	@echo "  Created $(BINARY_DIR)/gtunnel-server-linux-amd64"
-	@mkdir -p $(BINARY_DIR)/release-server-win
-	cp $(BINARY_DIR)/gtunnel-server-windows-amd64.exe $(BINARY_DIR)/release-server-win/gtunnel-server.exe
-	cd $(BINARY_DIR)/release-server-win && zip -9 ../GameTunnel-Server-windows-amd64.zip ./*
-	rm -rf $(BINARY_DIR)/release-server-win
-	@echo "  Created $(BINARY_DIR)/GameTunnel-Server-windows-amd64.zip"
-	@mkdir -p $(BINARY_DIR)/release-server-win-x86
-	cp $(BINARY_DIR)/gtunnel-server-windows-x86.exe $(BINARY_DIR)/release-server-win-x86/gtunnel-server.exe
-	cd $(BINARY_DIR)/release-server-win-x86 && zip -9 ../GameTunnel-Server-windows-x86.zip ./*
-	rm -rf $(BINARY_DIR)/release-server-win-x86
-	@echo "  Created $(BINARY_DIR)/GameTunnel-Server-windows-x86.zip"
 
 # ── Release (OpenWrt) ──────────────────────────────────────────
 
