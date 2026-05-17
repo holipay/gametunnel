@@ -258,7 +258,10 @@ func (t *Tunnel) handleDataFromServer(payload []byte) {
 	protocol.PutDataPayload(dp)
 }
 
-// receiveFromTUN reads IP packets from the TUN device and routes them.
+// receiveFromTUN reads IP packets from the TUN device and dispatches them
+// to tunWorker goroutines for routing. The reader only does lightweight
+// validation (IPv4 header check) and copies the packet into a new buffer
+// before dispatching — the TUN read buffer is reused immediately.
 func (t *Tunnel) receiveFromTUN(ctx context.Context) {
 	buf := make([]byte, readBufSize)
 	consecutiveErrors := 0
@@ -294,8 +297,7 @@ func (t *Tunnel) receiveFromTUN(ctx context.Context) {
 			continue
 		}
 
-		// Validate IPv4 header — buf is owned by this goroutine and reused on
-		// the next Read, so routePacket must complete before we loop back.
+		// Validate IPv4 header
 		if buf[0]>>4 != 4 {
 			continue
 		}
@@ -311,9 +313,18 @@ func (t *Tunnel) receiveFromTUN(ctx context.Context) {
 
 		srcIP := net.IP(buf[12:16])
 		dstIP := net.IP(buf[16:20])
-		// Zero-copy: pass buf slice directly. routePacket is synchronous and
-		// Marshal/MarshalTo copies the data for UDP send, so buf is safe to
-		// reuse on the next iteration.
-		t.routePacket(buf[:n], srcIP, dstIP)
+
+		// Copy packet data — buf is reused on the next Read, but workers
+		// process packets asynchronously. For game packets (60-1500 bytes)
+		// the copy cost is negligible compared to the benefit of parallel
+		// encryption and UDP send.
+		pkt := make([]byte, n)
+		copy(pkt, buf[:n])
+
+		select {
+		case t.tunCh <- tunJob{data: pkt, srcIP: srcIP, dstIP: dstIP}:
+		default:
+			// Worker channel full — drop packet (backpressure)
+		}
 	}
 }
