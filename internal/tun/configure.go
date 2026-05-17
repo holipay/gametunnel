@@ -88,17 +88,35 @@ func (d *Device) configure() error {
 
 	// ── Step 8: 隧道服务器排除路由 ──
 	// 隧道服务器必须走物理网卡，否则 UDP 封装的隧道流量会回环进 TUN。
-	// 添加 /32 主机路由指向物理网关，确保服务器流量走物理网卡而非 TUN。
+	// IPv4: 添加 /32 主机路由指向物理网关。
+	// IPv6: 使用 netsh interface ipv6 添加 /128 主机路由。
 	if d.serverPublicIP != nil {
-		gw := d.detectPhysicalGateway()
+		isv6 := d.serverPublicIP.To4() == nil
+		prefix := "0.0.0.0/0"
+		if isv6 {
+			prefix = "::/0"
+		}
+		gw := d.detectPhysicalGatewayForPrefix(prefix)
 		if gw != "" {
 			d.physicalGateway = gw
 			serverIP := d.serverPublicIP.String()
-			if err := RunCmd("route", "add",
-				serverIP, "mask", "255.255.255.255", gw, "metric", "1"); err != nil {
-				log.Printf("[tun] server exclusion route warning: %v", err)
+			if isv6 {
+				// netsh interface ipv6 add route <addr>/128 interface=<idx> nexthop=<gw> metric=1
+				ifaceIdx := d.getInterfaceIndex()
+				if err := RunCmd("netsh", "interface", "ipv6", "add", "route",
+					fmt.Sprintf("%s/128", serverIP), fmt.Sprintf("interface=%d", ifaceIdx),
+					fmt.Sprintf("nexthop=%s", gw), "metric=1"); err != nil {
+					log.Printf("[tun] server exclusion route warning: %v", err)
+				} else {
+					log.Printf("[tun] server exclusion (IPv6): %s → %s (physical NIC)", serverIP, gw)
+				}
 			} else {
-				log.Printf("[tun] server exclusion: %s → %s (physical NIC)", serverIP, gw)
+				if err := RunCmd("route", "add",
+					serverIP, "mask", "255.255.255.255", gw, "metric", "1"); err != nil {
+					log.Printf("[tun] server exclusion route warning: %v", err)
+				} else {
+					log.Printf("[tun] server exclusion: %s → %s (physical NIC)", serverIP, gw)
+				}
 			}
 		} else {
 			log.Printf("[tun] WARNING: cannot detect physical gateway, server route exclusion skipped")
@@ -154,11 +172,24 @@ func (d *Device) ReconfigureRoutes() {
 
 	// Server exclusion route
 	if d.serverPublicIP != nil {
-		gw := d.detectPhysicalGateway()
+		isv6 := d.serverPublicIP.To4() == nil
+		prefix := "0.0.0.0/0"
+		if isv6 {
+			prefix = "::/0"
+		}
+		gw := d.detectPhysicalGatewayForPrefix(prefix)
 		if gw != "" {
 			d.physicalGateway = gw
-			RunCmd("route", "add",
-				d.serverPublicIP.String(), "mask", "255.255.255.255", gw, "metric", "1")
+			serverIP := d.serverPublicIP.String()
+			if isv6 {
+				ifaceIdx := d.getInterfaceIndex()
+				RunCmd("netsh", "interface", "ipv6", "add", "route",
+					fmt.Sprintf("%s/128", serverIP), fmt.Sprintf("interface=%d", ifaceIdx),
+					fmt.Sprintf("nexthop=%s", gw), "metric=1")
+			} else {
+				RunCmd("route", "add",
+					serverIP, "mask", "255.255.255.255", gw, "metric", "1")
+			}
 		}
 	}
 
@@ -209,24 +240,42 @@ func (d *Device) applyMetricPowerShell() {
 	}
 }
 
-// detectPhysicalGateway finds the default gateway of the physical NIC
-// (the one currently handling 0.0.0.0 traffic before TUN takes over).
+// detectPhysicalGateway finds the default gateway of the physical NIC.
+// Searches for the IPv4 default route (0.0.0.0/0).
 func (d *Device) detectPhysicalGateway() string {
-	// PowerShell: find the default gateway on any adapter except TUN
+	return d.detectPhysicalGatewayForPrefix("0.0.0.0/0")
+}
+
+// detectPhysicalGatewayForPrefix finds the default gateway of the physical NIC
+// for the given address family. prefix should be "0.0.0.0/0" for IPv4 or "::/0" for IPv6.
+func (d *Device) detectPhysicalGatewayForPrefix(prefix string) string {
 	out, err := runCmdOutput("powershell", "-NoProfile", "-Command",
 		fmt.Sprintf(
-			"Get-NetRoute -DestinationPrefix '0.0.0.0/0' | Where-Object { $_.InterfaceAlias -ne '%s' } | Sort-Object RouteMetric | Select-Object -First 1 -ExpandProperty NextHop",
-			d.name))
+			"Get-NetRoute -DestinationPrefix '%s' | Where-Object { $_.InterfaceAlias -ne '%s' } | Sort-Object RouteMetric | Select-Object -First 1 -ExpandProperty NextHop",
+			prefix, d.name))
 	if err != nil {
-		log.Printf("[tun] gateway detection failed: %v", err)
+		log.Printf("[tun] gateway detection failed (%s): %v", prefix, err)
 		return ""
 	}
 	gw := strings.TrimSpace(out)
 	if gw != "" {
-		log.Printf("[tun] detected physical gateway: %s", gw)
+		log.Printf("[tun] detected physical gateway (%s): %s", prefix, gw)
 		return gw
 	}
 	return ""
+}
+
+// getInterfaceIndex returns the TUN adapter's interface index for netsh commands.
+func (d *Device) getInterfaceIndex() int {
+	out, err := runCmdOutput("powershell", "-NoProfile", "-Command",
+		fmt.Sprintf("(Get-NetAdapter -InterfaceAlias '%s').ifIndex", d.name))
+	if err != nil {
+		log.Printf("[tun] get interface index failed: %v", err)
+		return 0
+	}
+	var idx int
+	fmt.Sscanf(strings.TrimSpace(out), "%d", &idx)
+	return idx
 }
 
 // CleanupRoutes removes routes added by configure().
@@ -234,7 +283,15 @@ func (d *Device) detectPhysicalGateway() string {
 func (d *Device) CleanupRoutes() {
 	// Remove server exclusion route
 	if d.serverPublicIP != nil && d.physicalGateway != "" {
-		RunCmd("route", "delete", d.serverPublicIP.String())
+		if d.serverPublicIP.To4() == nil {
+			// IPv6: use netsh to delete the host route
+			ifaceIdx := d.getInterfaceIndex()
+			RunCmd("netsh", "interface", "ipv6", "delete", "route",
+				fmt.Sprintf("%s/128", d.serverPublicIP.String()),
+				fmt.Sprintf("interface=%d", ifaceIdx))
+		} else {
+			RunCmd("route", "delete", d.serverPublicIP.String())
+		}
 	}
 
 	// Remove broadcast routes
