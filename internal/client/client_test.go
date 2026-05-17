@@ -215,7 +215,7 @@ func TestRoutePacket_PeerP2P(t *testing.T) {
 		Username:   "peer1",
 	}
 	peer.DirectReach.Store(true)
-	tunnel.peers = map[[16]byte]**Peer{
+	tunnel.peers = map[[16]byte]*Peer{
 		ipKey(peerIP): peer,
 	}
 
@@ -269,7 +269,7 @@ func TestRoutePacket_PeerNilAddr(t *testing.T) {
 
 	// Peer exists but has no PublicAddr (hole punch not yet completed)
 	peerIP := net.IPv4(10, 0, 0, 3).To4()
-	tunnel.peers = map[[16]byte]**Peer{
+	tunnel.peers = map[[16]byte]*Peer{
 		ipKey(peerIP): {
 			VirtualIP:  peerIP,
 			PublicAddr: nil,
@@ -388,7 +388,7 @@ func TestHandlePeerInfo_UpdatePlayer(t *testing.T) {
 	newAddr := &net.UDPAddr{IP: net.IPv4(5, 6, 7, 8), Port: 2000}
 
 	// Pre-populate peers
-	tunnel.peers = map[[16]byte]**Peer{
+	tunnel.peers = map[[16]byte]*Peer{
 		ipKey(peerIP): {
 			VirtualIP:  peerIP,
 			PublicAddr: oldAddr,
@@ -430,7 +430,7 @@ func TestHandlePeerInfo_PlayerLeaving(t *testing.T) {
 	peer2IP := net.IPv4(10, 0, 0, 6).To4()
 
 	// Pre-populate with two peers
-	tunnel.peers = map[[16]byte]**Peer{
+	tunnel.peers = map[[16]byte]*Peer{
 		ipKey(peer1IP): {
 			VirtualIP:  peer1IP,
 			PublicAddr: &net.UDPAddr{IP: net.IPv4(1, 2, 3, 4), Port: 1000},
@@ -473,7 +473,7 @@ func TestHandlePeerInfo_EmptyList(t *testing.T) {
 	tunnel, _ := newTestTunnel(t)
 
 	peerIP := net.IPv4(10, 0, 0, 5).To4()
-	tunnel.peers = map[[16]byte]**Peer{
+	tunnel.peers = map[[16]byte]*Peer{
 		ipKey(peerIP): {
 			VirtualIP:  peerIP,
 			PublicAddr: &net.UDPAddr{IP: net.IPv4(1, 2, 3, 4), Port: 1000},
