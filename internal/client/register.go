@@ -82,24 +82,22 @@ func (t *Tunnel) register(ctx context.Context) error {
 // readResponse reads and decodes one protocol message from the server.
 // Caller must provide a reusable buffer (typically 1500 bytes).
 func (t *Tunnel) readResponse(ctx context.Context, buf []byte) (*protocol.Message, error) {
-	for {
-		select {
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		default:
-		}
-
-		n, _, err := t.conn.ReadFromUDP(buf)
-		if err != nil {
-			return nil, err
-		}
-
-		msg, err := protocol.DecodeChecked(buf[:n])
-		if err != nil {
-			return nil, fmt.Errorf("%s", i18n.Format(i18n.T().ErrDecodeFailed, err))
-		}
-		return msg, nil
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	default:
 	}
+
+	n, _, err := t.conn.ReadFromUDP(buf)
+	if err != nil {
+		return nil, err
+	}
+
+	msg, err := protocol.DecodeChecked(buf[:n])
+	if err != nil {
+		return nil, fmt.Errorf("%s", i18n.Format(i18n.T().ErrDecodeFailed, err))
+	}
+	return msg, nil
 }
 
 // handleAssignIP processes the server's IP assignment.
