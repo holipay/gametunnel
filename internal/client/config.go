@@ -71,12 +71,21 @@ func LoadConfig() *Config {
 
 // ValidateServerAddr checks that the server address is in host:port format.
 // Returns a user-friendly error if invalid.
+//
+// Supported formats:
+//   - IPv4:      1.2.3.4:4700
+//   - IPv6:      [2408::1]:4700  (brackets required)
+//   - Domain:    example.com:4700
 func ValidateServerAddr(addr string) error {
 	if addr == "" {
 		return fmt.Errorf("server address is empty")
 	}
 	host, port, err := net.SplitHostPort(addr)
 	if err != nil {
+		// IPv6 address without brackets — user likely forgot them
+		if strings.Count(addr, ":") >= 2 && !strings.Contains(addr, "[") {
+			return fmt.Errorf("IPv6 address needs brackets: [%s]:4700", addr)
+		}
 		// Missing port — suggest adding :4700
 		if !strings.Contains(addr, ":") {
 			return fmt.Errorf("server address %q missing port (use %s:4700)", addr, addr)
