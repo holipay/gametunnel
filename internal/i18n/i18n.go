@@ -262,7 +262,7 @@ var zhStrings = &Strings{
 	RunStartup: "=== GameTunnel 启动 ===",
 
 	CfgHeader:     "# GameTunnel 配置文件",
-	CfgServerHint: "# 服务器地址（必填，如 1.2.3.4:4700）",
+	CfgServerHint: "# 服务器地址（必填，如 1.2.3.4:4700 或 [2408::1]:4700）",
 	CfgNameHint:   "# 玩家名称（默认：计算机名）",
 	CfgRoomHint:   "# 房间 ID（默认：default）",
 	CfgPassHint:   "# 密码（无密码留空）",
@@ -411,7 +411,7 @@ var enStrings = &Strings{
 	RunStartup: "=== GameTunnel Started ===",
 
 	CfgHeader:     "# GameTunnel Configuration",
-	CfgServerHint: "# Server address (required, e.g. 1.2.3.4:4700)",
+	CfgServerHint: "# Server address (required, e.g. 1.2.3.4:4700 or [2408::1]:4700)",
 	CfgNameHint:   "# Player name (default: computer name)",
 	CfgRoomHint:   "# Room ID (default: default)",
 	CfgPassHint:   "# Password (leave empty if none)",
