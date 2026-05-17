@@ -65,14 +65,22 @@ func (s *Server) handleRelay(payload []byte, from *net.UDPAddr) {
 }
 
 // handleHolePunch forwards a NAT hole punch packet to the target peer.
+//
+// The forwarded payload format: [16B srcIP (To16)] [4B srcVirtualIP] [addrStr...]
+// The receiver (client handleHolePunchReceived) only reads the first 4 bytes
+// as the peer's virtual IP — the srcIP field is unused but kept for debugging.
+//
+// Uses To16() so both IPv4 and IPv6 client addresses are handled uniformly.
+// IPv4 addresses are mapped to v4-in-v6 format (::ffff:x.x.x.x), which is
+// 16 bytes and hash-comparable with the client's ipKey() map keys.
 func (s *Server) handleHolePunch(payload []byte, from *net.UDPAddr) {
 	if len(payload) < 4 {
 		return
 	}
 	dstIP := net.IP(payload[:4])
 
-	srcIP4 := from.IP.To4()
-	if srcIP4 == nil {
+	srcIP := from.IP.To16()
+	if srcIP == nil {
 		return
 	}
 
@@ -85,8 +93,8 @@ func (s *Server) handleHolePunch(payload []byte, from *net.UDPAddr) {
 	}
 
 	addrStr := from.String()
-	punchData := make([]byte, 4+len(addrStr))
-	copy(punchData[:4], srcIP4)
-	copy(punchData[4:], []byte(addrStr))
+	punchData := make([]byte, 16+len(addrStr))
+	copy(punchData[:16], srcIP)
+	copy(punchData[16:], []byte(addrStr))
 	s.sendChecked(protocol.TypeHolePunch, punchData, dst.PublicAddr)
 }
