@@ -50,6 +50,14 @@ type Strings struct {
 	StatusAuthNone    string // "无认证"
 	StatusJustNow     string // "刚刚"
 	StatusSecAgo      string // "%ds前"
+	StatusMetrics     string // "运营指标"
+	StatusTotalRegs   string // "累计注册"
+	StatusPeakPlayers string // "峰值在线"
+	StatusRelayPkts   string // "累计中转包"
+	StatusAuthFails   string // "认证失败"
+	StatusTotalKicks  string // "累计踢出"
+	StatusDroppedPkts string // "丢弃包"
+	StatusSendErrors  string // "发送错误"
 
 	// ── Client Tray ──
 	TrayTitle         string // "GameTunnel"
@@ -207,6 +215,14 @@ var zhStrings = &Strings{
 	StatusAuthNone:    "无认证",
 	StatusJustNow:     "刚刚",
 	StatusSecAgo:      "%ds前",
+	StatusMetrics:     "运营指标",
+	StatusTotalRegs:   "累计注册",
+	StatusPeakPlayers: "峰值在线",
+	StatusRelayPkts:   "累计中转包",
+	StatusAuthFails:   "认证失败",
+	StatusTotalKicks:  "累计踢出",
+	StatusDroppedPkts: "丢弃包",
+	StatusSendErrors:  "发送错误",
 
 	TrayTitle:          "GameTunnel",
 	TrayTooltip:        "GameTunnel - 未连接",
@@ -356,6 +372,14 @@ var enStrings = &Strings{
 	StatusAuthNone:    "No Auth",
 	StatusJustNow:     "just now",
 	StatusSecAgo:      "%ds ago",
+	StatusMetrics:     "Metrics",
+	StatusTotalRegs:   "Registrations",
+	StatusPeakPlayers: "Peak Online",
+	StatusRelayPkts:   "Relayed Pkts",
+	StatusAuthFails:   "Auth Failures",
+	StatusTotalKicks:  "Kicks",
+	StatusDroppedPkts: "Dropped Pkts",
+	StatusSendErrors:  "Send Errors",
 
 	TrayTitle:          "GameTunnel",
 	TrayTooltip:        "GameTunnel - Disconnected",
