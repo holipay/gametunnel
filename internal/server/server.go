@@ -20,6 +20,12 @@ import (
 	"github.com/holipay/gametunnel/internal/i18n"
 )
 
+// pktPool reuses byte buffers for incoming packets to reduce GC pressure.
+// Buffers are returned to the pool after each worker finishes processing.
+var pktPool = sync.Pool{
+	New: func() interface{} { return make([]byte, 65535) },
+}
+
 // ── Auth State ─────────────────────────────────────────────────
 
 type authState int
@@ -291,13 +297,14 @@ func (s *Server) Run(ctx context.Context) {
 			continue
 		}
 
-		pkt := make([]byte, n)
-		copy(pkt, buf[:n])
+		pkt := pktPool.Get().([]byte)
+		n2 := copy(pkt, buf[:n])
 
 		select {
-		case s.pktCh <- pktJob{data: pkt, addr: remoteAddr}:
+		case s.pktCh <- pktJob{data: pkt[:n2], addr: remoteAddr}:
 		default:
-			// channel full — drop (backpressure)
+			// channel full — drop (backpressure), return buffer to pool
+			pktPool.Put(pkt)
 		}
 	}
 }
@@ -351,6 +358,9 @@ func (s *Server) worker(ctx context.Context) {
 			return
 		case job := <-s.pktCh:
 			s.handlePacket(job.data, job.addr)
+			// Return buffer to pool. Slice to full capacity so the next
+			// Get() gets a usable 65535-byte buffer.
+			pktPool.Put(job.data[:cap(job.data)])
 		}
 	}
 }

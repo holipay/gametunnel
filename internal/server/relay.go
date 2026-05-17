@@ -35,7 +35,6 @@ func (s *Server) handleRelay(payload []byte, from *net.UDPAddr) {
 	}
 
 	isBroadcast := protocol.IsRelayTarget(dstIP, s.subnet)
-	fromKey := addrToRateKey(from)
 
 	// Use stack-allocated array for small rooms, fall back to heap for large ones.
 	var stackTargets [maxInlineTargets]*net.UDPAddr
@@ -43,7 +42,7 @@ func (s *Server) handleRelay(payload []byte, from *net.UDPAddr) {
 
 	if isBroadcast {
 		for _, c := range s.clients {
-			if addrToRateKey(c.PublicAddr) != fromKey {
+			if c != sender {
 				targets = append(targets, c.PublicAddr)
 			}
 		}
