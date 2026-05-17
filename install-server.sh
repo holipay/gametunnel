@@ -26,8 +26,24 @@ STATUS_ADDR="${STATUS_ADDR:-}"
 # 脚本所在目录（用于本地安装）
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd || pwd)"
 
-# Extract port from LISTEN_ADDR (e.g., ":4700" → "4700")
+# Validate LISTEN_ADDR format and extract port
+# Supported formats: ":4700", "0.0.0.0:4700", "[::]:4700", "[2408::1]:4700"
+if [[ "$LISTEN_ADDR" == *"[ "* ]] || [[ "$LISTEN_ADDR" == *" ]"* ]]; then
+    echo "❌ IPv6 地址方括号内不应有空格: $LISTEN_ADDR"
+    exit 1
+fi
+# Bare IPv6 (no brackets, no port) — user forgot brackets
+if [[ "$LISTEN_ADDR" =~ ^[0-9a-fA-F:]+$ ]] && [[ "$LISTEN_ADDR" == *:*:* ]]; then
+    echo "❌ IPv6 监听地址需要方括号和端口: [${LISTEN_ADDR}]:4700"
+    exit 1
+fi
+# Extract port: strip everything up to and including the last ':'
 LISTEN_PORT="${LISTEN_ADDR##*:}"
+if ! [[ "$LISTEN_PORT" =~ ^[0-9]+$ ]]; then
+    echo "❌ 无法解析端口号: $LISTEN_ADDR"
+    echo "   正确格式: :4700 | 0.0.0.0:4700 | [::]:4700 | [2408::1]:4700"
+    exit 1
+fi
 
 echo "🎮 GameTunnel Server 安装脚本"
 echo ""
@@ -161,12 +177,28 @@ echo "  ✅ 已安装到 $INSTALL_DIR/$BINARY_NAME"
 
 EXTRA_ARGS=""
 if [ -n "$ROOM_PASSWORD" ]; then
+    # Validate: systemd ExecStart doesn't support shell quoting, spaces will break it
+    if [[ "$ROOM_PASSWORD" == *" "* ]]; then
+        echo "❌ 房间密码不能包含空格（systemd ExecStart 不支持 shell 引用）"
+        exit 1
+    fi
     EXTRA_ARGS="-password ${ROOM_PASSWORD}"
 fi
 if [ -n "$STATUS_ADDR" ]; then
+    # Extract status port for firewall hint
+    STATUS_PORT="${STATUS_ADDR##*:}"
+    if ! [[ "$STATUS_PORT" =~ ^[0-9]+$ ]]; then
+        echo "❌ 无法解析状态页端口号: $STATUS_ADDR"
+        echo "   正确格式: :4701 | [::]:4701 | [2408::1]:4701"
+        exit 1
+    fi
     EXTRA_ARGS="${EXTRA_ARGS} -status-addr ${STATUS_ADDR}"
 fi
 if [ -n "$STATUS_TOKEN" ]; then
+    if [[ "$STATUS_TOKEN" == *" "* ]]; then
+        echo "❌ 状态页 token 不能包含空格"
+        exit 1
+    fi
     EXTRA_ARGS="${EXTRA_ARGS} -status-token ${STATUS_TOKEN}"
 fi
 
@@ -199,9 +231,10 @@ echo ""
 echo "  玩家下载客户端: https://github.com/${REPO}/releases"
 echo ""
 if [ -n "$STATUS_ADDR" ]; then
-    STATUS_PORT="${STATUS_ADDR##*:}"
     echo "  ⚠️ 确保防火墙开放 UDP ${LISTEN_PORT} 和 TCP ${STATUS_PORT} 端口"
+    echo "     IPv6: ip6tables -A INPUT -p udp --dport ${LISTEN_PORT} -j ACCEPT"
 else
     echo "  ⚠️ 确保防火墙开放 UDP ${LISTEN_PORT} 端口"
+    echo "     IPv6: ip6tables -A INPUT -p udp --dport ${LISTEN_PORT} -j ACCEPT"
 fi
 echo ""
