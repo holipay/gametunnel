@@ -37,7 +37,7 @@ echo ""
 # 检查是否 OpenWrt
 if [ ! -f /etc/openwrt_version ] && [ ! -f /etc/openwrt_release ] && ! command -v opkg >/dev/null 2>&1; then
     echo "⚠️  未检测到 OpenWrt 环境，继续安装可能不适用"
-    echo "   标准 Linux 服务器请使用 install-server.sh"
+    echo "   标准 Linux 服务器请使用 install-linux.sh"
     echo ""
 fi
 

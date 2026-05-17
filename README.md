@@ -14,13 +14,13 @@
 
 ```bash
 # 一键安装（从 GitHub Releases 下载预编译二进制）
-curl -sL https://raw.githubusercontent.com/holipay/gametunnel/main/install-server.sh | sudo bash
+curl -sL https://raw.githubusercontent.com/holipay/gametunnel/main/scripts/install-linux.sh | sudo bash
 
 # 带房间密码：
-curl -sL https://raw.githubusercontent.com/holipay/gametunnel/main/install-server.sh | sudo ROOM_PASSWORD=你的密码 bash
+curl -sL https://raw.githubusercontent.com/holipay/gametunnel/main/scripts/install-linux.sh | sudo ROOM_PASSWORD=你的密码 bash
 
 # 带状态页面：
-curl -sL https://raw.githubusercontent.com/holipay/gametunnel/main/install-server.sh | sudo STATUS_ADDR=:4701 bash
+curl -sL https://raw.githubusercontent.com/holipay/gametunnel/main/scripts/install-linux.sh | sudo STATUS_ADDR=:4701 bash
 
 # 或手动编译：
 git clone https://github.com/holipay/gametunnel.git
