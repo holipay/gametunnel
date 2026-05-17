@@ -111,12 +111,12 @@ func (t *Tunnel) handleAssignIP(payload []byte) error {
 	t.virtualIP = assign.VirtualIP
 	t.serverIP = assign.ServerIP
 	t.subnetMask = net.IPMask(assign.SubnetMask)
-	// Cache subnet and serverIP4 for hot-path lookups
+	// Cache subnet and serverIPKey for hot-path lookups
 	t.cachedSubnet = &net.IPNet{
 		IP:   t.virtualIP.Mask(t.subnetMask),
 		Mask: t.subnetMask,
 	}
-	t.serverIP4 = ip4Key(t.serverIP)
+	t.serverIPKey = ipKey(t.serverIP)
 
 	// Initialize end-to-end encryption if password is set
 	if t.roomPass != "" {
@@ -154,7 +154,7 @@ func (t *Tunnel) handleAuthChallenge(payload []byte) error {
 	// 使用服务端观测到的客户端地址（经过 NAT 后的公网地址）
 	var clientAddr *net.UDPAddr
 	if acp.ClientAddr != "" {
-		clientAddr, _ = net.ResolveUDPAddr("udp4", acp.ClientAddr)
+		clientAddr, _ = net.ResolveUDPAddr("udp", acp.ClientAddr)
 	}
 
 	hmacVal := auth.ComputeHMAC(key, acp.Challenge, t.roomID, t.username, clientAddr)

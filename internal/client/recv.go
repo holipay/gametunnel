@@ -111,7 +111,7 @@ func (t *Tunnel) handleDirectData(from *net.UDPAddr, msg *protocol.Message) {
 	}
 
 	// Validate srcIP is a known peer (anti-spoofing)
-	srcKey := ip4Key(dp.SrcIP)
+	srcKey := ipKey(dp.SrcIP)
 	t.mu.RLock()
 	peer, known := t.peers[srcKey]
 	t.mu.RUnlock()
@@ -154,13 +154,13 @@ func (t *Tunnel) handlePeerInfo(ctx context.Context, payload []byte) {
 
 	t.mu.Lock()
 
-	newPeers := make(map[[4]byte]*Peer, len(info.Peers))
+	newPeers := make(map[[16]byte]*Peer, len(info.Peers))
 	for _, entry := range info.Peers {
 		// Skip self — server sends full list including this client
 		if entry.VirtualIP.Equal(t.virtualIP) {
 			continue
 		}
-		key := ip4Key(entry.VirtualIP)
+		key := ipKey(entry.VirtualIP)
 		if existing, ok := t.peers[key]; ok {
 			// Check if peer's public address changed (NAT rebinding)
 			addrChanged := existing.PublicAddr != nil && entry.PublicAddr != nil &&
@@ -218,10 +218,10 @@ func (t *Tunnel) handleDataFromServer(payload []byte) {
 		return
 	}
 
-	srcKey := ip4Key(dp.SrcIP)
+	srcKey := ipKey(dp.SrcIP)
 
 	// Allow traffic from the server's virtual IP (relay path) or known peers.
-	if srcKey != t.serverIP4 {
+	if srcKey != t.serverIPKey {
 		t.mu.RLock()
 		_, known := t.peers[srcKey]
 		t.mu.RUnlock()
