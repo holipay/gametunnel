@@ -118,37 +118,80 @@ fi
 
 # 优先级5: 从 GitHub 下载
 if [ -z "$TMPFILE" ]; then
+    # ── 版本检测 ──
     echo "📡 检查最新版本..."
-    LATEST=$(curl -sL "https://api.github.com/repos/${REPO}/releases/latest" | grep '"tag_name"' | head -1 | cut -d'"' -f4)
+
+    # 尝试 API（快，但国内偶尔超时）；失败则从 releases 页面提取
+    LATEST=""
+    API_URL="https://api.github.com/repos/${REPO}/releases/latest"
+    RELEASES_URL="https://github.com/${REPO}/releases"
+
+    # 方式1: GitHub API（轻量 JSON）
+    LATEST=$(curl -sL --connect-timeout 10 --max-time 15 "$API_URL" 2>/dev/null \
+        | grep '"tag_name"' | head -1 | cut -d'"' -f4)
+
+    # 方式2: API 失败时，从 releases 页面 HTML 提取第一个 tag
+    if [ -z "$LATEST" ]; then
+        echo "  API 超时，尝试从 releases 页面获取..."
+        LATEST=$(curl -sL --connect-timeout 10 --max-time 20 "$RELEASES_URL" 2>/dev/null \
+            | grep -oP 'href="[^"]*?/releases/tag/[^"]*?"' | head -1 \
+            | grep -oP 'tag/[^"]*')
+    fi
+
     if [ -z "$LATEST" ]; then
         echo "❌ 无法获取版本信息，请检查网络或手动下载:"
-        echo "   https://github.com/${REPO}/releases"
+        echo "   $RELEASES_URL"
         exit 1
     fi
     echo "  版本: $LATEST"
 
+    # ── 下载（带重试 + 断点续传）──
     DOWNLOAD_URL="https://github.com/${REPO}/releases/download/${LATEST}/${LOCAL_BINARY}"
-    echo "📥 下载服务器..."
     TMPFILE=$(mktemp)
-    HTTP_CODE=$(curl -sL -w '%{http_code}' -o "$TMPFILE" "$DOWNLOAD_URL")
-    if [ "$HTTP_CODE" != "200" ]; then
-        echo "❌ 下载失败 (HTTP $HTTP_CODE): $DOWNLOAD_URL"
-        echo ""
-        echo "  替代方案："
-        echo "  1. 从 https://github.com/${REPO}/releases 手动下载 ${LOCAL_BINARY}"
-        echo "  2. 放到服务器上，和 install-linux.sh 同目录，重新运行"
-        rm -f "$TMPFILE"
-        exit 1
-    fi
+    MAX_RETRY=3
 
-    # 验证是 ELF 二进制
+    for attempt in $(seq 1 $MAX_RETRY); do
+        echo "📥 下载服务器... (第 ${attempt}/${MAX_RETRY} 次)"
+        # -C -: 断点续传  --retry: curl 内置重试  --retry-connrefused: 连接拒绝也重试
+        HTTP_CODE=$(curl -L \
+            --connect-timeout 15 \
+            --max-time 300 \
+            --retry 2 \
+            --retry-delay 3 \
+            --retry-connrefused \
+            -C - \
+            -w '%{http_code}' \
+            -o "$TMPFILE" \
+            "$DOWNLOAD_URL" 2>/dev/null)
+
+        if [ "$HTTP_CODE" = "200" ] && file "$TMPFILE" | grep -q "ELF"; then
+            break
+        fi
+
+        # 4xx 错误不重试（文件不存在等）
+        if [[ "$HTTP_CODE" =~ ^4[0-9][0-9]$ ]]; then
+            break
+        fi
+
+        if [ "$attempt" -lt "$MAX_RETRY" ]; then
+            echo "  ⚠️ 下载未成功 (HTTP $HTTP_CODE)，${attempt} 秒后重试..."
+            sleep "$attempt"
+        fi
+    done
+
+    # ── 验证 ──
     if ! file "$TMPFILE" | grep -q "ELF"; then
-        echo "❌ 下载的文件不是有效的 Linux 二进制: ${LOCAL_BINARY}"
-        echo "  可能原因: release 中该文件尚未生成，请稍后重试"
+        echo "❌ 下载失败"
         echo ""
-        echo "  替代方案："
-        echo "  1. 从 https://github.com/${REPO}/releases 手动下载 ${LOCAL_BINARY}"
-        echo "  2. 放到服务器上，和 install-linux.sh 同目录，重新运行"
+        echo "  可能原因："
+        echo "  - GitHub 访问不稳定（国内常见）"
+        echo "  - Release 中 ${LOCAL_BINARY} 尚未生成"
+        echo ""
+        echo "  替代方案（任选其一）："
+        echo "  1. 手动下载后放到服务器任意目录，重新运行本脚本："
+        echo "     wget ${DOWNLOAD_URL}"
+        echo "  2. 在能访问 GitHub 的机器下载，scp 传到服务器"
+        echo "  3. 用 gh CLI:  gh release download ${LATEST} -R ${REPO}"
         rm -f "$TMPFILE"
         exit 1
     fi
