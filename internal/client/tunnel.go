@@ -20,6 +20,12 @@ type sendJob struct {
 	addr *net.UDPAddr
 }
 
+// ctrlTimerPool reuses timers for sendCtrl to avoid per-call allocation.
+// Timers are Reset before use and drained after use to ensure clean state.
+var ctrlTimerPool = sync.Pool{
+	New: func() interface{} { return time.NewTimer(0) },
+}
+
 // ipKey converts an IP address to a [16]byte map key.
 // IPv4 addresses are automatically mapped to v4-in-v6 format (::ffff:x.x.x.x).
 func ipKey(ip net.IP) [16]byte {
@@ -368,8 +374,8 @@ func (t *Tunnel) sendUDP(data []byte, addr *net.UDPAddr) {
 // Control packets use a separate high-priority channel with a short blocking window
 // to avoid dropping critical keepalive packets under burst load.
 func (t *Tunnel) sendCtrl(data []byte, addr *net.UDPAddr) {
-	timer := time.NewTimer(50 * time.Millisecond)
-	defer timer.Stop()
+	timer := ctrlTimerPool.Get().(*time.Timer)
+	timer.Reset(50 * time.Millisecond)
 	select {
 	case t.ctrlCh <- sendJob{data: data, addr: addr}:
 	case <-timer.C:
@@ -379,4 +385,11 @@ func (t *Tunnel) sendCtrl(data []byte, addr *net.UDPAddr) {
 			log.Printf("%s", i18n.Format(i18n.T().LogSendFail, n, fmt.Errorf("ctrl channel full")))
 		}
 	}
+	if !timer.Stop() {
+		select {
+		case <-timer.C:
+		default:
+		}
+	}
+	ctrlTimerPool.Put(timer)
 }

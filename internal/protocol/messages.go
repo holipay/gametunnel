@@ -3,6 +3,7 @@ package protocol
 import (
 	"encoding/binary"
 	"net"
+	"sync"
 )
 
 // ── Register ───────────────────────────────────────────────────
@@ -167,6 +168,22 @@ type DataPayload struct {
 	Data  []byte
 }
 
+// dataPayloadPool reuses DataPayload objects to reduce GC pressure on the
+// hot path (every game data packet goes through UnmarshalData).
+var dataPayloadPool = sync.Pool{
+	New: func() interface{} { return &DataPayload{} },
+}
+
+// PutDataPayload returns a DataPayload to the pool. Callers MUST NOT use the
+// object or any of its fields after calling this.
+func PutDataPayload(dp *DataPayload) {
+	// Clear references to allow GC of underlying buffers
+	dp.SrcIP = nil
+	dp.DstIP = nil
+	dp.Data = nil
+	dataPayloadPool.Put(dp)
+}
+
 func (d *DataPayload) Marshal() []byte {
 	src := d.SrcIP.To4()
 	dst := d.DstIP.To4()
@@ -201,6 +218,21 @@ func UnmarshalData(data []byte) (*DataPayload, error) {
 		DstIP: net.IP(append([]byte(nil), data[4:8]...)),
 		Data:  pktData,
 	}, nil
+}
+
+// UnmarshalDataPooled is like UnmarshalData but reuses a pooled DataPayload.
+// The returned object MUST be released with PutDataPayload after use.
+// Callers MUST NOT retain references to dp.Data after returning the payload
+// to the pool (dp.Data may point to a shared buffer).
+func UnmarshalDataPooled(data []byte) (*DataPayload, error) {
+	if len(data) < 8 {
+		return nil, ErrPacketTooShort
+	}
+	dp := dataPayloadPool.Get().(*DataPayload)
+	dp.SrcIP = append(dp.SrcIP[:0], data[0:4]...)
+	dp.DstIP = append(dp.DstIP[:0], data[4:8]...)
+	dp.Data = append(dp.Data[:0], data[8:]...)
+	return dp, nil
 }
 
 // ── Kick ───────────────────────────────────────────────────────
