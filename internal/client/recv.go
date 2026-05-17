@@ -106,8 +106,11 @@ func (t *Tunnel) handleDirectData(from *net.UDPAddr, msg *protocol.Message) {
 		return
 	}
 
-	dp, err := protocol.UnmarshalData(msg.Payload)
+	dp, err := protocol.UnmarshalDataPooled(msg.Payload)
 	if err != nil || len(dp.Data) == 0 || t.tunDev == nil {
+		if dp != nil {
+			protocol.PutDataPayload(dp)
+		}
 		return
 	}
 
@@ -117,11 +120,13 @@ func (t *Tunnel) handleDirectData(from *net.UDPAddr, msg *protocol.Message) {
 	peer, known := t.peers[srcKey]
 	t.mu.RUnlock()
 	if !known {
+		protocol.PutDataPayload(dp)
 		return
 	}
 
 	// Verify the packet actually came from this peer's public address (IP + port)
 	if peer.PublicAddr == nil || !from.IP.Equal(peer.PublicAddr.IP) || from.Port != peer.PublicAddr.Port {
+		protocol.PutDataPayload(dp)
 		return
 	}
 
@@ -133,6 +138,7 @@ func (t *Tunnel) handleDirectData(from *net.UDPAddr, msg *protocol.Message) {
 	if t.decCipher != nil && crypto.IsEncrypted(dp.Data) {
 		outData, err = t.decCipher.Decrypt(dp.Data)
 		if err != nil {
+			protocol.PutDataPayload(dp)
 			return
 		}
 	}
@@ -140,6 +146,7 @@ func (t *Tunnel) handleDirectData(from *net.UDPAddr, msg *protocol.Message) {
 	if _, err := t.tunDev.Write(outData); err != nil {
 		log.Printf(i18n.T().LogTUNWriteFail, err)
 	}
+	protocol.PutDataPayload(dp)
 }
 
 // handlePeerInfo updates the peer list from the server.
@@ -211,11 +218,12 @@ func (t *Tunnel) handlePeerInfo(ctx context.Context, payload []byte) {
 // Note: this path is ALWAYS server-relayed — direct P2P packets are handled
 // by handleDirectData instead. Do NOT mark DirectReach here.
 func (t *Tunnel) handleDataFromServer(payload []byte) {
-	dp, err := protocol.UnmarshalData(payload)
+	dp, err := protocol.UnmarshalDataPooled(payload)
 	if err != nil {
 		return
 	}
 	if len(dp.Data) == 0 || t.tunDev == nil {
+		protocol.PutDataPayload(dp)
 		return
 	}
 
@@ -228,6 +236,7 @@ func (t *Tunnel) handleDataFromServer(payload []byte) {
 		t.mu.RUnlock()
 		if !known {
 			// Unknown srcIP — drop to prevent injection.
+			protocol.PutDataPayload(dp)
 			return
 		}
 	}
@@ -238,6 +247,7 @@ func (t *Tunnel) handleDataFromServer(payload []byte) {
 		outData, err = t.decCipher.Decrypt(dp.Data)
 		if err != nil {
 			// Decrypt failure — drop packet (tampered or wrong key)
+			protocol.PutDataPayload(dp)
 			return
 		}
 	}
@@ -245,6 +255,7 @@ func (t *Tunnel) handleDataFromServer(payload []byte) {
 	if _, err := t.tunDev.Write(outData); err != nil {
 		log.Printf(i18n.T().LogTUNWriteFail, err)
 	}
+	protocol.PutDataPayload(dp)
 }
 
 // receiveFromTUN reads IP packets from the TUN device and routes them.
