@@ -14,13 +14,13 @@ Supports all IP-based LAN games with built-in UDP broadcast forwarding (for game
 
 ```bash
 # One-click install (downloads pre-built binary from GitHub Releases)
-curl -sL https://raw.githubusercontent.com/holipay/gametunnel/main/install-server.sh | sudo bash
+curl -sL https://raw.githubusercontent.com/holipay/gametunnel/main/scripts/install-linux.sh | sudo bash
 
 # With room password:
-curl -sL https://raw.githubusercontent.com/holipay/gametunnel/main/install-server.sh | sudo ROOM_PASSWORD=yourpassword bash
+curl -sL https://raw.githubusercontent.com/holipay/gametunnel/main/scripts/install-linux.sh | sudo ROOM_PASSWORD=yourpassword bash
 
 # With status page:
-curl -sL https://raw.githubusercontent.com/holipay/gametunnel/main/install-server.sh | sudo STATUS_ADDR=:4701 bash
+curl -sL https://raw.githubusercontent.com/holipay/gametunnel/main/scripts/install-linux.sh | sudo STATUS_ADDR=:4701 bash
 
 # Or build from source:
 git clone https://github.com/holipay/gametunnel.git

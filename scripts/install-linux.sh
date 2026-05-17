@@ -1,10 +1,10 @@
 #!/bin/bash
-# GameTunnel 一键安装脚本（服务器端 - Linux）
+# GameTunnel 一键安装脚本（Linux 服务器）
 #
 # 用法:
-#   在线安装:  curl -sL https://raw.githubusercontent.com/holipay/gametunnel/main/install-server.sh | sudo bash
-#   本地安装:  sudo bash install-server.sh                    (gtunnel-server-linux-amd64 或 gtunnel-server 在脚本同目录)
-#   带密码:    sudo ROOM_PASSWORD=你的密码 bash install-server.sh
+#   在线安装:  curl -sL https://raw.githubusercontent.com/holipay/gametunnel/main/scripts/install-linux.sh | sudo bash
+#   本地安装:  sudo bash scripts/install-linux.sh              (gtunnel-server-linux-amd64 或 gtunnel-server 在脚本同目录)
+#   带密码:    sudo ROOM_PASSWORD=你的密码 bash install-linux.sh
 #
 # 环境变量:
 #   LISTEN_ADDR   - 监听地址 (默认 :4700)
@@ -51,7 +51,7 @@ echo ""
 # 检查 root
 if [ "$EUID" -ne 0 ]; then
     echo "❌ 请用 root 运行此脚本"
-    echo "   sudo bash install-server.sh"
+    echo "   sudo bash install-linux.sh"
     exit 1
 fi
 
@@ -136,7 +136,7 @@ if [ -z "$TMPFILE" ]; then
         echo ""
         echo "  替代方案："
         echo "  1. 从 https://github.com/${REPO}/releases 手动下载 ${LOCAL_BINARY}"
-        echo "  2. 放到服务器上，和 install-server.sh 同目录，重新运行"
+        echo "  2. 放到服务器上，和 install-linux.sh 同目录，重新运行"
         rm -f "$TMPFILE"
         exit 1
     fi
@@ -148,7 +148,7 @@ if [ -z "$TMPFILE" ]; then
         echo ""
         echo "  替代方案："
         echo "  1. 从 https://github.com/${REPO}/releases 手动下载 ${LOCAL_BINARY}"
-        echo "  2. 放到服务器上，和 install-server.sh 同目录，重新运行"
+        echo "  2. 放到服务器上，和 install-linux.sh 同目录，重新运行"
         rm -f "$TMPFILE"
         exit 1
     fi
