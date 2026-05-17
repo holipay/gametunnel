@@ -153,6 +153,7 @@ gtunnel-server -addr :4700 -subnet 10.10.0.0/24 -max 10 -password secret
 | `-max` | `10` | Max players |
 | `-password` | _(empty)_ | Room password (empty = no auth) |
 | `-status-addr` | _(disabled)_ | HTTP status page address, e.g. `:4701` |
+| `-status-token` | _(empty)_ | Status page access token (empty = no auth) |
 | `-lang` | `zh` | Language (`zh` Chinese / `en` English) |
 | `-version` | | Show version |
 
