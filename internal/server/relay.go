@@ -48,7 +48,7 @@ func (s *Server) handleRelay(payload []byte, from *net.UDPAddr) {
 			}
 		}
 	} else {
-		if dst, ok := s.clients[ip4Key(dstIP)]; ok {
+		if dst, ok := s.clients[ipKey(dstIP)]; ok {
 			targets = append(targets, dst.PublicAddr)
 		}
 	}
@@ -77,7 +77,7 @@ func (s *Server) handleHolePunch(payload []byte, from *net.UDPAddr) {
 	}
 
 	s.mu.RLock()
-	dst, ok := s.clients[ip4Key(dstIP)]
+	dst, ok := s.clients[ipKey(dstIP)]
 	s.mu.RUnlock()
 
 	if !ok {

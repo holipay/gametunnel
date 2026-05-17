@@ -11,8 +11,8 @@ import (
 // this call — Marshal copies the data for the UDP send.
 func (t *Tunnel) routePacket(pkt []byte, srcIP, dstIP net.IP) {
 	// Fast path: check server destination first (most common for relay)
-	dstKey := ip4Key(dstIP)
-	if dstKey == t.serverIP4 {
+	dstKey := ipKey(dstIP)
+	if dstKey == t.serverIPKey {
 		t.sendToServer(pkt, srcIP, dstIP)
 		return
 	}

@@ -88,32 +88,33 @@ func readUDPWithTimeout(conn *net.UDPConn, timeout time.Duration) []byte {
 	return buf[:n]
 }
 
-// ── 1. ip4Key Tests ────────────────────────────────────────────
+// ── 1. ipKey Tests ────────────────────────────────────────────
 
-func TestIp4Key_NormalIPv4(t *testing.T) {
+func TestIpKey_NormalIPv4(t *testing.T) {
 	ip := net.IPv4(192, 168, 1, 1).To4()
-	key := ip4Key(ip)
-	expected := [4]byte{192, 168, 1, 1}
+	key := ipKey(ip)
+	// IPv4 is mapped to v4-in-v6 format
+	expected := [16]byte{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff, 192, 168, 1, 1}
 	if key != expected {
 		t.Errorf("expected %v, got %v", expected, key)
 	}
 }
 
-func TestIp4Key_IPv4Mapped(t *testing.T) {
+func TestIpKey_IPv4Mapped(t *testing.T) {
 	// 16-byte IPv4-mapped address: ::ffff:192.168.1.1
 	ip16 := net.IP{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff, 192, 168, 1, 1}
-	key := ip4Key(ip16)
-	expected := [4]byte{192, 168, 1, 1}
+	key := ipKey(ip16)
+	expected := [16]byte{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff, 192, 168, 1, 1}
 	if key != expected {
 		t.Errorf("expected %v, got %v", expected, key)
 	}
 }
 
-func TestIp4Key_Consistency(t *testing.T) {
+func TestIpKey_Consistency(t *testing.T) {
 	// Both 4-byte and 16-byte representations of the same IP must produce the same key
 	ip4 := net.IPv4(10, 0, 0, 1).To4()
 	ip16 := net.IP{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff, 10, 0, 0, 1}
-	if ip4Key(ip4) != ip4Key(ip16) {
+	if ipKey(ip4) != ipKey(ip16) {
 		t.Error("4-byte and 16-byte IPv4-mapped should produce the same key")
 	}
 }
@@ -124,7 +125,7 @@ func TestRoutePacket_Broadcast(t *testing.T) {
 	tunnel, serverConn := newTestTunnel(t)
 
 	tunnel.serverIP = net.IPv4(10, 0, 0, 1).To4()
-	tunnel.serverIP4 = ip4Key(tunnel.serverIP)
+	tunnel.serverIPKey = ipKey(tunnel.serverIP)
 	tunnel.cachedSubnet = &net.IPNet{
 		IP:   net.IPv4(10, 0, 0, 0).To4(),
 		Mask: net.CIDRMask(24, 32),
@@ -163,7 +164,7 @@ func TestRoutePacket_ServerIP(t *testing.T) {
 
 	serverIP := net.IPv4(10, 0, 0, 1).To4()
 	tunnel.serverIP = serverIP
-	tunnel.serverIP4 = ip4Key(serverIP)
+	tunnel.serverIPKey = ipKey(serverIP)
 
 	pkt := []byte{0x45, 0, 0, 20}
 	srcIP := net.IPv4(10, 0, 0, 2).To4()
@@ -204,7 +205,7 @@ func TestRoutePacket_PeerP2P(t *testing.T) {
 
 	serverIP := net.IPv4(10, 0, 0, 1).To4()
 	tunnel.serverIP = serverIP
-	tunnel.serverIP4 = ip4Key(serverIP)
+	tunnel.serverIPKey = ipKey(serverIP)
 
 	peerIP := net.IPv4(10, 0, 0, 3).To4()
 	peerAddr := peerConn.LocalAddr().(*net.UDPAddr)
@@ -214,8 +215,8 @@ func TestRoutePacket_PeerP2P(t *testing.T) {
 		Username:   "peer1",
 	}
 	peer.DirectReach.Store(true)
-	tunnel.peers = map[[4]byte]*Peer{
-		ip4Key(peerIP): peer,
+	tunnel.peers = map[[16]byte]**Peer{
+		ipKey(peerIP): peer,
 	}
 
 	pkt := []byte{0x45, 0, 0, 20}
@@ -264,12 +265,12 @@ func TestRoutePacket_PeerNilAddr(t *testing.T) {
 
 	serverIP := net.IPv4(10, 0, 0, 1).To4()
 	tunnel.serverIP = serverIP
-	tunnel.serverIP4 = ip4Key(serverIP)
+	tunnel.serverIPKey = ipKey(serverIP)
 
 	// Peer exists but has no PublicAddr (hole punch not yet completed)
 	peerIP := net.IPv4(10, 0, 0, 3).To4()
-	tunnel.peers = map[[4]byte]*Peer{
-		ip4Key(peerIP): {
+	tunnel.peers = map[[16]byte]**Peer{
+		ipKey(peerIP): {
 			VirtualIP:  peerIP,
 			PublicAddr: nil,
 			Username:   "peer1",
@@ -301,7 +302,7 @@ func TestRoutePacket_UnknownIP(t *testing.T) {
 
 	serverIP := net.IPv4(10, 0, 0, 1).To4()
 	tunnel.serverIP = serverIP
-	tunnel.serverIP4 = ip4Key(serverIP)
+	tunnel.serverIPKey = ipKey(serverIP)
 
 	pkt := []byte{0x45, 0, 0, 20}
 	srcIP := net.IPv4(10, 0, 0, 2).To4()
@@ -359,7 +360,7 @@ func TestHandlePeerInfo_NewPlayer(t *testing.T) {
 	tunnel.handlePeerInfo(context.Background(), payload.Marshal())
 
 	tunnel.mu.RLock()
-	peer, ok := tunnel.peers[ip4Key(peerIP)]
+	peer, ok := tunnel.peers[ipKey(peerIP)]
 	tunnel.mu.RUnlock()
 
 	if !ok {
@@ -387,8 +388,8 @@ func TestHandlePeerInfo_UpdatePlayer(t *testing.T) {
 	newAddr := &net.UDPAddr{IP: net.IPv4(5, 6, 7, 8), Port: 2000}
 
 	// Pre-populate peers
-	tunnel.peers = map[[4]byte]*Peer{
-		ip4Key(peerIP): {
+	tunnel.peers = map[[16]byte]**Peer{
+		ipKey(peerIP): {
 			VirtualIP:  peerIP,
 			PublicAddr: oldAddr,
 			Username:   "player1",
@@ -408,7 +409,7 @@ func TestHandlePeerInfo_UpdatePlayer(t *testing.T) {
 	tunnel.handlePeerInfo(context.Background(), payload.Marshal())
 
 	tunnel.mu.RLock()
-	peer, ok := tunnel.peers[ip4Key(peerIP)]
+	peer, ok := tunnel.peers[ipKey(peerIP)]
 	tunnel.mu.RUnlock()
 
 	if !ok {
@@ -429,13 +430,13 @@ func TestHandlePeerInfo_PlayerLeaving(t *testing.T) {
 	peer2IP := net.IPv4(10, 0, 0, 6).To4()
 
 	// Pre-populate with two peers
-	tunnel.peers = map[[4]byte]*Peer{
-		ip4Key(peer1IP): {
+	tunnel.peers = map[[16]byte]**Peer{
+		ipKey(peer1IP): {
 			VirtualIP:  peer1IP,
 			PublicAddr: &net.UDPAddr{IP: net.IPv4(1, 2, 3, 4), Port: 1000},
 			Username:   "player1",
 		},
-		ip4Key(peer2IP): {
+		ipKey(peer2IP): {
 			VirtualIP:  peer2IP,
 			PublicAddr: &net.UDPAddr{IP: net.IPv4(5, 6, 7, 8), Port: 2000},
 			Username:   "player2",
@@ -456,8 +457,8 @@ func TestHandlePeerInfo_PlayerLeaving(t *testing.T) {
 	tunnel.handlePeerInfo(context.Background(), payload.Marshal())
 
 	tunnel.mu.RLock()
-	_, hasPeer1 := tunnel.peers[ip4Key(peer1IP)]
-	_, hasPeer2 := tunnel.peers[ip4Key(peer2IP)]
+	_, hasPeer1 := tunnel.peers[ipKey(peer1IP)]
+	_, hasPeer2 := tunnel.peers[ipKey(peer2IP)]
 	tunnel.mu.RUnlock()
 
 	if hasPeer1 {
@@ -472,8 +473,8 @@ func TestHandlePeerInfo_EmptyList(t *testing.T) {
 	tunnel, _ := newTestTunnel(t)
 
 	peerIP := net.IPv4(10, 0, 0, 5).To4()
-	tunnel.peers = map[[4]byte]*Peer{
-		ip4Key(peerIP): {
+	tunnel.peers = map[[16]byte]**Peer{
+		ipKey(peerIP): {
 			VirtualIP:  peerIP,
 			PublicAddr: &net.UDPAddr{IP: net.IPv4(1, 2, 3, 4), Port: 1000},
 			Username:   "player1",
@@ -720,7 +721,7 @@ func TestHandleDataFromServer(t *testing.T) {
 
 	serverIP := net.IPv4(10, 0, 0, 1).To4()
 	tunnel.serverIP = serverIP
-	tunnel.serverIP4 = ip4Key(serverIP)
+	tunnel.serverIPKey = ipKey(serverIP)
 
 	mock := &mockTunDevice{}
 	tunnel.tunDev = mock

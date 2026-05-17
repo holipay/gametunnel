@@ -20,11 +20,12 @@ type sendJob struct {
 	addr *net.UDPAddr
 }
 
-// ip4Key converts a 4-byte IPv4 address to a [4]byte map key.
-// Panics if ip is not a valid IPv4 address.
-func ip4Key(ip net.IP) [4]byte {
-	ip4 := ip.To4()
-	return [4]byte{ip4[0], ip4[1], ip4[2], ip4[3]}
+// ipKey converts an IP address to a [16]byte map key.
+// IPv4 addresses are automatically mapped to v4-in-v6 format (::ffff:x.x.x.x).
+func ipKey(ip net.IP) [16]byte {
+	var k [16]byte
+	copy(k[:], ip.To16())
+	return k
 }
 
 // Peer represents a remote player.
@@ -69,10 +70,10 @@ type Tunnel struct {
 	tunDev         TunDevice
 	virtualIP      net.IP
 	serverIP       net.IP
-	serverIP4      [4]byte // cached serverIP as [4]byte for fast comparison
+	serverIPKey     [16]byte // cached serverIP as [16]byte for fast comparison
 	subnetMask     net.IPMask
 	cachedSubnet   *net.IPNet // cached subnet for broadcast detection
-	peers          map[[4]byte]*Peer
+	peers          map[[16]byte]*Peer
 	mu             sync.RWMutex
 	username       string
 	roomID         string
@@ -107,7 +108,7 @@ func New(cfg *Config) *Tunnel {
 		username: cfg.PlayerName,
 		roomID:   cfg.RoomID,
 		roomPass: cfg.RoomPassword,
-		peers:    make(map[[4]byte]*Peer),
+		peers:    make(map[[16]byte]*Peer),
 		sendCh:   make(chan sendJob, sendChanSize),
 		ctrlCh:   make(chan sendJob, ctrlChanSize),
 	}
@@ -130,7 +131,7 @@ func (t *Tunnel) Connect(ctx context.Context, serverAddr string, mtu int, newTUN
 		t.newTUNFunc = newTUN
 	}
 
-	sAddr, err := net.ResolveUDPAddr("udp4", serverAddr)
+	sAddr, err := net.ResolveUDPAddr("udp", serverAddr)
 	if err != nil {
 		return fmt.Errorf("%s", i18n.Format(i18n.T().ErrInvalidServer, err))
 	}
@@ -139,7 +140,7 @@ func (t *Tunnel) Connect(ctx context.Context, serverAddr string, mtu int, newTUN
 	// Reset disconnectOnce so Disconnect() can send leave packet on each attempt.
 	t.disconnectOnce = sync.Once{}
 
-	conn, err := net.ListenUDP("udp4", &net.UDPAddr{})
+	conn, err := net.ListenUDP("udp", &net.UDPAddr{})
 	if err != nil {
 		return fmt.Errorf("%s", i18n.Format(i18n.T().ErrBindUDP, err))
 	}

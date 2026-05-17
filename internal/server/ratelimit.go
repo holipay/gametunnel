@@ -14,14 +14,15 @@ const (
 )
 
 // rateKey is a fixed-size key for rate limiting, avoiding string allocation per packet.
+// Uses 16-byte IP to support both IPv4 (as v4-in-v6 mapped) and IPv6 addresses.
 type rateKey struct {
-	IP   [4]byte
+	IP   [16]byte
 	Port uint16
 }
 
 func addrToRateKey(addr *net.UDPAddr) rateKey {
 	var k rateKey
-	copy(k.IP[:], addr.IP.To4())
+	copy(k.IP[:], addr.IP.To16())
 	k.Port = uint16(addr.Port)
 	return k
 }

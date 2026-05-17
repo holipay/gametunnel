@@ -39,7 +39,7 @@ func (s *Server) handleDisconnect(from *net.UDPAddr) {
 		s.pendingAuth--
 	} else {
 		s.markIPFree(c.VirtualIP)
-		delete(s.clients, ip4Key(c.VirtualIP))
+		delete(s.clients, ipKey(c.VirtualIP))
 		// Decrement per-IP connection count
 		ip := c.PublicAddr.IP.String()
 		s.ipConnMu.Lock()

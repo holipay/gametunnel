@@ -8,7 +8,7 @@ import (
 func newTestServer(subnetStr string, serverIP net.IP) *Server {
 	_, subnet, _ := net.ParseCIDR(subnetStr)
 	s := &Server{
-		clients:    make(map[[4]byte]*Client),
+		clients:    make(map[[16]byte]*Client),
 		addrMap:    make(map[rateKey]*Client),
 		subnet:     subnet,
 		serverIP:   serverIP,
@@ -33,7 +33,7 @@ func TestNextAvailableIP(t *testing.T) {
 	// Allocate .2, next should be .3
 	ip2 := net.IPv4(10, 10, 0, 2)
 	s.markIPUsed(ip2)
-	s.clients[ip4Key(ip2)] = &Client{VirtualIP: ip2}
+	s.clients[ipKey(ip2)] = &Client{VirtualIP: ip2}
 	ip = s.nextAvailableIP()
 	if !ip.Equal(net.IPv4(10, 10, 0, 3)) {
 		t.Errorf("second IP: got %v, want 10.10.0.3", ip)
@@ -47,7 +47,7 @@ func TestNextAvailableIPSkipsServer(t *testing.T) {
 	for i := 2; i <= 254; i++ {
 		ip := net.IPv4(10, 10, 0, byte(i))
 		s.markIPUsed(ip)
-		s.clients[ip4Key(ip)] = &Client{VirtualIP: ip}
+		s.clients[ipKey(ip)] = &Client{VirtualIP: ip}
 	}
 
 	ip := s.nextAvailableIP()
@@ -63,7 +63,7 @@ func TestNextAvailableIPExhausted(t *testing.T) {
 	for i := 2; i <= 254; i++ {
 		ip := net.IPv4(10, 10, 0, byte(i))
 		s.markIPUsed(ip)
-		s.clients[ip4Key(ip)] = &Client{VirtualIP: ip}
+		s.clients[ipKey(ip)] = &Client{VirtualIP: ip}
 	}
 
 	ip := s.nextAvailableIP()
@@ -80,8 +80,8 @@ func TestNextAvailableIPSkipsGaps(t *testing.T) {
 	ip4 := net.IPv4(10, 10, 0, 4)
 	s.markIPUsed(ip2)
 	s.markIPUsed(ip4)
-	s.clients[ip4Key(ip2)] = &Client{VirtualIP: ip2}
-	s.clients[ip4Key(ip4)] = &Client{VirtualIP: ip4}
+	s.clients[ipKey(ip2)] = &Client{VirtualIP: ip2}
+	s.clients[ipKey(ip4)] = &Client{VirtualIP: ip4}
 
 	ip := s.nextAvailableIP()
 	if !ip.Equal(net.IPv4(10, 10, 0, 3)) {
@@ -92,8 +92,10 @@ func TestNextAvailableIPSkipsGaps(t *testing.T) {
 func TestAddrToRateKey(t *testing.T) {
 	addr := &net.UDPAddr{IP: net.IPv4(192, 168, 1, 100), Port: 12345}
 	k := addrToRateKey(addr)
-	if k.IP != [4]byte{192, 168, 1, 100} {
-		t.Errorf("IP: got %v", k.IP)
+	// IPv4 is mapped to v4-in-v6 format in 16-byte key
+	expected := [16]byte{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff, 192, 168, 1, 100}
+	if k.IP != expected {
+		t.Errorf("IP: got %v, want %v", k.IP, expected)
 	}
 	if k.Port != 12345 {
 		t.Errorf("Port: got %d, want 12345", k.Port)

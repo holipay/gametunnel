@@ -97,10 +97,12 @@ func (c *Client) PingStats() (lossRate float64, jitter time.Duration) {
 	return
 }
 
-// ip4Key converts a 4-byte IPv4 address to a [4]byte map key.
-func ip4Key(ip net.IP) [4]byte {
-	ip4 := ip.To4()
-	return [4]byte{ip4[0], ip4[1], ip4[2], ip4[3]}
+// ipKey converts an IP address to a [16]byte map key.
+// IPv4 addresses are automatically mapped to v4-in-v6 format (::ffff:x.x.x.x).
+func ipKey(ip net.IP) [16]byte {
+	var k [16]byte
+	copy(k[:], ip.To16())
+	return k
 }
 
 // ── Server ─────────────────────────────────────────────────────
@@ -108,7 +110,7 @@ func ip4Key(ip net.IP) [4]byte {
 // Server is the GameTunnel relay server.
 type Server struct {
 	conn       *net.UDPConn
-	clients    map[[4]byte]*Client // virtualIP [4]byte → Client
+	clients    map[[16]byte]*Client // virtualIP [16]byte → Client
 	addrMap    map[rateKey]*Client // client endpoint → Client (O(1) lookup)
 	mu         sync.RWMutex        // protects clients + addrMap
 	subnet     *net.IPNet
@@ -180,12 +182,12 @@ type Config struct {
 
 // New creates a new Server. Call Run() to start it.
 func New(cfg Config) (*Server, error) {
-	udpAddr, err := net.ResolveUDPAddr("udp4", cfg.Addr)
+	udpAddr, err := net.ResolveUDPAddr("udp", cfg.Addr)
 	if err != nil {
 		return nil, err
 	}
 
-	conn, err := net.ListenUDP("udp4", udpAddr)
+	conn, err := net.ListenUDP("udp", udpAddr)
 	if err != nil {
 		return nil, err
 	}
@@ -221,7 +223,7 @@ func New(cfg Config) (*Server, error) {
 
 	s := &Server{
 		conn:        conn,
-		clients:     make(map[[4]byte]*Client),
+		clients:     make(map[[16]byte]*Client),
 		addrMap:     make(map[rateKey]*Client),
 		subnet:      cfg.Subnet,
 		maxPlayers:  cfg.MaxPlayers,
@@ -394,7 +396,7 @@ func (s *Server) keepaliveLoop(ctx context.Context) {
 		// needed for deletion, so Phase 2 only does verify+delete (no re-scan).
 		s.mu.RLock()
 		type staleClient struct {
-			key [4]byte
+			key [16]byte
 			c   *Client
 		}
 		type staleAuth struct {

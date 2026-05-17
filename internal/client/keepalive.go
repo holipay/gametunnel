@@ -47,7 +47,7 @@ const p2pKeepaliveInterval = 15 * time.Second
 // It runs until all phases complete or the context is cancelled.
 func (t *Tunnel) startHolePunch(ctx context.Context, peerIP net.IP) {
 	t.mu.RLock()
-	peer, ok := t.peers[ip4Key(peerIP)]
+	peer, ok := t.peers[ipKey(peerIP)]
 	t.mu.RUnlock()
 	if !ok || peer.PublicAddr == nil {
 		return
@@ -93,7 +93,7 @@ func (t *Tunnel) handleHolePunchReceived(payload []byte) {
 	peerIP := net.IP(append([]byte(nil), payload[:4]...))
 
 	t.mu.RLock()
-	peer, ok := t.peers[ip4Key(peerIP)]
+	peer, ok := t.peers[ipKey(peerIP)]
 	t.mu.RUnlock()
 	if !ok || peer.PublicAddr == nil {
 		return
@@ -123,7 +123,7 @@ func (t *Tunnel) handleHolePunchReceived(payload []byte) {
 // hasDirectPeerTraffic checks if we've received direct P2P traffic from a peer.
 func (t *Tunnel) hasDirectPeerTraffic(peerIP net.IP) bool {
 	t.mu.RLock()
-	peer, ok := t.peers[ip4Key(peerIP)]
+	peer, ok := t.peers[ipKey(peerIP)]
 	t.mu.RUnlock()
 	if !ok {
 		return false

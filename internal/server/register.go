@@ -127,7 +127,7 @@ func (s *Server) registerClientLocked(reg *protocol.RegisterPayload, from *net.U
 		LastSeen:   time.Now(),
 		auth:       authNone,
 	}
-	s.clients[ip4Key(vip)] = c
+	s.clients[ipKey(vip)] = c
 	s.addrMap[addrToRateKey(from)] = c
 
 	// Track per-IP connection count

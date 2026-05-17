@@ -137,7 +137,7 @@ func UnmarshalPeerInfo(data []byte) (*PeerInfoPayload, error) {
 		off += addrLen
 		var pubAddr *net.UDPAddr
 		if addrStr != "" {
-			a, err := net.ResolveUDPAddr("udp4", addrStr)
+			a, err := net.ResolveUDPAddr("udp", addrStr)
 			if err == nil {
 				pubAddr = a
 			}
