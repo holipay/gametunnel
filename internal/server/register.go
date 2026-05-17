@@ -201,7 +201,9 @@ func (s *Server) handleAuthResponse(payload []byte, from *net.UDPAddr) {
 	// Check challenge expiry (15 seconds)
 	if time.Since(c.challengeAt) > 15*time.Second {
 		delete(s.addrMap, fromKey)
-		s.pendingAuth--
+		if s.pendingAuth > 0 {
+			s.pendingAuth--
+		}
 		s.mu.Unlock()
 		s.sendKick(from, t.KickAuthTimeout)
 		return
@@ -211,7 +213,9 @@ func (s *Server) handleAuthResponse(payload []byte, from *net.UDPAddr) {
 	authKey := s.getAuthKey(c.authRoomID)
 	if authKey == nil {
 		delete(s.addrMap, fromKey)
-		s.pendingAuth--
+		if s.pendingAuth > 0 {
+			s.pendingAuth--
+		}
 		s.mu.Unlock()
 		s.sendKick(from, t.KickInternalError)
 		return
@@ -219,7 +223,9 @@ func (s *Server) handleAuthResponse(payload []byte, from *net.UDPAddr) {
 
 	if !auth.VerifyHMAC(authKey, resp.HMAC, c.challenge, resp.RoomID, resp.Username, from) {
 		delete(s.addrMap, fromKey)
-		s.pendingAuth--
+		if s.pendingAuth > 0 {
+			s.pendingAuth--
+		}
 		s.mu.Unlock()
 		log.Printf(t.LogAuthFail, resp.Username, from)
 		s.sendKick(from, t.KickWrongPassword)
@@ -230,7 +236,9 @@ func (s *Server) handleAuthResponse(payload []byte, from *net.UDPAddr) {
 	log.Printf(t.LogAuthPass, resp.Username, from)
 
 	delete(s.addrMap, fromKey)
-	s.pendingAuth--
+	if s.pendingAuth > 0 {
+		s.pendingAuth--
+	}
 
 	if len(s.clients) >= s.maxPlayers {
 		s.mu.Unlock()

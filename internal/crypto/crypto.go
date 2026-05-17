@@ -17,7 +17,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
-	"sync"
+	"sync/atomic"
 
 	"golang.org/x/crypto/chacha20poly1305"
 )
@@ -49,8 +49,7 @@ var (
 // Cipher performs ChaCha20-Poly1305 encryption/decryption.
 type Cipher struct {
 	aead     cipher.AEAD
-	mu       sync.Mutex
-	counter  uint64
+	counter  atomic.Uint64
 	dirTag   []byte
 }
 
@@ -75,10 +74,7 @@ func NewCipher(key []byte, dirTag []byte) (*Cipher, error) {
 
 // makeNonce builds a 12-byte nonce: 8-byte counter + 4-byte direction tag.
 func (c *Cipher) makeNonce() []byte {
-	c.mu.Lock()
-	c.counter++
-	ctr := c.counter
-	c.mu.Unlock()
+	ctr := c.counter.Add(1)
 
 	nonce := make([]byte, NonceSize)
 	binary.LittleEndian.PutUint64(nonce[0:8], ctr)

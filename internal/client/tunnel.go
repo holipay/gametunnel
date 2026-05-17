@@ -307,14 +307,17 @@ func (t *Tunnel) sendLoop(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
-			// Drain remaining sends before exiting
+			// Drain remaining sends with a short timeout to ensure
+			// disconnect packets and final control messages are sent.
+			drainTimer := time.NewTimer(200 * time.Millisecond)
 			for {
 				select {
 				case job := <-t.ctrlCh:
 					t.writeUDP(job.data, job.addr)
 				case job := <-t.sendCh:
 					t.writeUDP(job.data, job.addr)
-				default:
+				case <-drainTimer.C:
+					drainTimer.Stop()
 					return
 				}
 			}
@@ -365,9 +368,11 @@ func (t *Tunnel) sendUDP(data []byte, addr *net.UDPAddr) {
 // Control packets use a separate high-priority channel with a short blocking window
 // to avoid dropping critical keepalive packets under burst load.
 func (t *Tunnel) sendCtrl(data []byte, addr *net.UDPAddr) {
+	timer := time.NewTimer(50 * time.Millisecond)
+	defer timer.Stop()
 	select {
 	case t.ctrlCh <- sendJob{data: data, addr: addr}:
-	case <-time.After(50 * time.Millisecond):
+	case <-timer.C:
 		// Channel full after 50ms — drop to avoid blocking caller indefinitely
 		n := t.sendErrors.Add(1)
 		if n == 1 || n%100 == 0 {

@@ -2,6 +2,7 @@ package client
 
 import (
 	"context"
+	"encoding/binary"
 	"log"
 	"net"
 	"time"
@@ -289,6 +290,11 @@ func (t *Tunnel) receiveFromTUN(ctx context.Context) {
 		}
 		ihl := int(buf[0]&0x0F) * 4
 		if ihl < 20 || n < ihl {
+			continue
+		}
+		// Validate IP total length matches actual read length
+		totalLen := int(binary.BigEndian.Uint16(buf[2:4]))
+		if totalLen < ihl || totalLen > n {
 			continue
 		}
 
