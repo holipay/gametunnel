@@ -20,6 +20,22 @@ type sendJob struct {
 	addr *net.UDPAddr
 }
 
+// tunJob is a TUN packet dispatched from the reader to worker goroutines.
+// The packet data is a copy (not a slice of the shared TUN read buffer).
+type tunJob struct {
+	data  []byte
+	srcIP net.IP
+	dstIP net.IP
+}
+
+// tunChanSize is the buffer size for the TUN worker channel.
+// Sized to absorb bursts from the TUN device without blocking the reader.
+const tunChanSize = 512
+
+// tunWorkers is the number of goroutines processing TUN packets.
+// 2 workers allow encryption + marshal to overlap with TUN reads.
+const tunWorkers = 2
+
 // ctrlTimerPool reuses timers for sendCtrl to avoid per-call allocation.
 // Timers are Reset before use and drained after use to ensure clean state.
 var ctrlTimerPool = sync.Pool{
@@ -72,6 +88,7 @@ type Tunnel struct {
 	conn           *net.UDPConn
 	sendCh         chan sendJob // dedicated channel for UDP sends (replaces connMu)
 	ctrlCh         chan sendJob // high-priority channel for control packets (never dropped)
+	tunCh          chan tunJob  // TUN packet channel for worker pool
 	serverAddr     *net.UDPAddr
 	tunDev         TunDevice
 	virtualIP      net.IP
@@ -117,6 +134,7 @@ func New(cfg *Config) *Tunnel {
 		peers:    make(map[[16]byte]*Peer),
 		sendCh:   make(chan sendJob, sendChanSize),
 		ctrlCh:   make(chan sendJob, ctrlChanSize),
+		tunCh:    make(chan tunJob, tunChanSize),
 	}
 }
 
@@ -208,6 +226,12 @@ func (t *Tunnel) Connect(ctx context.Context, serverAddr string, mtu int, newTUN
 		t.receiveFromTUN(runCtx)
 		onGoroutineExit("receiveFromTUN")
 	}()
+	for i := 0; i < tunWorkers; i++ {
+		go func() {
+			t.tunWorker(runCtx)
+			onGoroutineExit("tunWorker")
+		}()
+	}
 	go func() {
 		t.keepaliveLoop(runCtx)
 		onGoroutineExit("keepaliveLoop")
@@ -392,4 +416,17 @@ func (t *Tunnel) sendCtrl(data []byte, addr *net.UDPAddr) {
 		}
 	}
 	ctrlTimerPool.Put(timer)
+}
+
+// tunWorker processes TUN packets from the tunCh channel.
+// Multiple workers run in parallel to overlap encryption + marshal with TUN reads.
+func (t *Tunnel) tunWorker(ctx context.Context) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case job := <-t.tunCh:
+			t.routePacket(job.data, job.srcIP, job.dstIP)
+		}
+	}
 }
