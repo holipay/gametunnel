@@ -171,6 +171,14 @@ type Server struct {
 
 	// Diagnostics
 	sendErrors atomic.Int64 // send failure counter
+
+	// Operational metrics (lifetime counters, never reset)
+	totalRegistrations atomic.Uint64 // successful joins
+	authFailures       atomic.Uint64 // wrong password attempts
+	peakPlayers        atomic.Uint32 // high watermark of concurrent players
+	totalPacketsRelay  atomic.Uint64 // packets relayed (unicast + broadcast)
+	totalPacketsDropped atomic.Uint64 // packets dropped (rate limit, full channel, invalid)
+	totalKicks         atomic.Uint64 // clients kicked (rate limit, room full, auth fail, etc.)
 }
 
 // pktJob represents a packet to be processed by the worker pool.
@@ -294,6 +302,7 @@ func (s *Server) Run(ctx context.Context) {
 		}
 
 		if !s.checkRate(remoteAddr) {
+			s.totalPacketsDropped.Add(1)
 			continue
 		}
 
@@ -305,6 +314,7 @@ func (s *Server) Run(ctx context.Context) {
 		default:
 			// channel full — drop (backpressure), return buffer to pool
 			pktPool.Put(pkt)
+			s.totalPacketsDropped.Add(1)
 		}
 	}
 }
@@ -495,6 +505,7 @@ func (s *Server) sendCheckedRaw(data []byte, to *net.UDPAddr) {
 func (s *Server) sendKick(to *net.UDPAddr, reason string) {
 	kick := &protocol.KickPayload{Reason: reason}
 	s.sendChecked(protocol.TypeKick, kick.Marshal(), to)
+	s.totalKicks.Add(1)
 }
 
 func (s *Server) sendAssignIP(vip net.IP, to *net.UDPAddr) {

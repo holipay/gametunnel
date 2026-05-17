@@ -61,6 +61,7 @@ func (s *Server) handleRelay(payload []byte, from *net.UDPAddr) {
 	for _, addr := range targets {
 		s.sendCheckedRaw(encoded, addr)
 	}
+	s.totalPacketsRelay.Add(1)
 }
 
 // handleHolePunch forwards a NAT hole punch packet to the target peer.

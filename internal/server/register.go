@@ -138,6 +138,12 @@ func (s *Server) registerClientLocked(reg *protocol.RegisterPayload, from *net.U
 
 	log.Printf(t.LogPlayerJoin, reg.Username, from, vip, len(s.clients))
 
+	// Update operational metrics
+	s.totalRegistrations.Add(1)
+	if cur := uint32(len(s.clients)); cur > s.peakPlayers.Load() {
+		s.peakPlayers.Store(cur)
+	}
+
 	selfIP := vip
 	s.mu.Unlock()
 
@@ -228,6 +234,7 @@ func (s *Server) handleAuthResponse(payload []byte, from *net.UDPAddr) {
 		}
 		s.mu.Unlock()
 		log.Printf(t.LogAuthFail, resp.Username, from)
+		s.authFailures.Add(1)
 		s.sendKick(from, t.KickWrongPassword)
 		return
 	}

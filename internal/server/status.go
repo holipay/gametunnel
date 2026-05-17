@@ -24,6 +24,14 @@ type StatusInfo struct {
 	HasAuth     bool             `json:"has_auth"`
 	SendErrors  int64            `json:"send_errors"`
 	Connections []ConnectionInfo `json:"connections,omitempty"`
+
+	// Operational metrics (lifetime counters)
+	TotalRegistrations uint64 `json:"total_registrations"`
+	AuthFailures       uint64 `json:"auth_failures"`
+	PeakPlayers        uint32 `json:"peak_players"`
+	TotalPacketsRelay  uint64 `json:"total_packets_relay"`
+	TotalPacketsDropped uint64 `json:"total_packets_dropped"`
+	TotalKicks         uint64 `json:"total_kicks"`
 }
 
 // ConnectionInfo describes a single connected player.
@@ -171,6 +179,20 @@ const statusHTML = `<!DOCTYPE html>
 <p style="color:#666">{{.T.StatusNoPlayers}}</p>
 {{end}}
 <div class="meta">{{.Subnet}} · {{.ServerIP}} · {{if .HasAuth}}{{.T.StatusAuthHMAC}}{{else}}{{.T.StatusAuthNone}}{{end}}</div>
+<h2 style="color:#00d4ff;font-size:1.1em;margin-top:24px">📊 {{.T.StatusMetrics}}</h2>
+<div>
+  <div class="stat"><div class="num">{{.TotalRegistrations}}</div><div class="label">{{.T.StatusTotalRegs}}</div></div>
+  <div class="stat"><div class="num">{{.PeakPlayers}}</div><div class="label">{{.T.StatusPeakPlayers}}</div></div>
+  <div class="stat"><div class="num">{{.TotalPacketsRelay}}</div><div class="label">{{.T.StatusRelayPkts}}</div></div>
+</div>
+<div>
+  <div class="stat"><div class="num">{{.AuthFailures}}</div><div class="label">{{.T.StatusAuthFails}}</div></div>
+  <div class="stat"><div class="num">{{.TotalKicks}}</div><div class="label">{{.T.StatusTotalKicks}}</div></div>
+  <div class="stat"><div class="num">{{.TotalPacketsDropped}}</div><div class="label">{{.T.StatusDroppedPkts}}</div></div>
+</div>
+<div>
+  <div class="stat"><div class="num">{{.SendErrors}}</div><div class="label">{{.T.StatusSendErrors}}</div></div>
+</div>
 </body></html>`
 
 func (s *Server) buildStatusInfo() StatusInfo {
@@ -226,6 +248,13 @@ func (s *Server) buildStatusInfo() StatusInfo {
 		HasAuth:     s.roomPass != "",
 		SendErrors:  s.sendErrors.Load(),
 		Connections: conns,
+
+		TotalRegistrations:  s.totalRegistrations.Load(),
+		AuthFailures:        s.authFailures.Load(),
+		PeakPlayers:         s.peakPlayers.Load(),
+		TotalPacketsRelay:   s.totalPacketsRelay.Load(),
+		TotalPacketsDropped: s.totalPacketsDropped.Load(),
+		TotalKicks:          s.totalKicks.Load(),
 	}
 }
 
