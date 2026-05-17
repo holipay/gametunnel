@@ -113,11 +113,28 @@ elif [ -f "$SCRIPT_DIR/GameTunnel-Server-openwrt-armv7.tar.gz" ] && echo "$ARCH"
 
 # 优先级4: 从 GitHub 下载
 else
+    # ── 版本检测 ──
     echo "📡 检查最新版本..."
-    LATEST=$(wget -qO- "https://api.github.com/repos/${REPO}/releases/latest" 2>/dev/null | grep '"tag_name"' | head -1 | cut -d'"' -f4)
+
+    LATEST=""
+    API_URL="https://api.github.com/repos/${REPO}/releases/latest"
+    RELEASES_URL="https://github.com/${REPO}/releases"
+
+    # 方式1: GitHub API
+    LATEST=$(wget -qO- --timeout=15 "$API_URL" 2>/dev/null \
+        | grep '"tag_name"' | head -1 | cut -d'"' -f4)
+
+    # 方式2: API 失败时，从 releases 页面 HTML 提取
+    if [ -z "$LATEST" ]; then
+        echo "  API 超时，尝试从 releases 页面获取..."
+        LATEST=$(wget -qO- --timeout=20 "$RELEASES_URL" 2>/dev/null \
+            | grep -o '/releases/tag/[^"]*' | head -1 \
+            | sed 's|.*/tag/||')
+    fi
+
     if [ -z "$LATEST" ]; then
         echo "❌ 无法获取版本信息，请检查网络或手动下载:"
-        echo "   https://github.com/${REPO}/releases"
+        echo "   $RELEASES_URL"
         exit 1
     fi
     echo "  版本: $LATEST"
@@ -128,23 +145,39 @@ else
         *)             ARCHIVE_NAME="GameTunnel-Server-openwrt-armv7.tar.gz" ;;
     esac
 
+    # ── 下载（带重试）──
     DOWNLOAD_URL="https://github.com/${REPO}/releases/download/${LATEST}/${ARCHIVE_NAME}"
-    echo "📥 下载: $DOWNLOAD_URL"
-
     EXTRACT_DIR=$(mktemp -d)
-    if ! wget -qO "$EXTRACT_DIR/pkg.tar.gz" "$DOWNLOAD_URL"; then
-        echo "❌ 下载失败"
-        echo "   替代方案: 从 https://github.com/${REPO}/releases 手动下载"
-        rm -rf "$EXTRACT_DIR"
-        exit 1
-    fi
+    MAX_RETRY=3
+    DOWNLOADED=false
 
-    if ! tar xzf "$EXTRACT_DIR/pkg.tar.gz" -C "$EXTRACT_DIR" 2>/dev/null; then
-        echo "❌ 解压失败"
+    for attempt in $(seq 1 $MAX_RETRY); do
+        echo "📥 下载... (第 ${attempt}/${MAX_RETRY} 次)"
+        # --tries: wget 内置重试  --timeout: 连接/读取超时
+        if wget --tries=2 --timeout=30 -qO "$EXTRACT_DIR/pkg.tar.gz" "$DOWNLOAD_URL" 2>/dev/null; then
+            if tar xzf "$EXTRACT_DIR/pkg.tar.gz" -C "$EXTRACT_DIR" 2>/dev/null; then
+                DOWNLOADED=true
+                break
+            fi
+        fi
+
+        if [ "$attempt" -lt "$MAX_RETRY" ]; then
+            echo "  ⚠️ 下载未成功，${attempt} 秒后重试..."
+            sleep "$attempt"
+        fi
+    done
+
+    rm -f "$EXTRACT_DIR/pkg.tar.gz"
+
+    if [ "$DOWNLOADED" = false ]; then
+        echo "❌ 下载失败"
+        echo ""
+        echo "  替代方案（任选其一）："
+        echo "  1. 在能访问 GitHub 的机器下载后 scp 传到路由器"
+        echo "  2. 手动下载: wget ${DOWNLOAD_URL}"
         rm -rf "$EXTRACT_DIR"
         exit 1
     fi
-    rm -f "$EXTRACT_DIR/pkg.tar.gz"
 
     TMPFILE="$EXTRACT_DIR/gtunnel-server"
     if [ ! -f "$TMPFILE" ] || ! file "$TMPFILE" 2>/dev/null | grep -q "ELF"; then
