@@ -106,6 +106,19 @@ func (t *Tunnel) handleAssignIP(payload []byte) error {
 	if err != nil {
 		return fmt.Errorf("%s", i18n.Format(i18n.T().ErrParseIPFailed, err))
 	}
+
+	// Validate that assigned IPs are IPv4 and within the assigned subnet.
+	subnet := &net.IPNet{
+		IP:   assign.VirtualIP.Mask(net.IPMask(assign.SubnetMask)),
+		Mask: net.IPMask(assign.SubnetMask),
+	}
+	if assign.VirtualIP.To4() == nil || !subnet.Contains(assign.VirtualIP) {
+		return fmt.Errorf("assigned IP %s is not in subnet %s", assign.VirtualIP, subnet)
+	}
+	if assign.ServerIP.To4() == nil || !subnet.Contains(assign.ServerIP) {
+		return fmt.Errorf("server IP %s is not in subnet %s", assign.ServerIP, subnet)
+	}
+
 	t.virtualIP = assign.VirtualIP
 	t.serverIP = assign.ServerIP
 	t.subnetMask = net.IPMask(assign.SubnetMask)

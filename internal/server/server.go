@@ -73,8 +73,14 @@ func (c *Client) PingStats() (lossRate float64, jitter time.Duration) {
 	var jitterSum time.Duration
 	var jitterCount int
 
+	// Read from the ring buffer in chronological order: oldest entry first.
+	// When pingIdx >= pingHistorySize, the oldest entry is at pingIdx % pingHistorySize.
+	start := 0
+	if total > pingHistorySize {
+		start = total % pingHistorySize
+	}
 	for i := 0; i < n; i++ {
-		rtt := c.pingHistory[i]
+		rtt := c.pingHistory[(start+i)%pingHistorySize]
 		if rtt == 0 {
 			continue // missed
 		}

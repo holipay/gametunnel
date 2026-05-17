@@ -36,7 +36,9 @@ func (s *Server) handleDisconnect(from *net.UDPAddr) {
 	}
 	log.Printf(i18n.T().LogPlayerLeave, c.Username, c.VirtualIP)
 	if c.auth == authChallengeSent {
-		s.pendingAuth--
+		if s.pendingAuth > 0 {
+			s.pendingAuth--
+		}
 	} else {
 		s.markIPFree(c.VirtualIP)
 		delete(s.clients, ipKey(c.VirtualIP))
@@ -133,9 +135,9 @@ func (s *Server) getEncodedPeerInfo() []byte {
 		s.peerInfoMu.Unlock()
 		return encoded
 	}
-	s.peerInfoMu.Unlock()
 
-	// Cache miss — rebuild
+	// Cache miss — rebuild under the same lock to prevent redundant rebuilds
+	// by concurrent goroutines (TOCTOU fix).
 	s.mu.RLock()
 	peers := &protocol.PeerInfoPayload{}
 	for _, c := range s.clients {
@@ -148,8 +150,6 @@ func (s *Server) getEncodedPeerInfo() []byte {
 	s.mu.RUnlock()
 
 	encoded := protocol.EncodeChecked(protocol.TypePeerInfo, peers.Marshal())
-
-	s.peerInfoMu.Lock()
 	s.peerInfoEncoded = encoded
 	s.peerInfoCachedAt = now
 	s.peerInfoMu.Unlock()
