@@ -166,6 +166,9 @@ fi
 if [ -n "$STATUS_ADDR" ]; then
     EXTRA_ARGS="${EXTRA_ARGS} -status-addr ${STATUS_ADDR}"
 fi
+if [ -n "$STATUS_TOKEN" ]; then
+    EXTRA_ARGS="${EXTRA_ARGS} -status-token ${STATUS_TOKEN}"
+fi
 
 cat > "$SERVICE_FILE" <<EOF
 [Unit]
