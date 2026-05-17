@@ -112,8 +112,9 @@ type Tunnel struct {
 	cachedPunchPacket []byte
 
 	// End-to-end encryption (nil when no password)
-	encCipher *crypto.Cipher // for sending (client→server/client)
-	decCipher *crypto.Cipher // for receiving (server/client→client)
+	encCipher *crypto.Cipher // client→server (relay send, DirClientToServer)
+	decCipher *crypto.Cipher // server→client (relay receive, DirServerToClient)
+	p2pCipher *crypto.Cipher // client↔client (P2P direct, DirClientToClient)
 
 	// TUN reuse state — persists across Connect() calls
 	lastAssignedIP net.IP                             // virtual IP from last registration
