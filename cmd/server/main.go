@@ -21,8 +21,12 @@ import (
 	"github.com/holipay/gametunnel/internal/singleinstance"
 )
 
-// Version is set at build time via -ldflags.
-var Version = "dev"
+// Build info, set at build time via -ldflags.
+var (
+	Version   = "dev"
+	Commit    = "unknown"
+	BuildTime = "unknown"
+)
 
 func main() {
 	addr := flag.String("addr", ":4700", "listen address (UDP)")
@@ -37,7 +41,7 @@ func main() {
 	flag.Parse()
 
 	if *versionFlag {
-		fmt.Printf("gtunnel-server %s\n", Version)
+		fmt.Printf("gtunnel-server %s (commit: %s, built: %s)\n", Version, Commit, BuildTime)
 		os.Exit(0)
 	}
 
@@ -99,6 +103,8 @@ func main() {
 	log.Printf("▎  %-7s %-31d ▎", t.ServerMaxPlayers+":", *maxPlayers)
 	log.Printf("▎  %-7s %-31s ▎", t.ServerAuth+":", authStatus)
 	log.Printf("▎  %-7s %-31s ▎", t.ServerVersion+":", Version)
+	log.Printf("▎  %-7s %-31s ▎", "Commit:", Commit)
+	log.Printf("▎  %-7s %-31s ▎", "Built:", BuildTime)
 	if *statusAddr != "" {
 		log.Printf("▎  %-7s %-31s ▎", t.ServerStatusPage+":", fmt.Sprintf("http://%s", *statusAddr))
 	}
