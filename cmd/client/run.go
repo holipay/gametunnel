@@ -10,6 +10,13 @@ import (
 	"github.com/holipay/gametunnel/internal/i18n"
 )
 
+// Build info, set at build time via -ldflags.
+var (
+	Version   = "dev"
+	Commit    = "unknown"
+	BuildTime = "unknown"
+)
+
 // run is the cross-platform entry point. It sets up logging, firewall,
 // and starts the system tray.
 func run(cfg *client.Config, tunFactory func(client.TunConfig) (client.TunDevice, error)) {
@@ -51,7 +58,7 @@ func setupLog() *os.File {
 		return os.Stderr
 	}
 	log.SetOutput(io.MultiWriter(f, os.Stderr))
-	log.Printf("%s", i18n.T().RunStartup)
+	log.Printf("GameTunnel Client %s (commit: %s, built: %s)", Version, Commit, BuildTime)
 	return f
 }
 

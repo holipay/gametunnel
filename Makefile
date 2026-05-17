@@ -7,9 +7,17 @@
 
 BINARY_DIR := bin
 SERVER := $(BINARY_DIR)/gtunnel-server-linux-amd64
-VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
-LDFLAGS := -ldflags "-s -w -X main.Version=$(VERSION)"
-CLIENT_LDFLAGS := -ldflags "-s -w -H windowsgui -X main.Version=$(VERSION)"
+VERSION    := $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
+COMMIT     := $(shell git rev-parse --short HEAD 2>/dev/null || echo "unknown")
+BUILD_TIME := $(shell date -u '+%Y-%m-%dT%H:%M:%SZ')
+LDFLAGS    := -ldflags "-s -w \
+	-X main.Version=$(VERSION) \
+	-X main.Commit=$(COMMIT) \
+	-X main.BuildTime=$(BUILD_TIME)"
+CLIENT_LDFLAGS := -ldflags "-s -w -H windowsgui \
+	-X main.Version=$(VERSION) \
+	-X main.Commit=$(COMMIT) \
+	-X main.BuildTime=$(BUILD_TIME)"
 
 all: server client server-openwrt
 
