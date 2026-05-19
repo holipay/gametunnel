@@ -70,12 +70,21 @@ func (t *Tunnel) receiveFromServer(ctx context.Context) {
 		// Distinguish server-relayed vs direct P2P by source address.
 		// Direct peer packets arrive from the peer's public address;
 		// server-relayed packets arrive from the server's address.
-		if from != nil && t.serverAddr != nil && !from.IP.Equal(t.serverAddr.IP) {
-			// Direct P2P packet from a peer's public address
-			t.handleDirectData(from, msg)
-		} else {
+		//
+		// When the server listens on a wildcard address (0.0.0.0 or [::]),
+		// from.IP won't match serverAddr.IP. Fall back to port matching
+		// for loopback (covers localhost testing) and reject non-loopback
+		// to avoid misclassifying peer packets as server traffic.
+		fromServer := from != nil && t.serverAddr != nil && from.IP.Equal(t.serverAddr.IP)
+		if !fromServer && t.serverAddr != nil && t.serverAddr.IP.IsUnspecified() {
+			fromServer = from.Port == t.serverAddr.Port && isLoopback(from.IP)
+		}
+		if fromServer {
 			// Server-relayed packet
 			t.handleServerData(ctx, msg)
+		} else if from != nil && t.serverAddr != nil {
+			// Direct P2P packet from a peer's public address
+			t.handleDirectData(from, msg)
 		}
 	}
 }

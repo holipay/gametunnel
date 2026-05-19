@@ -388,3 +388,74 @@ func TestMessageTypeConstants(t *testing.T) {
 		seen[tt.typ] = tt.name
 	}
 }
+
+// ── IPv6 Multicast Detection ──────────────────────────────────
+
+func TestIsIPv6Multicast(t *testing.T) {
+	tests := []struct {
+		name string
+		ip   net.IP
+		want bool
+	}{
+		{"IPv6 all-nodes ff02::1", net.ParseIP("ff02::1"), true},
+		{"IPv6 mDNS ff02::fb", net.ParseIP("ff02::fb"), true},
+		{"IPv6 solicited-node ff02::1:ff00:1", net.ParseIP("ff02::1:ff00:1"), true},
+		{"IPv6 global unicast", net.ParseIP("2408:abcd::1"), false},
+		{"IPv6 loopback", net.IPv6loopback, false},
+		{"IPv4 multicast (not IPv6)", net.IPv4(224, 0, 0, 251), false},
+		{"IPv4 broadcast", net.IPv4bcast, false},
+		{"nil", nil, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := IsIPv6Multicast(tt.ip); got != tt.want {
+				t.Errorf("IsIPv6Multicast(%s) = %v, want %v", tt.ip, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestIsRelayTarget_IPv6Multicast(t *testing.T) {
+	_, subnet, _ := net.ParseCIDR("10.10.0.0/24")
+
+	// IPv6 multicast should be a relay target
+	if !IsRelayTarget(net.ParseIP("ff02::1"), subnet) {
+		t.Error("ff02::1 should be a relay target")
+	}
+
+	// IPv6 unicast should NOT be a relay target
+	if IsRelayTarget(net.ParseIP("2408:abcd::1"), subnet) {
+		t.Error("2408:abcd::1 should not be a relay target")
+	}
+}
+
+func TestPeerInfoWithIPv6PublicAddr(t *testing.T) {
+	// Simulates the IPv6 transport scenario: virtual IP is IPv4,
+	// but the peer's public address (from the server) is IPv6.
+	p := &PeerInfoPayload{
+		Peers: []PeerInfoEntry{
+			{
+				VirtualIP:  net.IPv4(10, 10, 0, 2).To4(),
+				PublicAddr: &net.UDPAddr{IP: net.ParseIP("2408:abcd::1"), Port: 4700},
+				Username:   "IPv6Player",
+			},
+		},
+	}
+	data := p.Marshal()
+	p2, err := UnmarshalPeerInfo(data)
+	if err != nil {
+		t.Fatalf("UnmarshalPeerInfo failed: %v", err)
+	}
+	if len(p2.Peers) != 1 {
+		t.Fatalf("got %d peers, want 1", len(p2.Peers))
+	}
+	if !p2.Peers[0].VirtualIP.Equal(net.IPv4(10, 10, 0, 2)) {
+		t.Errorf("VirtualIP mismatch")
+	}
+	if p2.Peers[0].PublicAddr.IP.String() != "2408:abcd::1" {
+		t.Errorf("PublicAddr IP: got %s, want 2408:abcd::1", p2.Peers[0].PublicAddr.IP)
+	}
+	if p2.Peers[0].PublicAddr.Port != 4700 {
+		t.Errorf("PublicAddr Port: got %d, want 4700", p2.Peers[0].PublicAddr.Port)
+	}
+}

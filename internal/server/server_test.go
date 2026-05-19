@@ -141,3 +141,43 @@ func TestCheckRegRate(t *testing.T) {
 		t.Fatal("should be rejected after reg rate limit")
 	}
 }
+
+// ── IPv6 Tests ────────────────────────────────────────────────
+
+func TestIpKey_IPv6(t *testing.T) {
+	ip := net.ParseIP("2408:abcd::1")
+	key := ipKey(ip)
+	expected := [16]byte{0x24, 0x08, 0xab, 0xcd, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1}
+	if key != expected {
+		t.Errorf("IPv6 ipKey: got %v, want %v", key, expected)
+	}
+}
+
+func TestIpKey_IPv4v6Consistency(t *testing.T) {
+	ip4 := net.IPv4(10, 0, 0, 1).To4()
+	ip16 := net.IP{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff, 10, 0, 0, 1}
+	if ipKey(ip4) != ipKey(ip16) {
+		t.Error("IPv4 and v4-in-v6 mapped should produce the same ipKey")
+	}
+}
+
+func TestAddrToRateKey_IPv6(t *testing.T) {
+	ip := net.ParseIP("2408:abcd::1")
+	addr := &net.UDPAddr{IP: ip, Port: 4700}
+	k := addrToRateKey(addr)
+	expected := [16]byte{0x24, 0x08, 0xab, 0xcd, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1}
+	if k.IP != expected {
+		t.Errorf("IPv6 rateKey IP: got %v, want %v", k.IP, expected)
+	}
+	if k.Port != 4700 {
+		t.Errorf("Port: got %d, want 4700", k.Port)
+	}
+}
+
+func TestAddrToRateKey_IPv4Mapped(t *testing.T) {
+	addr4 := &net.UDPAddr{IP: net.IPv4(192, 168, 1, 100), Port: 12345}
+	addr46 := &net.UDPAddr{IP: net.IP{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff, 192, 168, 1, 100}, Port: 12345}
+	if addrToRateKey(addr4) != addrToRateKey(addr46) {
+		t.Error("IPv4 and v4-in-v6 should produce the same rateKey")
+	}
+}
