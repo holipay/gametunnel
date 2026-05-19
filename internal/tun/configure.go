@@ -169,7 +169,13 @@ func (d *Device) configure() error {
 // ReconfigureRoutes re-applies routes without recreating the TUN device.
 // Called on reconnect — routes may have been modified by the OS during
 // disconnection (e.g. Windows Network Location Awareness service).
+// Cleans existing routes first to avoid conflicts with stale entries.
 func (d *Device) ReconfigureRoutes() {
+	// Remove stale routes before re-adding. Windows route add fails silently
+	// if the route already exists with a different metric, leaving the old
+	// (potentially wrong) metric in effect.
+	d.CleanupRoutes()
+
 	mask := net.IP(d.subnetMask).String()
 	ip := d.virtualIP.String()
 

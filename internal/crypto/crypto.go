@@ -14,9 +14,11 @@ package crypto
 
 import (
 	"crypto/cipher"
+	"crypto/rand"
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"math/big"
 	"sync/atomic"
 
 	"golang.org/x/crypto/chacha20poly1305"
@@ -55,6 +57,7 @@ type Cipher struct {
 
 // NewCipher creates a new Cipher with the given key and direction.
 // Key must be 32 bytes (from HKDF derivation). dirTag is 4 bytes.
+// Counter is initialized to a random value to prevent nonce reuse across reconnects.
 func NewCipher(key []byte, dirTag []byte) (*Cipher, error) {
 	if len(key) != KeySize {
 		return nil, fmt.Errorf("crypto: key must be %d bytes, got %d", KeySize, len(key))
@@ -66,10 +69,31 @@ func NewCipher(key []byte, dirTag []byte) (*Cipher, error) {
 	if err != nil {
 		return nil, fmt.Errorf("crypto: chacha20poly1305: %w", err)
 	}
-	return &Cipher{
+	c := &Cipher{
 		aead:   aead,
 		dirTag: dirTag,
-	}, nil
+	}
+	c.initCounter()
+	return c, nil
+}
+
+// initCounter sets the counter to a random 48-bit value.
+// This prevents nonce reuse when a client reconnects and creates new ciphers
+// with the same key (derived from the room password). Without randomization,
+// both sides would start at counter=0, producing identical nonces — fatal
+// for ChaCha20-Poly1305. A 48-bit random space gives >281 trillion possible
+// starting values, making collision probability negligible.
+func (c *Cipher) initCounter() {
+	max := new(big.Int).SetInt64(1 << 48)
+	n, err := rand.Int(rand.Reader, max)
+	if err != nil {
+		// Fallback: use lower 48 bits of a random 8-byte read
+		var b [8]byte
+		rand.Read(b[:])
+		c.counter.Store(binary.LittleEndian.Uint64(b[:]) & ((1 << 48) - 1))
+		return
+	}
+	c.counter.Store(n.Uint64())
 }
 
 // makeNonce builds a 12-byte nonce: 8-byte counter + 4-byte direction tag.
