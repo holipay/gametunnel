@@ -775,3 +775,75 @@ func TestHandleDataFromServer_NilTunDev(t *testing.T) {
 	// Should not panic
 	tunnel.handleDataFromServer(dp.Marshal())
 }
+
+// ── 6. IPv6 Tests ─────────────────────────────────────────────
+
+func TestIpKey_NativeIPv6(t *testing.T) {
+	ip := net.ParseIP("2408:abcd::1")
+	key := ipKey(ip)
+	expected := [16]byte{0x24, 0x08, 0xab, 0xcd, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1}
+	if key != expected {
+		t.Errorf("expected %v, got %v", expected, key)
+	}
+}
+
+func TestIpKey_IPv6Loopback(t *testing.T) {
+	ip := net.IPv6loopback
+	key := ipKey(ip)
+	expected := [16]byte{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1}
+	if key != expected {
+		t.Errorf("expected %v, got %v", expected, key)
+	}
+}
+
+func TestIsLoopback(t *testing.T) {
+	tests := []struct {
+		ip   net.IP
+		want bool
+	}{
+		{net.IPv4(127, 0, 0, 1), true},
+		{net.IPv4(127, 255, 255, 255), true},
+		{net.IPv4(10, 0, 0, 1), false},
+		{net.IPv6loopback, true},
+		{net.ParseIP("2408:abcd::1"), false},
+	}
+	for _, tt := range tests {
+		if got := isLoopback(tt.ip); got != tt.want {
+			t.Errorf("isLoopback(%s) = %v, want %v", tt.ip, got, tt.want)
+		}
+	}
+}
+
+func TestHandlePeerInfo_IPv6PublicAddr(t *testing.T) {
+	tunnel, _ := newTestTunnel(t)
+
+	// Peer with IPv4 virtual IP but IPv6 public address (typical IPv6 transport scenario)
+	peerIP := net.IPv4(10, 0, 0, 5).To4()
+	ipv6Addr := &net.UDPAddr{IP: net.ParseIP("2408:abcd::1"), Port: 4700}
+
+	payload := &protocol.PeerInfoPayload{
+		Peers: []protocol.PeerInfoEntry{
+			{
+				VirtualIP:  peerIP,
+				PublicAddr: ipv6Addr,
+				Username:   "ipv6peer",
+			},
+		},
+	}
+
+	tunnel.handlePeerInfo(context.Background(), payload.Marshal())
+
+	tunnel.mu.RLock()
+	peer, ok := tunnel.peers[ipKey(peerIP)]
+	tunnel.mu.RUnlock()
+
+	if !ok {
+		t.Fatal("expected peer to be added")
+	}
+	if peer.PublicAddr.String() != ipv6Addr.String() {
+		t.Errorf("expected PublicAddr %s, got %s", ipv6Addr, peer.PublicAddr)
+	}
+	if peer.Username != "ipv6peer" {
+		t.Errorf("expected username 'ipv6peer', got '%s'", peer.Username)
+	}
+}

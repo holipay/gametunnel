@@ -97,29 +97,54 @@ func (d *Device) configure() error {
 			prefix = "::/0"
 		}
 		gw := d.detectPhysicalGatewayForPrefix(prefix)
+
+		// Fallback: if IPv6 gateway not found, try IPv4 gateway.
+		// On some Windows systems the IPv6 default route may not appear
+		// in Get-NetRoute, but the IPv4 gateway can still route IPv6 traffic
+		// on dual-stack networks.
+		if gw == "" && isv6 {
+			log.Printf("[tun] IPv6 gateway not found, trying IPv4 gateway as fallback")
+			gw = d.detectPhysicalGatewayForPrefix("0.0.0.0/0")
+		}
+
 		if gw != "" {
-			d.physicalGateway = gw
-			serverIP := d.serverPublicIP.String()
-			if isv6 {
-				// netsh interface ipv6 add route <addr>/128 interface=<idx> nexthop=<gw> metric=1
-				ifaceIdx := d.getInterfaceIndex()
-				if err := RunCmd("netsh", "interface", "ipv6", "add", "route",
-					fmt.Sprintf("%s/128", serverIP), fmt.Sprintf("interface=%d", ifaceIdx),
-					fmt.Sprintf("nexthop=%s", gw), "metric=1"); err != nil {
-					log.Printf("[tun] server exclusion route warning: %v", err)
-				} else {
-					log.Printf("[tun] server exclusion (IPv6): %s → %s (physical NIC)", serverIP, gw)
-				}
+			// Validate gateway address family matches the route we're adding.
+			// An IPv4 nexthop on an IPv6 route (or vice versa) will fail
+			// with "The parameter is incorrect" on Windows.
+			gwIP := net.ParseIP(gw)
+			if isv6 && gwIP != nil && gwIP.To4() != nil {
+				log.Printf("[tun] WARNING: detected gateway %s is IPv4 but server is IPv6, skipping exclusion route", gw)
+				log.Printf("[tun] TIP: add a static IPv6 route manually: netsh interface ipv6 add route %s/128 <interface> nexthop=<ipv6-gw>", d.serverPublicIP)
+			} else if !isv6 && gwIP != nil && gwIP.To4() == nil {
+				log.Printf("[tun] WARNING: detected gateway %s is IPv6 but server is IPv4, skipping exclusion route", gw)
 			} else {
-				if err := RunCmd("route", "add",
-					serverIP, "mask", "255.255.255.255", gw, "metric", "1"); err != nil {
-					log.Printf("[tun] server exclusion route warning: %v", err)
+				d.physicalGateway = gw
+				serverIP := d.serverPublicIP.String()
+				if isv6 {
+					// netsh interface ipv6 add route <addr>/128 interface=<idx> nexthop=<gw> metric=1
+					ifaceIdx := d.getInterfaceIndex()
+					if err := RunCmd("netsh", "interface", "ipv6", "add", "route",
+						fmt.Sprintf("%s/128", serverIP), fmt.Sprintf("interface=%d", ifaceIdx),
+						fmt.Sprintf("nexthop=%s", gw), "metric=1"); err != nil {
+						log.Printf("[tun] server exclusion route warning: %v", err)
+					} else {
+						log.Printf("[tun] server exclusion (IPv6): %s → %s (physical NIC)", serverIP, gw)
+					}
 				} else {
-					log.Printf("[tun] server exclusion: %s → %s (physical NIC)", serverIP, gw)
+					if err := RunCmd("route", "add",
+						serverIP, "mask", "255.255.255.255", gw, "metric", "1"); err != nil {
+						log.Printf("[tun] server exclusion route warning: %v", err)
+					} else {
+						log.Printf("[tun] server exclusion: %s → %s (physical NIC)", serverIP, gw)
+					}
 				}
 			}
 		} else {
 			log.Printf("[tun] WARNING: cannot detect physical gateway, server route exclusion skipped")
+			if isv6 {
+				log.Printf("[tun] TIP: ensure your network adapter has a default gateway configured")
+				log.Printf("[tun] TIP: or add a static route: netsh interface ipv6 add route %s/128 <interface> nexthop=<gw>", d.serverPublicIP)
+			}
 		}
 	}
 
@@ -178,17 +203,31 @@ func (d *Device) ReconfigureRoutes() {
 			prefix = "::/0"
 		}
 		gw := d.detectPhysicalGatewayForPrefix(prefix)
+
+		// Fallback: if IPv6 gateway not found, try IPv4 gateway.
+		if gw == "" && isv6 {
+			gw = d.detectPhysicalGatewayForPrefix("0.0.0.0/0")
+		}
+
 		if gw != "" {
-			d.physicalGateway = gw
-			serverIP := d.serverPublicIP.String()
-			if isv6 {
-				ifaceIdx := d.getInterfaceIndex()
-				RunCmd("netsh", "interface", "ipv6", "add", "route",
-					fmt.Sprintf("%s/128", serverIP), fmt.Sprintf("interface=%d", ifaceIdx),
-					fmt.Sprintf("nexthop=%s", gw), "metric=1")
+			gwIP := net.ParseIP(gw)
+			// Validate gateway address family matches the route.
+			if isv6 && gwIP != nil && gwIP.To4() != nil {
+				log.Printf("[tun] WARNING: gateway %s is IPv4 but server is IPv6, skipping exclusion route", gw)
+			} else if !isv6 && gwIP != nil && gwIP.To4() == nil {
+				log.Printf("[tun] WARNING: gateway %s is IPv6 but server is IPv4, skipping exclusion route", gw)
 			} else {
-				RunCmd("route", "add",
-					serverIP, "mask", "255.255.255.255", gw, "metric", "1")
+				d.physicalGateway = gw
+				serverIP := d.serverPublicIP.String()
+				if isv6 {
+					ifaceIdx := d.getInterfaceIndex()
+					RunCmd("netsh", "interface", "ipv6", "add", "route",
+						fmt.Sprintf("%s/128", serverIP), fmt.Sprintf("interface=%d", ifaceIdx),
+						fmt.Sprintf("nexthop=%s", gw), "metric=1")
+				} else {
+					RunCmd("route", "add",
+						serverIP, "mask", "255.255.255.255", gw, "metric", "1")
+				}
 			}
 		}
 	}
