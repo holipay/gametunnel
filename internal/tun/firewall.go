@@ -38,6 +38,7 @@ var commonLANPorts = []struct {
 //  1. Allow gtunnel-client.exe all traffic (tunnel UDP + TUN relay)
 //  2. Open common LAN game ports inbound for ANY program (game receives TUN packets)
 //
+// Cleans up any stale rules from previous runs first (crash recovery).
 // Requires admin privileges (already elevated by requestAdmin()).
 // Returns a cleanup function that removes all rules on shutdown.
 func SetupFirewall() (cleanup func(), err error) {
@@ -45,6 +46,15 @@ func SetupFirewall() (cleanup func(), err error) {
 	if err != nil {
 		return func() {}, nil // non-fatal, skip
 	}
+
+	// Clean up stale rules from previous runs (crash recovery).
+	// Safe to call even if no rules exist — netsh silently ignores missing rules.
+	RunCmd("netsh", "advfirewall", "firewall", "delete", "rule",
+		"name="+firewallRuleNameApp)
+	RunCmd("netsh", "advfirewall", "firewall", "delete", "rule",
+		"name="+firewallRuleNameAppOut)
+	RunCmd("netsh", "advfirewall", "firewall", "delete", "rule",
+		"name="+firewallRuleNameGameLAN)
 
 	// ── Rule group 1: gtunnel-client.exe ──
 
