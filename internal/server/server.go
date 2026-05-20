@@ -173,6 +173,12 @@ type Server struct {
 	// Time-series metrics
 	metricsTS    *MetricsTimeSeries
 
+	// Multi-room support
+	multiRoom   bool
+	rooms       map[string]*Room    // roomID → Room
+	addrToRoom  map[rateKey]*Room   // client addr → Room (fast routing)
+	roomMu      sync.RWMutex        // protects rooms + addrToRoom
+
 	// Diagnostics
 	sendErrors atomic.Int64 // send failure counter
 
@@ -208,6 +214,7 @@ type Config struct {
 	Lang       i18n.Lang
 	MaxPerIP   int    // max connections per IP (0 = use default 3)
 	StateDir   string // directory for state persistence, empty = disabled
+	MultiRoom  bool   // enable multi-room mode
 }
 
 // New creates a new Server. Call Run() to start it.
@@ -273,6 +280,9 @@ func New(cfg Config) (*Server, error) {
 		maxRegPerIP: 5,
 		ipConnCount: make(map[string]int),
 		metricsTS:   NewMetricsTimeSeries(),
+		rooms:       make(map[string]*Room),
+		addrToRoom:  make(map[rateKey]*Room),
+		multiRoom:   cfg.MultiRoom,
 		maxPerIP:    cfg.MaxPerIP,
 		stateDir:    cfg.StateDir,
 	}
@@ -408,6 +418,12 @@ func (s *Server) handlePacket(data []byte, from *net.UDPAddr) {
 		return
 	}
 
+	// Multi-room mode: route to the correct room
+	if s.multiRoom {
+		s.handlePacketMultiRoom(msg, from)
+		return
+	}
+
 	switch msg.Type {
 	case protocol.TypeRegister:
 		s.handleRegister(msg.Payload, from)
@@ -428,6 +444,117 @@ func (s *Server) handlePacket(data []byte, from *net.UDPAddr) {
 	}
 }
 
+// ── Multi-Room Packet Routing ──────────────────────────────────
+
+func (s *Server) handlePacketMultiRoom(msg *protocol.Message, from *net.UDPAddr) {
+	fromKey := addrToRateKey(from)
+
+	// For Register, we need to parse roomID first to find/create the room
+	if msg.Type == protocol.TypeRegister {
+		s.handleRegisterMultiRoom(msg.Payload, from)
+		return
+	}
+
+	// For all other types, look up the room from addrToRoom
+	s.roomMu.RLock()
+	room := s.addrToRoom[fromKey]
+	s.roomMu.RUnlock()
+
+	if room == nil {
+		return // not registered in any room
+	}
+
+	room.HandlePacket(msg.Type, msg.Payload, from, s.conn)
+}
+
+func (s *Server) handleRegisterMultiRoom(payload []byte, from *net.UDPAddr) {
+	reg, err := protocol.UnmarshalRegister(payload)
+	if err != nil {
+		return
+	}
+
+	if len(reg.RoomID) == 0 || len(reg.RoomID) > maxRoomIDLen {
+		s.sendKick(from, i18n.T().KickInvalidRoom)
+		return
+	}
+
+	// Find or create room
+	s.roomMu.Lock()
+	room, exists := s.rooms[reg.RoomID]
+	if !exists {
+		// Auto-create room with default settings
+		// Each room gets the next available /24 subnet
+		subnet := s.allocateSubnet()
+		if subnet == nil {
+			s.roomMu.Unlock()
+			s.sendKick(from, "no available subnets for new room")
+			return
+		}
+		var err error
+		room, err = NewRoom(RoomConfig{
+			RoomID:     reg.RoomID,
+			RoomPass:   s.roomPass, // inherit server password
+			Subnet:     subnet,
+			MaxPlayers: s.maxPlayers,
+			MaxPerIP:   s.maxPerIP,
+		})
+		if err != nil {
+			s.roomMu.Unlock()
+			s.sendKick(from, "failed to create room")
+			return
+		}
+		s.rooms[reg.RoomID] = room
+		log.Printf("[room] created room %q with subnet %s", reg.RoomID, subnet)
+	}
+	s.roomMu.Unlock()
+
+	// Register client in the room (also adds to addrToRoom)
+	fromKey := addrToRateKey(from)
+
+	// Temporarily add to room's addrMap for registration
+	// The room's handleRegister will process the actual registration
+	room.HandlePacket(protocol.TypeRegister, payload, from, s.conn)
+
+	// If client was registered (has a client entry), add to addrToRoom
+	room.mu.RLock()
+	if c := room.addrMap[fromKey]; c != nil {
+		s.roomMu.Lock()
+		s.addrToRoom[fromKey] = room
+		s.roomMu.Unlock()
+	}
+	room.mu.RUnlock()
+}
+
+// allocateSubnet finds an unused /24 subnet for a new room.
+// Uses 10.10.{room_index}.0/24 starting from 10.10.2.0.
+func (s *Server) allocateSubnet() *net.IPNet {
+	// Derive room subnets from the server's configured subnet prefix.
+	// e.g. server -subnet 192.168.1.0/24 → rooms get 192.168.2.0/24, 192.168.3.0/24, ...
+	base := s.subnet.IP.To4()
+	if base == nil {
+		return nil
+	}
+
+	// Find the highest used 3rd octet
+	maxIdx := int(base[2])
+	if maxIdx < 1 {
+		maxIdx = 1
+	}
+	for _, room := range s.rooms {
+		octet := int(room.subnet.IP.To4()[2])
+		if octet > maxIdx {
+			maxIdx = octet
+		}
+	}
+	nextIdx := maxIdx + 1
+	if nextIdx > 254 {
+		return nil // no more subnets
+	}
+	ip := net.IPv4(base[0], base[1], byte(nextIdx), 0)
+	mask := net.CIDRMask(24, 32)
+	return &net.IPNet{IP: ip, Mask: mask}
+}
+
 // ── Keepalive Loop ─────────────────────────────────────────────
 
 func (s *Server) keepaliveLoop(ctx context.Context) {
@@ -441,70 +568,99 @@ func (s *Server) keepaliveLoop(ctx context.Context) {
 		case <-ticker.C:
 		}
 
-		now := time.Now()
-
-		// Phase 1: scan under RLock — collect stale entries with all data
-		// needed for deletion, so Phase 2 only does verify+delete (no re-scan).
-		s.mu.RLock()
-		type staleClient struct {
-			key [16]byte
-			c   *Client
-		}
-		type staleAuth struct {
-			key rateKey
-			c   *Client
-		}
-		var staleClients []staleClient
-		var staleAuths []staleAuth
-		for key, c := range s.clients {
-			if now.Sub(c.LastSeen) > 30*time.Second {
-				staleClients = append(staleClients, staleClient{key: key, c: c})
-			}
-		}
-		for addrKey, c := range s.addrMap {
-			if c.auth == authChallengeSent && now.Sub(c.challengeAt) > 30*time.Second {
-				staleAuths = append(staleAuths, staleAuth{key: addrKey, c: c})
-			}
-		}
-		s.mu.RUnlock()
-
-		if len(staleClients) == 0 && len(staleAuths) == 0 {
-			continue
-		}
-
-		// Phase 2: verify + delete under WLock (no re-scan, just check existence).
-		s.mu.Lock()
-		changed := false
-		for _, sc := range staleClients {
-			if cur, ok := s.clients[sc.key]; ok && cur == sc.c {
-				log.Printf("%s", i18n.Format(i18n.T().ServerPeerLeave, sc.c.Username, sc.c.VirtualIP))
-				s.markIPFree(sc.c.VirtualIP)
-				delete(s.clients, sc.key)
-				delete(s.addrMap, addrToRateKey(sc.c.PublicAddr))
-				// Decrement per-IP connection count
-				ip := sc.c.PublicAddr.IP.String()
-				s.ipConnMu.Lock()
-				s.ipConnCount[ip]--
-				if s.ipConnCount[ip] <= 0 {
-					delete(s.ipConnCount, ip)
-				}
-				s.ipConnMu.Unlock()
-				changed = true
-			}
-		}
-		for _, sa := range staleAuths {
-			if cur, ok := s.addrMap[sa.key]; ok && cur == sa.c {
-				delete(s.addrMap, sa.key)
-				s.pendingAuth--
-			}
-		}
-		s.mu.Unlock()
-
-		if changed {
-			s.peerInfoDirty.Store(true)
-			s.markDirty()
+		if s.multiRoom {
+			s.keepaliveLoopMultiRoom()
+		} else {
+			s.keepaliveLoopSingleRoom()
 		}
 	}
+}
+
+func (s *Server) keepaliveLoopSingleRoom() {
+	now := time.Now()
+
+	s.mu.RLock()
+	type staleClient struct {
+		key [16]byte
+		c   *Client
+	}
+	type staleAuth struct {
+		key rateKey
+		c   *Client
+	}
+	var staleClients []staleClient
+	var staleAuths []staleAuth
+	for key, c := range s.clients {
+		if now.Sub(c.LastSeen) > 30*time.Second {
+			staleClients = append(staleClients, staleClient{key: key, c: c})
+		}
+	}
+	for addrKey, c := range s.addrMap {
+		if c.auth == authChallengeSent && now.Sub(c.challengeAt) > 30*time.Second {
+			staleAuths = append(staleAuths, staleAuth{key: addrKey, c: c})
+		}
+	}
+	s.mu.RUnlock()
+
+	if len(staleClients) == 0 && len(staleAuths) == 0 {
+		return
+	}
+
+	s.mu.Lock()
+	changed := false
+	for _, sc := range staleClients {
+		if cur, ok := s.clients[sc.key]; ok && cur == sc.c {
+			log.Printf("%s", i18n.Format(i18n.T().ServerPeerLeave, sc.c.Username, sc.c.VirtualIP))
+			s.markIPFree(sc.c.VirtualIP)
+			delete(s.clients, sc.key)
+			delete(s.addrMap, addrToRateKey(sc.c.PublicAddr))
+			ip := sc.c.PublicAddr.IP.String()
+			s.ipConnMu.Lock()
+			s.ipConnCount[ip]--
+			if s.ipConnCount[ip] <= 0 {
+				delete(s.ipConnCount, ip)
+			}
+			s.ipConnMu.Unlock()
+			changed = true
+		}
+	}
+	for _, sa := range staleAuths {
+		if cur, ok := s.addrMap[sa.key]; ok && cur == sa.c {
+			delete(s.addrMap, sa.key)
+			s.pendingAuth--
+		}
+	}
+	s.mu.Unlock()
+
+	if changed {
+		s.peerInfoDirty.Store(true)
+		s.markDirty()
+	}
+}
+
+func (s *Server) keepaliveLoopMultiRoom() {
+	s.roomMu.RLock()
+	rooms := make([]*Room, 0, len(s.rooms))
+	for _, r := range s.rooms {
+		rooms = append(rooms, r)
+	}
+	s.roomMu.RUnlock()
+
+	for _, room := range rooms {
+		changed := room.CleanupStale()
+		if changed {
+			room.peerInfoDirty.Store(true)
+		}
+	}
+
+	// Clean up empty rooms (optional: uncomment to auto-delete empty rooms)
+	// s.roomMu.Lock()
+	// for id, room := range s.rooms {
+	//     if room.ClientCount() == 0 && time.Since(room.createdAt) > 5*time.Minute {
+	//         delete(s.rooms, id)
+	//     }
+	// }
+	// s.roomMu.Unlock()
 }
 
 // ── Send Helpers ───────────────────────────────────────────────

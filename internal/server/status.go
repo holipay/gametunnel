@@ -24,6 +24,8 @@ type StatusInfo struct {
 	HasAuth     bool             `json:"has_auth"`
 	SendErrors  int64            `json:"send_errors"`
 	Connections []ConnectionInfo `json:"connections,omitempty"`
+	MultiRoom   bool             `json:"multi_room"`
+	Rooms       []RoomStatusInfo `json:"rooms,omitempty"`
 
 	// Operational metrics (lifetime counters)
 	TotalRegistrations uint64 `json:"total_registrations"`
@@ -59,6 +61,7 @@ func (s *Server) startStatusServer(ctx context.Context, addr string) {
 	mux.HandleFunc("/", s.handleStatusHTML)
 	mux.HandleFunc("/api/status", s.handleStatusJSON)
 	mux.HandleFunc("/api/metrics", s.handleMetricsJSON)
+	mux.HandleFunc("/api/rooms", s.handleRoomsJSON)
 
 	srv := &http.Server{
 		Addr:    addr,
@@ -133,6 +136,26 @@ func (s *Server) handleMetricsJSON(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 	json.NewEncoder(w).Encode(resp)
+}
+
+func (s *Server) handleRoomsJSON(w http.ResponseWriter, r *http.Request) {
+	if !s.checkStatusToken(r) {
+		http.Error(w, "403 forbidden: invalid or missing token", http.StatusForbidden)
+		return
+	}
+	if !s.multiRoom {
+		http.Error(w, "multi-room not enabled", http.StatusBadRequest)
+		return
+	}
+	s.roomMu.RLock()
+	rooms := make([]RoomStatusInfo, 0, len(s.rooms))
+	for _, room := range s.rooms {
+		rooms = append(rooms, room.BuildRoomStatus())
+	}
+	s.roomMu.RUnlock()
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	json.NewEncoder(w).Encode(rooms)
 }
 
 func (s *Server) handleStatusHTML(w http.ResponseWriter, r *http.Request) {
@@ -314,6 +337,16 @@ func (s *Server) buildStatusInfo() StatusInfo {
 
 	uptime := now.Sub(s.startTime)
 
+	// Multi-room: collect all rooms
+	var roomInfos []RoomStatusInfo
+	if s.multiRoom {
+		s.roomMu.RLock()
+		for _, room := range s.rooms {
+			roomInfos = append(roomInfos, room.BuildRoomStatus())
+		}
+		s.roomMu.RUnlock()
+	}
+
 	return StatusInfo{
 		Version:     s.version,
 		Uptime:      formatDuration(uptime),
@@ -324,6 +357,8 @@ func (s *Server) buildStatusInfo() StatusInfo {
 		HasAuth:     s.roomPass != "",
 		SendErrors:  s.sendErrors.Load(),
 		Connections: conns,
+		MultiRoom:   s.multiRoom,
+		Rooms:       roomInfos,
 
 		TotalRegistrations:  s.totalRegistrations.Load(),
 		AuthFailures:        s.authFailures.Load(),
