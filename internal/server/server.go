@@ -491,6 +491,7 @@ func (s *Server) keepaliveLoop(ctx context.Context) {
 
 		if changed {
 			s.peerInfoDirty.Store(true)
+			s.markDirty()
 		}
 	}
 }
