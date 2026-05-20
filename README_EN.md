@@ -22,11 +22,17 @@ curl -sL https://raw.githubusercontent.com/holipay/gametunnel/main/scripts/insta
 # With status page:
 curl -sL https://raw.githubusercontent.com/holipay/gametunnel/main/scripts/install-linux.sh | sudo STATUS_ADDR=:4701 bash
 
-# Or build from source:
+# Or build from source (requires make):
 git clone https://github.com/holipay/gametunnel.git
 cd gametunnel
 make server
 sudo ./bin/gtunnel-server -addr :4700
+
+# Or build directly with go (no make needed):
+git clone https://github.com/holipay/gametunnel.git
+cd gametunnel
+go build -o gtunnel-server ./cmd/server
+sudo ./gtunnel-server -addr :4700
 ```
 
 #### OpenWrt Router (Mid-to-High-End)
@@ -144,6 +150,74 @@ The status page auto-refreshes every 5 seconds. API response example:
 
 > **Note**: `-status-token` only controls access to the status page. It is independent of the room password (`-password`).
 
+### Metrics API (Time Series)
+
+The server collects time-series metrics with 1-minute sampling and a 1-hour window.
+
+```bash
+# Access metrics API (requires status page enabled)
+curl http://1.2.3.4:4701/api/metrics
+
+# With token
+curl -H "Authorization: Bearer mysecret" http://1.2.3.4:4701/api/metrics
+```
+
+API response example:
+```json
+{
+  "interval": "1m",
+  "window": "1h",
+  "samples": [
+    {
+      "ts": "2026-05-20T12:00:00Z",
+      "players": 5,
+      "relay_pkts": 1234,
+      "dropped_pkts": 0,
+      "avg_rtt": 23.5,
+      "avg_loss": 0.01
+    }
+  ]
+}
+```
+
+## Multi-Room Mode
+
+By default, all connected players share the same virtual subnet (10.10.0.0/24), distinguished by the `-room` parameter.
+
+With multi-room mode enabled, each room gets an independent subnet with full isolation:
+
+```bash
+gtunnel-server -addr :4700 -rooms
+```
+
+- Each room is automatically assigned an independent /24 subnet
+- Full isolation between rooms (different virtual IP ranges)
+- Ideal for scenarios requiring multiple independent matches
+
+## QoS Bandwidth Limiting
+
+You can limit per-client outbound bandwidth to prevent a single player from saturating the server's upstream:
+
+```bash
+# Limit each client to 1MB/s outbound bandwidth
+gtunnel-server -addr :4700 -bandwidth 1048576
+
+# No limit (default 10Mbps)
+gtunnel-server -addr :4700 -bandwidth 0
+```
+
+## State Persistence
+
+The server can save room state (online players, virtual IP assignments, etc.) to disk and automatically restore it on restart:
+
+```bash
+gtunnel-server -addr :4700 -state-dir /var/lib/gametunnel
+```
+
+- Server periodically saves state to the specified directory
+- Automatically loads on restart — players don't need to reconnect
+- Ideal for servers that require planned maintenance restarts
+
 ## Security
 
 ### Room Password (HMAC Authentication + End-to-End Encryption)
@@ -249,6 +323,9 @@ gtunnel-server -addr :4700 -subnet 10.10.0.0/24 -max 10 -password secret
 | `-subnet` | `10.10.0.0/24` | Virtual subnet (only /24 supported) |
 | `-max` | `10` | Max players |
 | `-password` | _(empty)_ | Room password (empty = no auth, no encryption) |
+| `-rooms` | `false` | Multi-room mode (each room gets independent subnet) |
+| `-bandwidth` | `0` | Per-client outbound bandwidth limit in bytes/sec (0 = default 10Mbps) |
+| `-state-dir` | _(disabled)_ | Room state persistence directory (survives restarts) |
 | `-status-addr` | _(disabled)_ | HTTP status page address, e.g. `:4701` |
 | `-status-token` | _(empty)_ | Status page access token (empty = no auth) |
 | `-max-per-ip` | `3` | Max connections per public IP |
@@ -335,7 +412,7 @@ A: Server: Linux and OpenWrt routers (mid-to-high-end ARM devices). Client: Wind
 A: With a password set, both authentication (HMAC-SHA256) and data transmission (ChaCha20-Poly1305) are end-to-end encrypted. The server cannot decrypt game data.
 
 **Q: Can multiple rooms share one server?**
-A: Yes. Different `-room` values are isolated from each other. However, all rooms share the same `-password` (if set).
+A: Yes. Different `-room` values are isolated from each other. With `-rooms` mode enabled, each room also gets an independent virtual subnet for full isolation.
 
 **Q: What if P2P hole punching fails?**
 A: Automatically falls back to server relay with slightly higher latency. GameTunnel periodically retries hole punching.
@@ -352,23 +429,19 @@ A: Use `-status-addr :4701` to enable the status page, then access via browser o
 ### Build
 
 ```bash
-# Build server (Linux)
-make server
+# Build directly with go (recommended, no make needed)
+go build -o bin/gtunnel-server ./cmd/server
+go build -o bin/gtunnel-client.exe ./cmd/client     # requires Windows cross-compilation
+GOOS=windows GOARCH=amd64 go build -o bin/gtunnel-client.exe ./cmd/client  # specify target
 
-# Build OpenWrt server (ARM64 / ARMv7)
-make server-openwrt-arm64
-make server-openwrt-armv7
-make server-openwrt           # All OpenWrt architectures
-
-# Build Windows client (cross-compilable from any platform)
-make client
-
-# Build all targets
-make all
+# Or use make (convenient for batch builds and releases)
+make server          # Build server
+make client          # Build Windows client
+make server-openwrt  # Build all OpenWrt architectures
+make all             # Build all targets
 
 # Show version
 ./bin/gtunnel-server -version
-./bin/gtunnel-client.exe -version
 ```
 
 ### Dependencies
