@@ -81,10 +81,12 @@ func (b *clientBucket) waitTake(ctx context.Context, n int) bool {
 			wait = 10 * time.Millisecond
 		}
 
+		timer := time.NewTimer(wait)
 		select {
 		case <-ctx.Done():
+			timer.Stop()
 			return false
-		case <-time.After(wait):
+		case <-timer.C:
 		}
 	}
 }
