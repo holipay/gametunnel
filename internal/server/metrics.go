@@ -149,7 +149,7 @@ func (s *Server) metricsLoop(ctx context.Context) {
 			DroppedPkts:  dropped - prevDropped,
 			Kicks:        kicks - prevKicks,
 			Registrations: regs - prevRegs,
-			SendErrors:   sendErr - prevSendErr,
+			SendErrors:   uint64(sendErr - prevSendErr),
 		}
 		s.metricsTS.Append(sample)
 
