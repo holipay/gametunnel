@@ -55,6 +55,7 @@ func (s *Server) handleDisconnect(from *net.UDPAddr) {
 	s.mu.Unlock()
 
 	s.peerInfoDirty.Store(true)
+	s.markDirty()
 }
 
 // handlePeerRequest handles a client's request for the peer list.
