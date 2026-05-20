@@ -528,8 +528,18 @@ func (s *Server) handleRegisterMultiRoom(payload []byte, from *net.UDPAddr) {
 // allocateSubnet finds an unused /24 subnet for a new room.
 // Uses 10.10.{room_index}.0/24 starting from 10.10.2.0.
 func (s *Server) allocateSubnet() *net.IPNet {
-	// Find the highest used subnet index
-	maxIdx := 1 // start allocating from .2
+	// Derive room subnets from the server's configured subnet prefix.
+	// e.g. server -subnet 192.168.1.0/24 → rooms get 192.168.2.0/24, 192.168.3.0/24, ...
+	base := s.subnet.IP.To4()
+	if base == nil {
+		return nil
+	}
+
+	// Find the highest used 3rd octet
+	maxIdx := int(base[2])
+	if maxIdx < 1 {
+		maxIdx = 1
+	}
 	for _, room := range s.rooms {
 		octet := int(room.subnet.IP.To4()[2])
 		if octet > maxIdx {
@@ -540,7 +550,7 @@ func (s *Server) allocateSubnet() *net.IPNet {
 	if nextIdx > 254 {
 		return nil // no more subnets
 	}
-	ip := net.IPv4(10, 10, byte(nextIdx), 0)
+	ip := net.IPv4(base[0], base[1], byte(nextIdx), 0)
 	mask := net.CIDRMask(24, 32)
 	return &net.IPNet{IP: ip, Mask: mask}
 }
