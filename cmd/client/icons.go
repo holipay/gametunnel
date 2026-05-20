@@ -8,11 +8,17 @@ import (
 	"image/png"
 )
 
-// iconDisconnected is a gray tunnel icon.
-var iconDisconnected = generateIcon(color.RGBA{R: 128, G: 128, B: 128, A: 255})
+// iconDisconnected is a red tunnel icon.
+var iconDisconnected = generateIcon(color.RGBA{R: 220, G: 53, B: 69, A: 255})
 
-// iconConnected is a green tunnel icon.
+// iconConnected is a green tunnel icon (default, used when P2P status unknown).
 var iconConnected = generateIcon(color.RGBA{R: 0, G: 200, B: 83, A: 255})
+
+// iconConnectedP2P is a bright green icon — all peers are P2P direct.
+var iconConnectedP2P = generateIcon(color.RGBA{R: 0, G: 230, B: 118, A: 255})
+
+// iconConnectedRelay is an amber icon — some peers using relay.
+var iconConnectedRelay = generateIcon(color.RGBA{R: 255, G: 152, B: 0, A: 255})
 
 // iconConnecting is a yellow tunnel icon.
 var iconConnecting = generateIcon(color.RGBA{R: 255, G: 193, B: 7, A: 255})
