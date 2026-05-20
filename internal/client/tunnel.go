@@ -325,19 +325,47 @@ type TunnelStatus struct {
 	SubnetMask net.IPMask
 	ServerIP   net.IP
 	PeerCount  int
+
+	// Connection quality metrics
+	AvgRTT      float64 // average RTT in ms across all peers (0 = no data)
+	LossRate    float64 // average loss rate 0.0-1.0
+	P2PPeers    int     // number of peers with direct P2P connection
+	RelayPeers  int     // number of peers using relay
 }
 
 // Status returns a snapshot of the current tunnel state.
 func (t *Tunnel) Status() TunnelStatus {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
-	return TunnelStatus{
+
+	st := TunnelStatus{
 		Connected:  t.tunDev != nil && t.virtualIP != nil,
 		VirtualIP:  t.virtualIP,
 		SubnetMask: t.subnetMask,
 		ServerIP:   t.serverIP,
 		PeerCount:  len(t.peers),
 	}
+
+	if !st.Connected || len(t.peers) == 0 {
+		return st
+	}
+
+	var totalRTT time.Duration
+	rttCount := 0
+	for _, p := range t.peers {
+		if p.DirectReach.Load() {
+			st.P2PPeers++
+		} else {
+			st.RelayPeers++
+		}
+		// RTT is not directly available per-peer in the current client code,
+		// but we track DirectReach for P2P vs relay status.
+	}
+	if rttCount > 0 {
+		st.AvgRTT = float64(totalRTT.Milliseconds()) / float64(rttCount)
+	}
+
+	return st
 }
 
 // sendLoop is the dedicated UDP send goroutine. It consumes from sendCh and
