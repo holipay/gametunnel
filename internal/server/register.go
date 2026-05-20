@@ -111,6 +111,19 @@ func (s *Server) handleRegister(payload []byte, from *net.UDPAddr) {
 // Releases s.mu before returning.
 func (s *Server) registerClientLocked(reg *protocol.RegisterPayload, from *net.UDPAddr) {
 	t := i18n.T()
+
+	// ====== Check for restored client (persisted state reconnect) ======
+	if restored := s.resolveRestoredClient(reg.Username, reg.RoomID, from); restored != nil {
+		log.Printf(t.LogPlayerJoin, reg.Username, from, restored.VirtualIP, len(s.clients))
+		selfIP := restored.VirtualIP
+		s.markDirty()
+		s.mu.Unlock()
+		s.sendAssignIP(selfIP, from)
+		s.sendPeerInfoToClient(from)
+		s.peerInfoDirty.Store(true)
+		return
+	}
+
 	vip := s.nextAvailableIP()
 	if vip == nil {
 		s.mu.Unlock()
@@ -145,6 +158,7 @@ func (s *Server) registerClientLocked(reg *protocol.RegisterPayload, from *net.U
 	}
 
 	selfIP := vip
+	s.markDirty()
 	s.mu.Unlock()
 
 	s.sendAssignIP(selfIP, from)
