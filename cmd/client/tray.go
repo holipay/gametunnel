@@ -154,12 +154,39 @@ func (tr *Tray) updateTrayConnecting() {
 	tr.mDisconnect.Enable()
 }
 
-func (tr *Tray) updateTray(connected bool, ip string, peers int) {
+func (tr *Tray) updateTray(connected bool, ip string, peers int, quality *StatusResponse) {
 	s := i18n.T()
 	if connected {
-		setTrayIcon(iconConnected)
-		systray.SetTooltip(fmt.Sprintf(s.TrayTooltipOnline, ip, peers))
-		tr.mStatus.SetTitle(fmt.Sprintf(s.TrayStatusOnline, ip, peers))
+		// Choose icon based on connection type
+		if quality != nil && quality.P2PPeers > 0 && quality.RelayPeers == 0 {
+			setTrayIcon(iconConnectedP2P) // green: all peers are P2P
+		} else if quality != nil && quality.RelayPeers > 0 {
+			setTrayIcon(iconConnectedRelay) // yellow: using relay
+		} else {
+			setTrayIcon(iconConnected) // default green
+		}
+
+		// Build tooltip with connection quality info
+		tooltip := fmt.Sprintf(s.TrayTooltipOnline, ip, peers)
+		if quality != nil {
+			if quality.P2PPeers > 0 || quality.RelayPeers > 0 {
+				tooltip += fmt.Sprintf("\nP2P: %d  Relay: %d", quality.P2PPeers, quality.RelayPeers)
+			}
+			if quality.AvgRTT > 0 {
+				tooltip += fmt.Sprintf("\nRTT: %.0fms", quality.AvgRTT)
+			}
+			if quality.LossRate > 0 {
+				tooltip += fmt.Sprintf("\nLoss: %.0f%%", quality.LossRate*100)
+			}
+		}
+		systray.SetTooltip(tooltip)
+
+		// Status menu item
+		statusText := fmt.Sprintf(s.TrayStatusOnline, ip, peers)
+		if quality != nil && (quality.P2PPeers > 0 || quality.RelayPeers > 0) {
+			statusText += fmt.Sprintf("  [P2P:%d Relay:%d]", quality.P2PPeers, quality.RelayPeers)
+		}
+		tr.mStatus.SetTitle(statusText)
 		tr.mConnect.Disable()
 		tr.mDisconnect.Enable()
 	} else {
@@ -186,11 +213,11 @@ func (tr *Tray) statusLoop() {
 		if status.Connecting {
 			tr.updateTrayConnecting()
 		} else if status.Connected {
-			tr.updateTray(true, status.VirtualIP, status.PeerCount)
+			tr.updateTray(true, status.VirtualIP, status.PeerCount, &status)
 		} else if status.LastError != "" {
 			tr.updateTrayError(status.LastError)
 		} else {
-			tr.updateTray(false, "", 0)
+			tr.updateTray(false, "", 0, nil)
 		}
 
 		select {
