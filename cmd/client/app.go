@@ -63,6 +63,12 @@ type StatusResponse struct {
 	PlayerName string `json:"player_name"`
 	RoomID     string `json:"room_id"`
 	ServerAddr string `json:"server_addr"`
+
+	// Connection quality
+	AvgRTT     float64 `json:"avg_rtt"`
+	LossRate   float64 `json:"loss_rate"`
+	P2PPeers   int     `json:"p2p_peers"`
+	RelayPeers int     `json:"relay_peers"`
 }
 
 // NewApp creates a new App.
@@ -105,6 +111,14 @@ func (a *App) GetStatus() StatusResponse {
 		s.ServerIP = a.serverIP.String()
 		if !a.uptime.IsZero() {
 			s.Uptime = formatDuration(time.Since(a.uptime))
+		}
+		// Connection quality from tunnel
+		if tun != nil {
+			ts := tun.Status()
+			s.AvgRTT = ts.AvgRTT
+			s.LossRate = ts.LossRate
+			s.P2PPeers = ts.P2PPeers
+			s.RelayPeers = ts.RelayPeers
 		}
 	}
 
