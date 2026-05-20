@@ -108,7 +108,7 @@ func (tr *Tray) setup() {
 
 			case <-tr.mDisconnect.ClickedCh:
 				tr.app.Disconnect()
-				tr.updateTray(false, "", 0)
+				tr.updateTray(false, "", 0, nil)
 
 			case <-mLog.ClickedCh:
 				openLogFile()
