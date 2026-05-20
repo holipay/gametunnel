@@ -38,6 +38,7 @@ func main() {
 	maxPerIP := flag.Int("max-per-ip", 3, "max connections per IP address")
 	stateDir := flag.String("state-dir", "", "directory for room state persistence (empty = disabled)")
 	multiRoom := flag.Bool("rooms", false, "enable multi-room mode (each room gets independent subnet)")
+	bandwidthLimit := flag.Int("bandwidth", 0, "per-client outbound bandwidth limit in bytes/sec (0 = default 10Mbps)")
 	langFlag := flag.String("lang", "zh", "language (zh or en)")
 	versionFlag := flag.Bool("version", false, "show version")
 	flag.Parse()
@@ -72,9 +73,10 @@ func main() {
 		StatusToken: *statusToken,
 		Version:    Version,
 		Lang:       i18n.ParseLang(*langFlag),
-		MaxPerIP:   *maxPerIP,
-		StateDir:   *stateDir,
-		MultiRoom:  *multiRoom,
+		MaxPerIP:       *maxPerIP,
+		StateDir:       *stateDir,
+		MultiRoom:      *multiRoom,
+		BandwidthLimit: *bandwidthLimit,
 	})
 	if err != nil {
 		log.Fatalf(t.ServerStartFail, err)

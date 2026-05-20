@@ -57,9 +57,11 @@ func (s *Server) handleRelay(payload []byte, from *net.UDPAddr) {
 	if len(targets) == 0 {
 		return
 	}
-	encoded := protocol.EncodeChecked(protocol.TypeData, payload)
+	packetSize := len(encoded)
 	for _, addr := range targets {
-		s.sendCheckedRaw(encoded, addr)
+		if s.bwLimiter.Allow(addr, packetSize) {
+			s.sendCheckedRaw(encoded, addr)
+		}
 	}
 	s.totalPacketsRelay.Add(1)
 }

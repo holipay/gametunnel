@@ -54,6 +54,7 @@ func (s *Server) handleDisconnect(from *net.UDPAddr) {
 	delete(s.addrMap, fromKey)
 	s.mu.Unlock()
 
+	s.bwLimiter.Remove(from)
 	s.peerInfoDirty.Store(true)
 	s.markDirty()
 }
