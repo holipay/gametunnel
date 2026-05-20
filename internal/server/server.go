@@ -179,6 +179,9 @@ type Server struct {
 	addrToRoom  map[rateKey]*Room   // client addr → Room (fast routing)
 	roomMu      sync.RWMutex        // protects rooms + addrToRoom
 
+	// Bandwidth limiting
+	bwLimiter    *BandwidthLimiter // per-client outbound bandwidth limiter
+
 	// Diagnostics
 	sendErrors atomic.Int64 // send failure counter
 
@@ -212,9 +215,10 @@ type Config struct {
 	StatusToken string // status page access token, empty = no auth
 	Version    string
 	Lang       i18n.Lang
-	MaxPerIP   int    // max connections per IP (0 = use default 3)
-	StateDir   string // directory for state persistence, empty = disabled
-	MultiRoom  bool   // enable multi-room mode
+	MaxPerIP       int    // max connections per IP (0 = use default 3)
+	StateDir       string // directory for state persistence, empty = disabled
+	MultiRoom      bool   // enable multi-room mode
+	BandwidthLimit int    // per-client outbound bandwidth limit in bytes/sec (0 = default 10Mbps)
 }
 
 // New creates a new Server. Call Run() to start it.
@@ -285,6 +289,7 @@ func New(cfg Config) (*Server, error) {
 		multiRoom:   cfg.MultiRoom,
 		maxPerIP:    cfg.MaxPerIP,
 		stateDir:    cfg.StateDir,
+		bwLimiter:   NewBandwidthLimiter(cfg.BandwidthLimit),
 	}
 	if s.maxPerIP <= 0 {
 		s.maxPerIP = 3
@@ -311,6 +316,7 @@ func (s *Server) Run(ctx context.Context) {
 	go s.peerInfoLoop(ctx)
 	go s.persistLoop(ctx)
 	go s.metricsLoop(ctx)
+	go s.bwCleanupLoop(ctx)
 
 	for i := 0; i < s.workers; i++ {
 		go s.worker(ctx)
@@ -717,4 +723,18 @@ type peerSnapshot struct {
 	virtualIP  net.IP
 	publicAddr *net.UDPAddr
 	username   string
+}
+
+// bwCleanupLoop periodically removes stale bandwidth limiter buckets.
+func (s *Server) bwCleanupLoop(ctx context.Context) {
+	ticker := time.NewTicker(5 * time.Minute)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			s.bwLimiter.Cleanup(10 * time.Minute)
+		}
+	}
 }
