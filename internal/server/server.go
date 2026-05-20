@@ -7,6 +7,7 @@ package server
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"math/bits"
@@ -394,6 +395,11 @@ func (s *Server) worker(ctx context.Context) {
 func (s *Server) handlePacket(data []byte, from *net.UDPAddr) {
 	msg, err := protocol.DecodeChecked(data)
 	if err != nil {
+		if errors.Is(err, protocol.ErrUnsupportedVersion) {
+			s.sendKick(from, fmt.Sprintf(
+				"Protocol version mismatch: server=%d, please update your client",
+				protocol.ProtocolVersion))
+		}
 		return
 	}
 
