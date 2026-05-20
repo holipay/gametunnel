@@ -36,6 +36,7 @@ func main() {
 	statusAddr := flag.String("status-addr", "", "status page address (HTTP), e.g. :4701")
 	statusToken := flag.String("status-token", "", "status page access token (empty = no auth)")
 	maxPerIP := flag.Int("max-per-ip", 3, "max connections per IP address")
+	stateDir := flag.String("state-dir", "", "directory for room state persistence (empty = disabled)")
 	langFlag := flag.String("lang", "zh", "language (zh or en)")
 	versionFlag := flag.Bool("version", false, "show version")
 	flag.Parse()
@@ -71,6 +72,7 @@ func main() {
 		Version:    Version,
 		Lang:       i18n.ParseLang(*langFlag),
 		MaxPerIP:   *maxPerIP,
+		StateDir:   *stateDir,
 	})
 	if err != nil {
 		log.Fatalf(t.ServerStartFail, err)
