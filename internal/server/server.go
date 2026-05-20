@@ -170,6 +170,9 @@ type Server struct {
 	ipConnCount map[string]int
 	maxPerIP   int
 
+	// Time-series metrics
+	metricsTS    *MetricsTimeSeries
+
 	// Diagnostics
 	sendErrors atomic.Int64 // send failure counter
 
@@ -269,6 +272,7 @@ func New(cfg Config) (*Server, error) {
 		regBuf:      [2]map[string]int{make(map[string]int), make(map[string]int)},
 		maxRegPerIP: 5,
 		ipConnCount: make(map[string]int),
+		metricsTS:   NewMetricsTimeSeries(),
 		maxPerIP:    cfg.MaxPerIP,
 		stateDir:    cfg.StateDir,
 	}
@@ -296,6 +300,7 @@ func (s *Server) Run(ctx context.Context) {
 	go s.regRateLimitLoop(ctx)
 	go s.peerInfoLoop(ctx)
 	go s.persistLoop(ctx)
+	go s.metricsLoop(ctx)
 
 	for i := 0; i < s.workers; i++ {
 		go s.worker(ctx)
