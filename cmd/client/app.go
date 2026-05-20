@@ -113,8 +113,8 @@ func (a *App) GetStatus() StatusResponse {
 			s.Uptime = formatDuration(time.Since(a.uptime))
 		}
 		// Connection quality from tunnel
-		if tun != nil {
-			ts := tun.Status()
+		if a.tunnel != nil {
+			ts := a.tunnel.Status()
 			s.AvgRTT = ts.AvgRTT
 			s.LossRate = ts.LossRate
 			s.P2PPeers = ts.P2PPeers
@@ -190,7 +190,7 @@ func (a *App) statusLoop(ctx context.Context) {
 			continue
 		}
 
-		ts := tun.Status()
+		ts := a.tunnel.Status()
 
 		a.mu.Lock()
 		if ts.Connected {
