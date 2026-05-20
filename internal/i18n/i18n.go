@@ -34,6 +34,7 @@ type Strings struct {
 	ServerStatusFail  string // "[status] HTTP 服务启动失败: %v"
 	ServerTmplFail    string // "[status] 模板渲染失败: %v"
 	ServerPeerLeave   string // "[-] %s (%s) 超时断开"
+	LogStateRestored  string // "[persist] 恢复了 %d 个玩家的 IP 分配"
 
 	// ── Server Status Page HTML ──
 	StatusTitle       string // "GameTunnel Server"
@@ -200,6 +201,7 @@ var zhStrings = &Strings{
 	ServerStatusFail:  "[status] HTTP 服务启动失败: %v",
 	ServerTmplFail:    "[status] 模板渲染失败: %v",
 	ServerPeerLeave:   "[-] %s (%s) 超时断开",
+	LogStateRestored:  "[persist] 恢复了 %d 个玩家的 IP 分配",
 
 	StatusTitle:       "GameTunnel Server",
 	StatusPlayers:     "玩家",
@@ -357,6 +359,7 @@ var enStrings = &Strings{
 	ServerStatusFail:  "[status] HTTP server failed to start: %v",
 	ServerTmplFail:    "[status] Template render failed: %v",
 	ServerPeerLeave:   "[-] %s (%s) timed out",
+	LogStateRestored:  "[persist] Restored %d player IP allocations",
 
 	StatusTitle:       "GameTunnel Server",
 	StatusPlayers:     "Players",
