@@ -75,7 +75,6 @@ func main() {
 		MaxPerIP:   *maxPerIP,
 		StateDir:   *stateDir,
 		MultiRoom:  *multiRoom,
->>>>>>> eb7f26f (feat: add -rooms flag for multi-room mode)
 	})
 	if err != nil {
 		log.Fatalf(t.ServerStartFail, err)
