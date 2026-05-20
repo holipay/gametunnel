@@ -172,6 +172,11 @@ type Server struct {
 	// Diagnostics
 	sendErrors atomic.Int64 // send failure counter
 
+	// State persistence
+	stateDir      string       // directory for state file, empty = disabled
+	stateLoadedAt time.Time    // when state was last loaded from disk
+	persistDirty  atomic.Bool  // true if state needs to be written to disk
+
 	// Operational metrics (lifetime counters, never reset)
 	totalRegistrations atomic.Uint64 // successful joins
 	authFailures       atomic.Uint64 // wrong password attempts
@@ -197,7 +202,8 @@ type Config struct {
 	StatusToken string // status page access token, empty = no auth
 	Version    string
 	Lang       i18n.Lang
-	MaxPerIP   int // max connections per IP (0 = use default 3)
+	MaxPerIP   int    // max connections per IP (0 = use default 3)
+	StateDir   string // directory for state persistence, empty = disabled
 }
 
 // New creates a new Server. Call Run() to start it.
@@ -263,6 +269,7 @@ func New(cfg Config) (*Server, error) {
 		maxRegPerIP: 5,
 		ipConnCount: make(map[string]int),
 		maxPerIP:    cfg.MaxPerIP,
+		stateDir:    cfg.StateDir,
 	}
 	if s.maxPerIP <= 0 {
 		s.maxPerIP = 3
@@ -270,6 +277,12 @@ func New(cfg Config) (*Server, error) {
 	s.markIPUsed(net.IPv4(serverIP[0], serverIP[1], serverIP[2], 0))   // network address
 	s.markIPUsed(serverIP)                                             // server IP
 	s.markIPUsed(net.IPv4(serverIP[0], serverIP[1], serverIP[2], 255)) // broadcast
+
+	// Load persisted state (if any)
+	if err := s.loadState(); err != nil {
+		log.Printf("warning: failed to load state: %v", err)
+	}
+
 	return s, nil
 }
 
@@ -281,6 +294,7 @@ func (s *Server) Run(ctx context.Context) {
 	go s.rateLimitLoop(ctx)
 	go s.regRateLimitLoop(ctx)
 	go s.peerInfoLoop(ctx)
+	go s.persistLoop(ctx)
 
 	for i := 0; i < s.workers; i++ {
 		go s.worker(ctx)
