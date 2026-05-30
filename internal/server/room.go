@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"math/bits"
@@ -17,11 +18,15 @@ import (
 // Room holds all per-room state. Each room has an independent virtual subnet,
 // player list, IP allocation, and authentication.
 type Room struct {
-	roomID    string
-	roomPass  string
-	subnet    *net.IPNet
-	serverIP  net.IP
+	roomID     string
+	roomPass   string
+	subnet     *net.IPNet
+	serverIP   net.IP
 	maxPlayers int
+
+	// Network
+	conn       *net.UDPConn      // UDP connection for sending packets
+	bwLimiter  *BandwidthLimiter // per-client outbound bandwidth limiter
 
 	// Per-room client state
 	clients    map[[16]byte]*Client // virtualIP → Client
@@ -32,7 +37,7 @@ type Room struct {
 	ipBitmap []uint64
 
 	// Auth
-	authKeys   sync.Map // map[string][]byte, roomID → derived key
+	authKeys    sync.Map // map[string][]byte, roomID → derived key
 	pendingAuth int
 	maxPending  int
 
@@ -62,6 +67,14 @@ type Room struct {
 	totalKicks          atomic.Uint64
 	sendErrors          atomic.Int64
 
+	// Send error logging (rate-limited)
+	lastSendErrorLog        time.Time
+	sendErrorCountSinceLog  atomic.Int64
+	sendErrorMu             sync.Mutex
+
+	// Callbacks (set by Server for state persistence)
+	onDirty func() // called when room state changes (for persistence)
+
 	// Timestamps
 	createdAt time.Time
 }
@@ -73,6 +86,8 @@ type RoomConfig struct {
 	Subnet     *net.IPNet
 	MaxPlayers int
 	MaxPerIP   int
+	Conn       *net.UDPConn      // UDP connection for sending packets
+	BWLimiter  *BandwidthLimiter // per-client outbound bandwidth limiter (optional)
 }
 
 // NewRoom creates a new room. The subnet must be /24.
@@ -97,6 +112,8 @@ func NewRoom(cfg RoomConfig) (*Room, error) {
 		subnet:      cfg.Subnet,
 		serverIP:    serverIP,
 		maxPlayers:  cfg.MaxPlayers,
+		conn:        cfg.Conn,
+		bwLimiter:   cfg.BWLimiter,
 		clients:     make(map[[16]byte]*Client),
 		addrMap:     make(map[rateKey]*Client),
 		ipBitmap:    make([]uint64, 4),
@@ -183,20 +200,20 @@ func (r *Room) getAuthKey(roomID string) []byte {
 // ── Packet Handling ────────────────────────────────────────────
 
 // HandlePacket dispatches a packet within this room.
-func (r *Room) HandlePacket(msgType byte, payload []byte, from *net.UDPAddr, conn *net.UDPConn) {
+func (r *Room) HandlePacket(msgType byte, payload []byte, from *net.UDPAddr) {
 	switch msgType {
 	case protocol.TypeRegister:
-		r.handleRegister(payload, from, conn)
+		r.handleRegister(payload, from)
 	case protocol.TypeAuthResponse:
-		r.handleAuthResponse(payload, from, conn)
+		r.handleAuthResponse(payload, from)
 	case protocol.TypeKeepAlive:
 		r.handleKeepAlive(from)
 	case protocol.TypePeerRequest:
-		r.handlePeerRequest(from, conn)
+		r.handlePeerRequest(from)
 	case protocol.TypeData:
-		r.handleRelay(payload, from, conn)
+		r.handleRelay(payload, from)
 	case protocol.TypeHolePunch:
-		r.handleHolePunch(payload, from, conn)
+		r.handleHolePunch(payload, from)
 	case protocol.TypeDisconnect:
 		r.handleDisconnect(from)
 	case protocol.TypePong:
@@ -206,7 +223,7 @@ func (r *Room) HandlePacket(msgType byte, payload []byte, from *net.UDPAddr, con
 
 // ── Register ───────────────────────────────────────────────────
 
-func (r *Room) handleRegister(payload []byte, from *net.UDPAddr, conn *net.UDPConn) {
+func (r *Room) handleRegister(payload []byte, from *net.UDPAddr) {
 	reg, err := protocol.UnmarshalRegister(payload)
 	if err != nil {
 		return
@@ -215,17 +232,17 @@ func (r *Room) handleRegister(payload []byte, from *net.UDPAddr, conn *net.UDPCo
 	t := i18n.T()
 
 	if len(reg.Username) == 0 || len(reg.Username) > maxUsernameLen {
-		r.sendKick(from, t.KickInvalidName, conn)
+		r.sendKick(from, t.KickInvalidName)
 		return
 	}
 	if len(reg.RoomID) == 0 || len(reg.RoomID) > maxRoomIDLen {
-		r.sendKick(from, t.KickInvalidRoom, conn)
+		r.sendKick(from, t.KickInvalidRoom)
 		return
 	}
 
 	clientIP := from.IP.String()
 	if !r.checkRegRate(clientIP) {
-		r.sendKick(from, t.KickRateLimit, conn)
+		r.sendKick(from, t.KickRateLimit)
 		return
 	}
 
@@ -234,7 +251,7 @@ func (r *Room) handleRegister(payload []byte, from *net.UDPAddr, conn *net.UDPCo
 
 	if existing := r.addrMap[fromKey]; existing != nil && existing.auth == authChallengeSent {
 		r.mu.Unlock()
-		r.sendKick(from, t.KickAuthPending, conn)
+		r.sendKick(from, t.KickAuthPending)
 		return
 	}
 
@@ -242,8 +259,8 @@ func (r *Room) handleRegister(payload []byte, from *net.UDPAddr, conn *net.UDPCo
 		existing.LastSeen = time.Now()
 		selfIP := existing.VirtualIP
 		r.mu.Unlock()
-		r.sendAssignIP(selfIP, from, conn)
-		r.sendPeerInfoToClient(from, conn)
+		r.sendAssignIP(selfIP, from)
+		r.sendPeerInfoToClient(from)
 		return
 	}
 
@@ -252,13 +269,13 @@ func (r *Room) handleRegister(payload []byte, from *net.UDPAddr, conn *net.UDPCo
 	r.ipConnMu.Unlock()
 	if ipCount >= r.maxPerIP {
 		r.mu.Unlock()
-		r.sendKick(from, t.KickIPLimit, conn)
+		r.sendKick(from, t.KickIPLimit)
 		return
 	}
 
 	if len(r.clients) >= r.maxPlayers {
 		r.mu.Unlock()
-		r.sendKick(from, t.KickRoomFull, conn)
+		r.sendKick(from, t.KickRoomFull)
 		return
 	}
 
@@ -268,31 +285,31 @@ func (r *Room) handleRegister(payload []byte, from *net.UDPAddr, conn *net.UDPCo
 		}
 		if c.authRoomID == reg.RoomID && c.Username == reg.Username {
 			r.mu.Unlock()
-			r.sendKick(from, t.KickDuplicateName, conn)
+			r.sendKick(from, t.KickDuplicateName)
 			return
 		}
 	}
 
 	if r.roomPass == "" {
-		r.registerClientLocked(reg, from, conn)
+		r.registerClientLocked(reg, from)
 		return
 	}
 
 	if r.pendingAuth >= r.maxPending {
 		r.mu.Unlock()
-		r.sendKick(from, t.KickServerBusy, conn)
+		r.sendKick(from, t.KickServerBusy)
 		return
 	}
 
-	r.sendAuthChallengeLocked(reg, from, conn)
+	r.sendAuthChallengeLocked(reg, from)
 }
 
-func (r *Room) registerClientLocked(reg *protocol.RegisterPayload, from *net.UDPAddr, conn *net.UDPConn) {
+func (r *Room) registerClientLocked(reg *protocol.RegisterPayload, from *net.UDPAddr) {
 	t := i18n.T()
 	vip := r.nextAvailableIP()
 	if vip == nil {
 		r.mu.Unlock()
-		r.sendKick(from, t.KickIPExhausted, conn)
+		r.sendKick(from, t.KickIPExhausted)
 		return
 	}
 
@@ -323,18 +340,19 @@ func (r *Room) registerClientLocked(reg *protocol.RegisterPayload, from *net.UDP
 	selfIP := vip
 	r.mu.Unlock()
 
-	r.sendAssignIP(selfIP, from, conn)
-	r.sendPeerInfoToClient(from, conn)
+	r.sendAssignIP(selfIP, from)
+	r.sendPeerInfoToClient(from)
 	r.peerInfoDirty.Store(true)
+	r.markDirty()
 }
 
-func (r *Room) sendAuthChallengeLocked(reg *protocol.RegisterPayload, from *net.UDPAddr, conn *net.UDPConn) {
+func (r *Room) sendAuthChallengeLocked(reg *protocol.RegisterPayload, from *net.UDPAddr) {
 	t := i18n.T()
 	challenge, err := auth.GenerateChallenge()
 	if err != nil {
 		r.mu.Unlock()
 		log.Printf(t.LogChallengeFail, err)
-		r.sendKick(from, t.KickInternalError, conn)
+		r.sendKick(from, t.KickInternalError)
 		return
 	}
 
@@ -352,10 +370,10 @@ func (r *Room) sendAuthChallengeLocked(reg *protocol.RegisterPayload, from *net.
 	r.mu.Unlock()
 
 	acp := &protocol.AuthChallengePayload{Challenge: challenge, ClientAddr: from.String()}
-	r.sendChecked(protocol.TypeAuthChallenge, acp.Marshal(), from, conn)
+	r.sendChecked(protocol.TypeAuthChallenge, acp.Marshal(), from)
 }
 
-func (r *Room) handleAuthResponse(payload []byte, from *net.UDPAddr, conn *net.UDPConn) {
+func (r *Room) handleAuthResponse(payload []byte, from *net.UDPAddr) {
 	resp, err := protocol.UnmarshalAuthResponse(payload)
 	if err != nil {
 		return
@@ -371,7 +389,7 @@ func (r *Room) handleAuthResponse(payload []byte, from *net.UDPAddr, conn *net.U
 
 	if c == nil || c.auth != authChallengeSent {
 		r.mu.Unlock()
-		r.sendKick(from, t.KickAuthAbnormal, conn)
+		r.sendKick(from, t.KickAuthAbnormal)
 		return
 	}
 
@@ -381,7 +399,7 @@ func (r *Room) handleAuthResponse(payload []byte, from *net.UDPAddr, conn *net.U
 			r.pendingAuth--
 		}
 		r.mu.Unlock()
-		r.sendKick(from, t.KickAuthTimeout, conn)
+		r.sendKick(from, t.KickAuthTimeout)
 		return
 	}
 
@@ -392,7 +410,7 @@ func (r *Room) handleAuthResponse(payload []byte, from *net.UDPAddr, conn *net.U
 			r.pendingAuth--
 		}
 		r.mu.Unlock()
-		r.sendKick(from, t.KickInternalError, conn)
+		r.sendKick(from, t.KickInternalError)
 		return
 	}
 
@@ -404,7 +422,7 @@ func (r *Room) handleAuthResponse(payload []byte, from *net.UDPAddr, conn *net.U
 		r.mu.Unlock()
 		log.Printf(t.LogAuthFail, resp.Username, from)
 		r.authFailures.Add(1)
-		r.sendKick(from, t.KickWrongPassword, conn)
+		r.sendKick(from, t.KickWrongPassword)
 		return
 	}
 
@@ -416,7 +434,7 @@ func (r *Room) handleAuthResponse(payload []byte, from *net.UDPAddr, conn *net.U
 
 	if len(r.clients) >= r.maxPlayers {
 		r.mu.Unlock()
-		r.sendKick(from, t.KickRoomFull, conn)
+		r.sendKick(from, t.KickRoomFull)
 		return
 	}
 
@@ -426,13 +444,13 @@ func (r *Room) handleAuthResponse(payload []byte, from *net.UDPAddr, conn *net.U
 		}
 		if existing.authRoomID == resp.RoomID && existing.Username == resp.Username {
 			r.mu.Unlock()
-			r.sendKick(from, t.KickDuplicateName, conn)
+			r.sendKick(from, t.KickDuplicateName)
 			return
 		}
 	}
 
 	reg := &protocol.RegisterPayload{RoomID: resp.RoomID, Username: resp.Username}
-	r.registerClientLocked(reg, from, conn)
+	r.registerClientLocked(reg, from)
 }
 
 // ── KeepAlive / Disconnect / Pong ──────────────────────────────
@@ -471,7 +489,12 @@ func (r *Room) handleDisconnect(from *net.UDPAddr) {
 	}
 	delete(r.addrMap, fromKey)
 	r.mu.Unlock()
+
+	if r.bwLimiter != nil {
+		r.bwLimiter.Remove(from)
+	}
 	r.peerInfoDirty.Store(true)
+	r.markDirty()
 }
 
 func (r *Room) handlePong(payload []byte, from *net.UDPAddr) {
@@ -494,7 +517,7 @@ func (r *Room) handlePong(payload []byte, from *net.UDPAddr) {
 
 // ── Relay ──────────────────────────────────────────────────────
 
-func (r *Room) handleRelay(payload []byte, from *net.UDPAddr, conn *net.UDPConn) {
+func (r *Room) handleRelay(payload []byte, from *net.UDPAddr) {
 	if len(payload) < 8 {
 		return
 	}
@@ -536,13 +559,16 @@ func (r *Room) handleRelay(payload []byte, from *net.UDPAddr, conn *net.UDPConn)
 		return
 	}
 	encoded := protocol.EncodeChecked(protocol.TypeData, payload)
+	packetSize := len(encoded)
 	for _, addr := range targets {
-		r.sendCheckedRaw(encoded, addr, conn)
+		if r.bwLimiter == nil || r.bwLimiter.Allow(addr, packetSize) {
+			r.sendCheckedRaw(encoded, addr)
+		}
 	}
 	r.totalPacketsRelay.Add(1)
 }
 
-func (r *Room) handleHolePunch(payload []byte, from *net.UDPAddr, conn *net.UDPConn) {
+func (r *Room) handleHolePunch(payload []byte, from *net.UDPAddr) {
 	if len(payload) < 4 {
 		return
 	}
@@ -561,33 +587,36 @@ func (r *Room) handleHolePunch(payload []byte, from *net.UDPAddr, conn *net.UDPC
 	punchData := make([]byte, 4+len(addrStr))
 	copy(punchData[:4], src.VirtualIP.To4())
 	copy(punchData[4:], []byte(addrStr))
-	r.sendChecked(protocol.TypeHolePunch, punchData, dst.PublicAddr, conn)
+	r.sendChecked(protocol.TypeHolePunch, punchData, dst.PublicAddr)
 }
 
 // ── Peer Info ──────────────────────────────────────────────────
 
-func (r *Room) handlePeerRequest(from *net.UDPAddr, conn *net.UDPConn) {
+func (r *Room) handlePeerRequest(from *net.UDPAddr) {
 	r.mu.RLock()
 	c := r.addrMap[addrToRateKey(from)]
 	r.mu.RUnlock()
 	if c == nil {
 		return
 	}
-	r.sendPeerInfoToClient(from, conn)
+	r.sendPeerInfoToClient(from)
 }
 
-func (r *Room) sendPeerInfoToClient(target *net.UDPAddr, conn *net.UDPConn) {
+func (r *Room) sendPeerInfoToClient(target *net.UDPAddr) {
 	encoded := r.getEncodedPeerInfo()
-	r.sendCheckedRaw(encoded, target, conn)
+	r.sendCheckedRaw(encoded, target)
 }
 
-func (r *Room) sendPeerInfoBroadcast(conn *net.UDPConn) {
+func (r *Room) sendPeerInfoBroadcast() {
 	r.mu.RLock()
 	if len(r.clients) == 0 {
 		r.mu.RUnlock()
 		return
 	}
-	targets := make([]*net.UDPAddr, 0, len(r.clients))
+
+	// Use stack-allocated array for small rooms to avoid heap allocation
+	var stackTargets [maxInlineTargets]*net.UDPAddr
+	targets := stackTargets[:0]
 	for _, c := range r.clients {
 		targets = append(targets, c.PublicAddr)
 	}
@@ -595,7 +624,7 @@ func (r *Room) sendPeerInfoBroadcast(conn *net.UDPConn) {
 
 	encoded := r.getEncodedPeerInfo()
 	for _, addr := range targets {
-		r.sendCheckedRaw(encoded, addr, conn)
+		r.sendCheckedRaw(encoded, addr)
 	}
 }
 
@@ -609,7 +638,8 @@ func (r *Room) getEncodedPeerInfo() []byte {
 	}
 
 	r.mu.RLock()
-	peers := &protocol.PeerInfoPayload{}
+	peers := protocol.GetPeerInfoPayload()
+	peers.Peers = peers.Peers[:0] // reset slice but keep capacity
 	for _, c := range r.clients {
 		peers.Peers = append(peers.Peers, protocol.PeerInfoEntry{
 			VirtualIP:  c.VirtualIP,
@@ -620,6 +650,7 @@ func (r *Room) getEncodedPeerInfo() []byte {
 	r.mu.RUnlock()
 
 	encoded := protocol.EncodeChecked(protocol.TypePeerInfo, peers.Marshal())
+	protocol.PutPeerInfoPayload(peers)
 	r.peerInfoEncoded = encoded
 	r.peerInfoCachedAt = now
 	r.peerInfoMu.Unlock()
@@ -628,38 +659,66 @@ func (r *Room) getEncodedPeerInfo() []byte {
 
 // ── Send Helpers ───────────────────────────────────────────────
 
-func (r *Room) sendChecked(typ byte, payload []byte, to *net.UDPAddr, conn *net.UDPConn) {
+// sendErrorLogInterval is how often to log send errors (rate limiting).
+const sendErrorLogInterval = 1 * time.Minute
+
+func (r *Room) sendChecked(typ byte, payload []byte, to *net.UDPAddr) {
 	data := protocol.EncodeChecked(typ, payload)
-	if _, err := conn.WriteToUDP(data, to); err != nil {
-		n := r.sendErrors.Add(1)
-		if n&(n-1) == 0 {
-			log.Printf(i18n.T().ServerSendFail, n, err)
-		}
+	if _, err := r.conn.WriteToUDP(data, to); err != nil {
+		r.sendErrors.Add(1)
+		r.logSendError(err)
 	}
 }
 
-func (r *Room) sendCheckedRaw(data []byte, to *net.UDPAddr, conn *net.UDPConn) {
-	if _, err := conn.WriteToUDP(data, to); err != nil {
-		n := r.sendErrors.Add(1)
-		if n&(n-1) == 0 {
-			log.Printf(i18n.T().ServerSendFail, n, err)
-		}
+func (r *Room) sendCheckedRaw(data []byte, to *net.UDPAddr) {
+	if _, err := r.conn.WriteToUDP(data, to); err != nil {
+		r.sendErrors.Add(1)
+		r.logSendError(err)
 	}
 }
 
-func (r *Room) sendKick(to *net.UDPAddr, reason string, conn *net.UDPConn) {
+// logSendError logs send errors with rate limiting.
+// Instead of logging every error (or only powers of 2), it logs
+// a summary every sendErrorLogInterval when errors are occurring.
+func (r *Room) logSendError(err error) {
+	r.sendErrorCountSinceLog.Add(1)
+
+	r.sendErrorMu.Lock()
+	defer r.sendErrorMu.Unlock()
+
+	now := time.Now()
+	if now.Sub(r.lastSendErrorLog) < sendErrorLogInterval {
+		return
+	}
+
+	count := r.sendErrorCountSinceLog.Swap(0)
+	if count > 0 {
+		r.lastSendErrorLog = now
+		log.Printf(i18n.T().ServerSendFail, r.sendErrors.Load(), 
+			fmt.Sprintf("(%d errors in last minute, last: %v)", count, err))
+	}
+}
+
+func (r *Room) sendKick(to *net.UDPAddr, reason string) {
 	kick := &protocol.KickPayload{Reason: reason}
-	r.sendChecked(protocol.TypeKick, kick.Marshal(), to, conn)
+	r.sendChecked(protocol.TypeKick, kick.Marshal(), to)
 	r.totalKicks.Add(1)
 }
 
-func (r *Room) sendAssignIP(vip net.IP, to *net.UDPAddr, conn *net.UDPConn) {
+func (r *Room) sendAssignIP(vip net.IP, to *net.UDPAddr) {
 	assign := &protocol.AssignIPPayload{
 		VirtualIP:  vip,
 		SubnetMask: r.subnet.Mask,
 		ServerIP:   r.serverIP,
 	}
-	r.sendChecked(protocol.TypeAssignIP, assign.Marshal(), to, conn)
+	r.sendChecked(protocol.TypeAssignIP, assign.Marshal(), to)
+}
+
+// markDirty notifies the server that room state has changed (for persistence).
+func (r *Room) markDirty() {
+	if r.onDirty != nil {
+		r.onDirty()
+	}
 }
 
 // ── Keepalive Cleanup ──────────────────────────────────────────
@@ -721,6 +780,10 @@ func (r *Room) CleanupStale() bool {
 		}
 	}
 	r.mu.Unlock()
+
+	if changed {
+		r.markDirty()
+	}
 	return changed
 }
 
@@ -806,4 +869,124 @@ func (r *Room) ClientCount() int {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	return len(r.clients)
+}
+
+// ── Room Lifecycle Loops ─────────────────────────────────────
+
+// peerInfoLoop periodically checks the dirty flag and broadcasts PeerInfo.
+// This coalesces rapid join/leave events into a single broadcast per interval.
+func (r *Room) peerInfoLoop(ctx context.Context) {
+	ticker := time.NewTicker(peerInfoInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+
+		if r.peerInfoDirty.CompareAndSwap(true, false) {
+			r.sendPeerInfoBroadcast()
+		}
+	}
+}
+
+// pingLoop periodically sends TypePing to all authenticated clients
+// and tracks timeout (missed pong) for loss rate calculation.
+func (r *Room) pingLoop(ctx context.Context) {
+	ticker := time.NewTicker(pingInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+
+		now := time.Now()
+
+		r.mu.Lock()
+		if len(r.clients) == 0 {
+			r.mu.Unlock()
+			continue
+		}
+
+		// Mark previous pings as missed if no pong received within 2*interval.
+		for _, c := range r.clients {
+			if !c.lastPingSent.IsZero() && now.Sub(c.lastPingSent) > 2*pingInterval {
+				c.pingHistory[c.pingIdx%pingHistorySize] = 0 // missed
+				c.pingIdx++
+			}
+		}
+
+		// Send pings and record sequence/time.
+		ts := now.UnixNano()
+		ping := &protocol.PingPayload{Timestamp: ts}
+		encoded := protocol.EncodeChecked(protocol.TypePing, ping.Marshal())
+		for _, c := range r.clients {
+			c.pingSeq++
+			c.lastPingSent = now
+			c.lastPingSeq = c.pingSeq
+			r.sendCheckedRaw(encoded, c.PublicAddr)
+		}
+		r.mu.Unlock()
+	}
+}
+
+// ── State Persistence ────────────────────────────────────────
+
+// SnapshotState creates a RoomState from the current in-memory state.
+func (r *Room) SnapshotState() RoomState {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	clients := make(map[string]ClientEntry, len(r.clients))
+	for _, c := range r.clients {
+		// Skip clients still in auth challenge (not fully registered)
+		if c.auth == authChallengeSent {
+			continue
+		}
+		ipStr := c.VirtualIP.String()
+		clients[ipStr] = ClientEntry{
+			Username:  c.Username,
+			VirtualIP: ipStr,
+			LastSeen:  c.LastSeen,
+		}
+	}
+
+	return RoomState{
+		Version:   stateVersion,
+		Subnet:    r.subnet.String(),
+		UpdatedAt: time.Now(),
+		IPBitmap:  r.ipBitmap,
+		Clients:   clients,
+	}
+}
+
+// resolveRestoredClient handles a client that was restored from persisted state.
+// When a client reconnects and its virtual IP was pre-reserved, we attach the
+// real PublicAddr and return the existing IP.
+// Returns the restored client if matched, nil otherwise.
+// MUST be called with r.mu held.
+func (r *Room) resolveRestoredClient(username string, roomID string, from *net.UDPAddr) *Client {
+	// Look for a placeholder client with matching username and no PublicAddr
+	for _, c := range r.clients {
+		if c.Username == username && c.PublicAddr == nil && c.auth == authNone {
+			// Attach the real address
+			c.PublicAddr = from
+			c.LastSeen = time.Now()
+			r.addrMap[addrToRateKey(from)] = c
+
+			// Track per-IP connection count
+			clientIP := from.IP.String()
+			r.ipConnMu.Lock()
+			r.ipConnCount[clientIP]++
+			r.ipConnMu.Unlock()
+
+			return c
+		}
+	}
+	return nil
 }

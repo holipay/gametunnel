@@ -102,7 +102,7 @@ func main() {
 		authStatus = t.ServerHMACAuth
 	}
 	log.Printf("════════════════════════════════════════════════════════════")
-	log.Printf(t.ServerBanner)
+	log.Printf("%s", t.ServerBanner)
 	log.Printf("════════════════════════════════════════════════════════════")
 	log.Printf("▎  %-7s %-31s ▎", t.ServerAddr+":", *addr)
 	log.Printf("▎  %-7s %-31s ▎", t.ServerSubnet+":", subnet.String())

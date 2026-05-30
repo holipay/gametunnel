@@ -1,7 +1,10 @@
 // Package i18n provides simple internationalization for GameTunnel.
 package i18n
 
-import "fmt"
+import (
+	"fmt"
+	"sync/atomic"
+)
 
 // Lang represents a supported language.
 type Lang string
@@ -495,28 +498,31 @@ var enStrings = &Strings{
 	LogTUNConsecFail:    "[tunnel] TUN read failed %d times consecutively, exiting: %v",
 }
 
-var current *Strings = zhStrings // default to Chinese for backward compatibility
+var current atomic.Pointer[Strings]
+
+func init() {
+	// Default to Chinese for backward compatibility
+	current.Store(zhStrings)
+}
 
 // Set switches the active language.
 func Set(lang Lang) {
 	switch lang {
 	case EN:
-		current = enStrings
-	case ZH:
-		current = zhStrings
+		current.Store(enStrings)
 	default:
-		current = zhStrings
+		current.Store(zhStrings)
 	}
 }
 
 // S returns the current language strings.
 func S() *Strings {
-	return current
+	return current.Load()
 }
 
 // T is a convenience shorthand: i18n.T().FieldName
 func T() *Strings {
-	return current
+	return current.Load()
 }
 
 // ParseLang parses a language string and returns the Lang constant.

@@ -295,44 +295,59 @@ const statusHTML = `<!DOCTYPE html>
 </body></html>`
 
 func (s *Server) buildStatusInfo() StatusInfo {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	t := i18n.T()
 	now := time.Now()
-	conns := make([]ConnectionInfo, 0, len(s.clients))
-	for _, c := range s.clients {
-		idle := now.Sub(c.LastSeen)
-		idleStr := t.StatusJustNow
-		if idle > time.Second {
-			idleStr = fmt.Sprintf(t.StatusSecAgo, int(idle.Seconds()))
+
+	// Collect connections from default room (single-room) or all rooms (multi-room)
+	var conns []ConnectionInfo
+	var totalPlayers int
+	var maxPlayers int
+	var subnet string
+	var serverIP string
+	var hasAuth bool
+	var totalRegistrations uint64
+	var authFailures uint64
+	var peakPlayers uint32
+	var totalPacketsRelay uint64
+	var totalPacketsDropped uint64
+	var totalKicks uint64
+
+	if s.multiRoom {
+		// Multi-room: aggregate from all rooms
+		s.roomMu.RLock()
+		for _, room := range s.rooms {
+			status := room.BuildRoomStatus()
+			conns = append(conns, status.Connections...)
+			totalPlayers += status.Players
+			maxPlayers += status.MaxPlayers
+			totalRegistrations += status.TotalRegistrations
+			authFailures += status.AuthFailures
+			if status.PeakPlayers > peakPlayers {
+				peakPlayers = status.PeakPlayers
+			}
+			totalPacketsRelay += status.TotalPacketsRelay
+			totalPacketsDropped += status.TotalPacketsDropped
+			totalKicks += status.TotalKicks
 		}
-		pubAddr := ""
-		if c.PublicAddr != nil {
-			pubAddr = c.PublicAddr.String()
+		s.roomMu.RUnlock()
+		if s.defaultRoom != nil {
+			subnet = s.defaultRoom.subnet.String()
+			serverIP = s.defaultRoom.serverIP.String()
 		}
-		pingStr := "--"
-		if c.RTT > 0 {
-			pingStr = fmt.Sprintf("%dms", c.RTT.Milliseconds())
-		}
-		lossRate, jitter := c.PingStats()
-		lossStr := "--"
-		if c.pingIdx > 0 {
-			lossStr = fmt.Sprintf("%.0f%%", lossRate*100)
-		}
-		jitterStr := "--"
-		if jitter > 0 {
-			jitterStr = fmt.Sprintf("%dms", jitter.Milliseconds())
-		}
-		conns = append(conns, ConnectionInfo{
-			Username:   c.Username,
-			VirtualIP:  c.VirtualIP.String(),
-			PublicAddr: pubAddr,
-			Idle:       idleStr,
-			Ping:       pingStr,
-			Loss:       lossStr,
-			Jitter:     jitterStr,
-		})
+	} else if s.defaultRoom != nil {
+		// Single-room: get from default room
+		status := s.defaultRoom.BuildRoomStatus()
+		conns = status.Connections
+		totalPlayers = status.Players
+		maxPlayers = status.MaxPlayers
+		subnet = s.defaultRoom.subnet.String()
+		serverIP = s.defaultRoom.serverIP.String()
+		hasAuth = s.defaultRoom.roomPass != ""
+		totalRegistrations = status.TotalRegistrations
+		authFailures = status.AuthFailures
+		peakPlayers = status.PeakPlayers
+		totalPacketsRelay = status.TotalPacketsRelay
+		totalPacketsDropped = status.TotalPacketsDropped
+		totalKicks = status.TotalKicks
 	}
 
 	uptime := now.Sub(s.startTime)
@@ -350,22 +365,22 @@ func (s *Server) buildStatusInfo() StatusInfo {
 	return StatusInfo{
 		Version:     s.version,
 		Uptime:      formatDuration(uptime),
-		Players:     len(s.clients),
-		MaxPlayers:  s.maxPlayers,
-		Subnet:      s.subnet.String(),
-		ServerIP:    s.serverIP.String(),
-		HasAuth:     s.roomPass != "",
+		Players:     totalPlayers,
+		MaxPlayers:  maxPlayers,
+		Subnet:      subnet,
+		ServerIP:    serverIP,
+		HasAuth:     hasAuth,
 		SendErrors:  s.sendErrors.Load(),
 		Connections: conns,
 		MultiRoom:   s.multiRoom,
 		Rooms:       roomInfos,
 
-		TotalRegistrations:  s.totalRegistrations.Load(),
-		AuthFailures:        s.authFailures.Load(),
-		PeakPlayers:         s.peakPlayers.Load(),
-		TotalPacketsRelay:   s.totalPacketsRelay.Load(),
-		TotalPacketsDropped: s.totalPacketsDropped.Load(),
-		TotalKicks:          s.totalKicks.Load(),
+		TotalRegistrations:  totalRegistrations,
+		AuthFailures:        authFailures,
+		PeakPlayers:         peakPlayers,
+		TotalPacketsRelay:   totalPacketsRelay,
+		TotalPacketsDropped: totalPacketsDropped,
+		TotalKicks:          totalKicks,
 	}
 }
 

@@ -10,13 +10,11 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"math/bits"
 	"net"
 	"sync"
 	"sync/atomic"
 	"time"
 
-	"github.com/holipay/gametunnel/internal/auth"
 	"github.com/holipay/gametunnel/internal/protocol"
 	"github.com/holipay/gametunnel/internal/i18n"
 )
@@ -123,14 +121,6 @@ func ipKey(ip net.IP) [16]byte {
 // Server is the GameTunnel relay server.
 type Server struct {
 	conn       *net.UDPConn
-	clients    map[[16]byte]*Client // virtualIP [16]byte → Client
-	addrMap    map[rateKey]*Client // client endpoint → Client (O(1) lookup)
-	mu         sync.RWMutex        // protects clients + addrMap
-	subnet     *net.IPNet
-	maxPlayers int
-	serverIP   net.IP
-	ipBitmap   []uint64 // bitmap for O(1) IP allocation (256 bits for /24)
-	roomPass    string   // room password (empty = no auth)
 	statusAddr  string   // HTTP status address, empty = disabled
 	statusToken string   // status page access token, empty = no auth
 	version     string
@@ -141,34 +131,10 @@ type Server struct {
 	workers int
 	pktCh   chan pktJob
 
-	// PeerInfo batching: coalesce rapid join/leave into periodic broadcasts
-	peerInfoDirty    atomic.Bool // set on join/leave, checked by peerInfoLoop
-	peerInfoMu       sync.Mutex  // protects peerInfo cache
-	peerInfoEncoded  []byte      // cached encoded PeerInfo packet
-	peerInfoCachedAt time.Time   // when the cache was last refreshed
-
 	// Rate limiting: per-client packet count per window
 	rateMu    sync.Mutex
 	rateBuf   [2]map[rateKey]int // double-buffer: [0]=active, [1]=stale
 	rateTick  *time.Ticker
-
-	// Cached auth keys (derived once per roomID, avoids repeated HKDF)
-	authKeys sync.Map // map[string][]byte, roomID → derived key
-
-	// Auth flood protection
-	pendingAuth int
-	maxPending  int
-
-	// Registration rate limiting
-	regMu       sync.Mutex
-	regBuf      [2]map[string]int // double-buffer: [0]=active, [1]=stale
-	regTick     *time.Ticker
-	maxRegPerIP int
-
-	// Per-IP connection count limit (prevents one IP from filling the room)
-	ipConnMu   sync.Mutex
-	ipConnCount map[string]int
-	maxPerIP   int
 
 	// Time-series metrics
 	metricsTS    *MetricsTimeSeries
@@ -178,6 +144,9 @@ type Server struct {
 	rooms       map[string]*Room    // roomID → Room
 	addrToRoom  map[rateKey]*Room   // client addr → Room (fast routing)
 	roomMu      sync.RWMutex        // protects rooms + addrToRoom
+
+	// Default room (single-room mode)
+	defaultRoom *Room
 
 	// Bandwidth limiting
 	bwLimiter    *BandwidthLimiter // per-client outbound bandwidth limiter
@@ -240,10 +209,6 @@ func New(cfg Config) (*Server, error) {
 		return nil, fmt.Errorf("%s", i18n.Format(i18n.T().ServerSubnetMust, ones))
 	}
 
-	serverIP := make(net.IP, 4)
-	copy(serverIP, cfg.Subnet.IP.To4())
-	serverIP[3] = 1
-
 	// Worker pool: 1 worker per 4 players, clamped to [8, 32]
 	workers := cfg.MaxPlayers / 4
 	if workers < 8 {
@@ -262,15 +227,15 @@ func New(cfg Config) (*Server, error) {
 	// Tune UDP socket buffers (ignoring error on non-Linux platforms)
 	setSocketBuffers(conn)
 
+	maxPerIP := cfg.MaxPerIP
+	if maxPerIP <= 0 {
+		maxPerIP = 3
+	}
+
+	bwLimiter := NewBandwidthLimiter(cfg.BandwidthLimit)
+
 	s := &Server{
 		conn:        conn,
-		clients:     make(map[[16]byte]*Client),
-		addrMap:     make(map[rateKey]*Client),
-		subnet:      cfg.Subnet,
-		maxPlayers:  cfg.MaxPlayers,
-		serverIP:    serverIP,
-		ipBitmap:    make([]uint64, 4), // 256 bits for /24 subnet
-		roomPass:    cfg.RoomPass,
 		statusAddr:  cfg.StatusAddr,
 		statusToken: cfg.StatusToken,
 		version:     cfg.Version,
@@ -279,24 +244,35 @@ func New(cfg Config) (*Server, error) {
 		workers:     workers,
 		pktCh:       make(chan pktJob, chanBuf),
 		rateBuf:     [2]map[rateKey]int{make(map[rateKey]int), make(map[rateKey]int)},
-		maxPending:  cfg.MaxPlayers * 3,
-		regBuf:      [2]map[string]int{make(map[string]int), make(map[string]int)},
-		maxRegPerIP: 5,
-		ipConnCount: make(map[string]int),
 		metricsTS:   NewMetricsTimeSeries(),
 		rooms:       make(map[string]*Room),
 		addrToRoom:  make(map[rateKey]*Room),
 		multiRoom:   cfg.MultiRoom,
-		maxPerIP:    cfg.MaxPerIP,
 		stateDir:    cfg.StateDir,
-		bwLimiter:   NewBandwidthLimiter(cfg.BandwidthLimit),
+		bwLimiter:   bwLimiter,
 	}
-	if s.maxPerIP <= 0 {
-		s.maxPerIP = 3
+
+	// Create default room for single-room mode
+	if !cfg.MultiRoom {
+		defaultRoom, err := NewRoom(RoomConfig{
+			RoomID:     "default",
+			RoomPass:   cfg.RoomPass,
+			Subnet:     cfg.Subnet,
+			MaxPlayers: cfg.MaxPlayers,
+			MaxPerIP:   maxPerIP,
+			Conn:       conn,
+			BWLimiter:  bwLimiter,
+		})
+		if err != nil {
+			conn.Close()
+			return nil, fmt.Errorf("failed to create default room: %w", err)
+		}
+		defaultRoom.onDirty = func() {
+			s.persistDirty.Store(true)
+		}
+		s.defaultRoom = defaultRoom
+		s.rooms["default"] = defaultRoom
 	}
-	s.markIPUsed(net.IPv4(serverIP[0], serverIP[1], serverIP[2], 0))   // network address
-	s.markIPUsed(serverIP)                                             // server IP
-	s.markIPUsed(net.IPv4(serverIP[0], serverIP[1], serverIP[2], 255)) // broadcast
 
 	// Load persisted state (if any)
 	if err := s.loadState(); err != nil {
@@ -310,13 +286,18 @@ func New(cfg Config) (*Server, error) {
 func (s *Server) Run(ctx context.Context) {
 	s.startStatusServer(ctx, s.statusAddr)
 	go s.keepaliveLoop(ctx)
-	go s.pingLoop(ctx)
 	go s.rateLimitLoop(ctx)
-	go s.regRateLimitLoop(ctx)
-	go s.peerInfoLoop(ctx)
 	go s.persistLoop(ctx)
 	go s.metricsLoop(ctx)
 	go s.bwCleanupLoop(ctx)
+
+	// Start room-specific loops
+	s.roomMu.RLock()
+	for _, room := range s.rooms {
+		go room.peerInfoLoop(ctx)
+		go room.pingLoop(ctx)
+	}
+	s.roomMu.RUnlock()
 
 	for i := 0; i < s.workers; i++ {
 		go s.worker(ctx)
@@ -360,41 +341,6 @@ func (s *Server) Close() error {
 	return s.conn.Close()
 }
 
-// ServerIP returns the server's virtual IP.
-func (s *Server) ServerIP() net.IP {
-	return s.serverIP
-}
-
-// markIPUsed marks an IP address as taken in the allocation bitmap.
-// MUST be called with s.mu held.
-func (s *Server) markIPUsed(ip net.IP) {
-	octet := ip.To4()[3]
-	s.ipBitmap[octet/64] |= 1 << (octet % 64)
-}
-
-// markIPFree marks an IP address as available in the allocation bitmap.
-// MUST be called with s.mu held.
-func (s *Server) markIPFree(ip net.IP) {
-	octet := ip.To4()[3]
-	s.ipBitmap[octet/64] &^= 1 << (octet % 64)
-}
-
-// nextAvailableIP finds the next unallocated IP in the subnet using a bitmap.
-// MUST be called with s.mu held. O(1) average case.
-func (s *Server) nextAvailableIP() net.IP {
-	base := s.subnet.IP.To4()
-	for i, word := range s.ipBitmap {
-		if word != ^uint64(0) {
-			bit := bits.TrailingZeros64(^word)
-			octet := i*64 + bit
-			if octet >= 2 && octet < 255 {
-				return net.IPv4(base[0], base[1], base[2], byte(octet))
-			}
-		}
-	}
-	return nil
-}
-
 // ── Worker Pool ────────────────────────────────────────────────
 
 func (s *Server) worker(ctx context.Context) {
@@ -424,29 +370,14 @@ func (s *Server) handlePacket(data []byte, from *net.UDPAddr) {
 		return
 	}
 
-	// Multi-room mode: route to the correct room
 	if s.multiRoom {
 		s.handlePacketMultiRoom(msg, from)
 		return
 	}
 
-	switch msg.Type {
-	case protocol.TypeRegister:
-		s.handleRegister(msg.Payload, from)
-	case protocol.TypeAuthResponse:
-		s.handleAuthResponse(msg.Payload, from)
-	case protocol.TypeKeepAlive:
-		s.handleKeepAlive(from)
-	case protocol.TypePeerRequest:
-		s.handlePeerRequest(from)
-	case protocol.TypeData:
-		s.handleRelay(msg.Payload, from)
-	case protocol.TypeHolePunch:
-		s.handleHolePunch(msg.Payload, from)
-	case protocol.TypeDisconnect:
-		s.handleDisconnect(from)
-	case protocol.TypePong:
-		s.handlePong(msg.Payload, from)
+	// Single-room mode: route to default room
+	if s.defaultRoom != nil {
+		s.defaultRoom.HandlePacket(msg.Type, msg.Payload, from)
 	}
 }
 
@@ -470,7 +401,7 @@ func (s *Server) handlePacketMultiRoom(msg *protocol.Message, from *net.UDPAddr)
 		return // not registered in any room
 	}
 
-	room.HandlePacket(msg.Type, msg.Payload, from, s.conn)
+	room.HandlePacket(msg.Type, msg.Payload, from)
 }
 
 func (s *Server) handleRegisterMultiRoom(payload []byte, from *net.UDPAddr) {
@@ -499,10 +430,12 @@ func (s *Server) handleRegisterMultiRoom(payload []byte, from *net.UDPAddr) {
 		var err error
 		room, err = NewRoom(RoomConfig{
 			RoomID:     reg.RoomID,
-			RoomPass:   s.roomPass, // inherit server password
+			RoomPass:   "", // multi-room mode uses per-room auth (future)
 			Subnet:     subnet,
-			MaxPlayers: s.maxPlayers,
-			MaxPerIP:   s.maxPerIP,
+			MaxPlayers: 254, // default max for multi-room
+			MaxPerIP:   3,
+			Conn:       s.conn,
+			BWLimiter:  s.bwLimiter,
 		})
 		if err != nil {
 			s.roomMu.Unlock()
@@ -514,12 +447,10 @@ func (s *Server) handleRegisterMultiRoom(payload []byte, from *net.UDPAddr) {
 	}
 	s.roomMu.Unlock()
 
-	// Register client in the room (also adds to addrToRoom)
+	// Register client in the room
 	fromKey := addrToRateKey(from)
 
-	// Temporarily add to room's addrMap for registration
-	// The room's handleRegister will process the actual registration
-	room.HandlePacket(protocol.TypeRegister, payload, from, s.conn)
+	room.HandlePacket(protocol.TypeRegister, payload, from)
 
 	// If client was registered (has a client entry), add to addrToRoom
 	room.mu.RLock()
@@ -534,9 +465,12 @@ func (s *Server) handleRegisterMultiRoom(payload []byte, from *net.UDPAddr) {
 // allocateSubnet finds an unused /24 subnet for a new room.
 // Uses 10.10.{room_index}.0/24 starting from 10.10.2.0.
 func (s *Server) allocateSubnet() *net.IPNet {
-	// Derive room subnets from the server's configured subnet prefix.
+	// Derive room subnets from the default room's subnet prefix.
 	// e.g. server -subnet 192.168.1.0/24 → rooms get 192.168.2.0/24, 192.168.3.0/24, ...
-	base := s.subnet.IP.To4()
+	if s.defaultRoom == nil {
+		return nil
+	}
+	base := s.defaultRoom.subnet.IP.To4()
 	if base == nil {
 		return nil
 	}
@@ -574,99 +508,21 @@ func (s *Server) keepaliveLoop(ctx context.Context) {
 		case <-ticker.C:
 		}
 
-		if s.multiRoom {
-			s.keepaliveLoopMultiRoom()
-		} else {
-			s.keepaliveLoopSingleRoom()
+		// Clean up stale clients in all rooms
+		s.roomMu.RLock()
+		rooms := make([]*Room, 0, len(s.rooms))
+		for _, r := range s.rooms {
+			rooms = append(rooms, r)
 		}
-	}
-}
+		s.roomMu.RUnlock()
 
-func (s *Server) keepaliveLoopSingleRoom() {
-	now := time.Now()
-
-	s.mu.RLock()
-	type staleClient struct {
-		key [16]byte
-		c   *Client
-	}
-	type staleAuth struct {
-		key rateKey
-		c   *Client
-	}
-	var staleClients []staleClient
-	var staleAuths []staleAuth
-	for key, c := range s.clients {
-		if now.Sub(c.LastSeen) > 30*time.Second {
-			staleClients = append(staleClients, staleClient{key: key, c: c})
-		}
-	}
-	for addrKey, c := range s.addrMap {
-		if c.auth == authChallengeSent && now.Sub(c.challengeAt) > 30*time.Second {
-			staleAuths = append(staleAuths, staleAuth{key: addrKey, c: c})
-		}
-	}
-	s.mu.RUnlock()
-
-	if len(staleClients) == 0 && len(staleAuths) == 0 {
-		return
-	}
-
-	s.mu.Lock()
-	changed := false
-	for _, sc := range staleClients {
-		if cur, ok := s.clients[sc.key]; ok && cur == sc.c {
-			log.Printf("%s", i18n.Format(i18n.T().ServerPeerLeave, sc.c.Username, sc.c.VirtualIP))
-			s.markIPFree(sc.c.VirtualIP)
-			delete(s.clients, sc.key)
-			delete(s.addrMap, addrToRateKey(sc.c.PublicAddr))
-			ip := sc.c.PublicAddr.IP.String()
-			s.ipConnMu.Lock()
-			s.ipConnCount[ip]--
-			if s.ipConnCount[ip] <= 0 {
-				delete(s.ipConnCount, ip)
+		for _, room := range rooms {
+			changed := room.CleanupStale()
+			if changed {
+				room.peerInfoDirty.Store(true)
 			}
-			s.ipConnMu.Unlock()
-			changed = true
 		}
 	}
-	for _, sa := range staleAuths {
-		if cur, ok := s.addrMap[sa.key]; ok && cur == sa.c {
-			delete(s.addrMap, sa.key)
-			s.pendingAuth--
-		}
-	}
-	s.mu.Unlock()
-
-	if changed {
-		s.peerInfoDirty.Store(true)
-		s.markDirty()
-	}
-}
-
-func (s *Server) keepaliveLoopMultiRoom() {
-	s.roomMu.RLock()
-	rooms := make([]*Room, 0, len(s.rooms))
-	for _, r := range s.rooms {
-		rooms = append(rooms, r)
-	}
-	s.roomMu.RUnlock()
-
-	for _, room := range rooms {
-		changed := room.CleanupStale()
-		if changed {
-			room.peerInfoDirty.Store(true)
-		}
-	}
-
-	// Clean up empty rooms (optional: uncomment to auto-delete empty rooms)
-	// s.roomMu.Lock()
-	// for id, room := range s.rooms {
-	//     if room.ClientCount() == 0 && time.Since(room.createdAt) > 5*time.Minute {
-	//         delete(s.rooms, id)
-	//     }
-	// }
-	// s.roomMu.Unlock()
 }
 
 // ── Send Helpers ───────────────────────────────────────────────
@@ -681,40 +537,9 @@ func (s *Server) sendChecked(typ byte, payload []byte, to *net.UDPAddr) {
 	}
 }
 
-func (s *Server) sendCheckedRaw(data []byte, to *net.UDPAddr) {
-	if _, err := s.conn.WriteToUDP(data, to); err != nil {
-		n := s.sendErrors.Add(1)
-		if n&(n-1) == 0 {
-			log.Printf("%s", i18n.Format(i18n.T().ServerSendFail, n, err))
-		}
-	}
-}
-
 func (s *Server) sendKick(to *net.UDPAddr, reason string) {
 	kick := &protocol.KickPayload{Reason: reason}
 	s.sendChecked(protocol.TypeKick, kick.Marshal(), to)
-	s.totalKicks.Add(1)
-}
-
-func (s *Server) sendAssignIP(vip net.IP, to *net.UDPAddr) {
-	assign := &protocol.AssignIPPayload{
-		VirtualIP:  vip,
-		SubnetMask: s.subnet.Mask,
-		ServerIP:   s.serverIP,
-	}
-	s.sendChecked(protocol.TypeAssignIP, assign.Marshal(), to)
-}
-
-// getAuthKey returns the cached auth key for the given roomID, deriving it if needed.
-func (s *Server) getAuthKey(roomID string) []byte {
-	if v, ok := s.authKeys.Load(roomID); ok {
-		return v.([]byte)
-	}
-	key := auth.DeriveKey(s.roomPass, roomID)
-	if key != nil {
-		s.authKeys.Store(roomID, key)
-	}
-	return key
 }
 
 // ── Types ──────────────────────────────────────────────────────

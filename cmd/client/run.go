@@ -42,14 +42,21 @@ func run(cfg *client.Config, tunFactory func(client.TunConfig) (client.TunDevice
 // maxLogSize is the maximum log file size before rotation (1 MB).
 const maxLogSize = 1 * 1024 * 1024
 
+// maxLogBackups is the number of old log files to keep.
+const maxLogBackups = 1
+
 func setupLog() *os.File {
 	logDir := filepath.Join(appDataPath(), "GameTunnel")
 	os.MkdirAll(logDir, 0755)
 	logPath := filepath.Join(logDir, "gametunnel.log")
+	logBackup := filepath.Join(logDir, "gametunnel.log.1")
 
-	// Rotate: if log exceeds maxLogSize, truncate on open.
+	// Rotate: if log exceeds maxLogSize, rename to backup
 	if info, err := os.Stat(logPath); err == nil && info.Size() > maxLogSize {
-		os.Remove(logPath)
+		// Remove old backup if it exists
+		os.Remove(logBackup)
+		// Rename current log to backup
+		os.Rename(logPath, logBackup)
 	}
 
 	f, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
