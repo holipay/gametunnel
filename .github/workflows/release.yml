@@ -103,13 +103,27 @@ jobs:
     needs: [release-server, release-client-windows]
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
       - uses: actions/download-artifact@v4
         with:
           merge-multiple: true
 
+      - name: Set version
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            VERSION=$(git describe --tags --abbrev=0)
+          else
+            VERSION=${GITHUB_REF_NAME}
+          fi
+          echo "VERSION=${VERSION}" >> $GITHUB_ENV
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ env.VERSION }}
           generate_release_notes: true
           files: |
             gtunnel-server-linux-amd64
