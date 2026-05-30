@@ -57,6 +57,11 @@ func (s *Server) loadState() error {
 		return nil
 	}
 
+	// Only load state for single-room mode
+	if s.defaultRoom == nil {
+		return nil
+	}
+
 	path := filepath.Join(s.stateDir, stateFileName)
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -76,14 +81,17 @@ func (s *Server) loadState() error {
 		log.Printf("ignoring state file: version %d != %d", state.Version, stateVersion)
 		return nil
 	}
-	if state.Subnet != s.subnet.String() {
-		log.Printf("ignoring state file: subnet %s != %s", state.Subnet, s.subnet.String())
+
+	room := s.defaultRoom
+	if state.Subnet != room.subnet.String() {
+		log.Printf("ignoring state file: subnet %s != %s", state.Subnet, room.subnet.String())
 		return nil
 	}
 
 	now := time.Now()
 	restored := 0
 
+	room.mu.Lock()
 	for _, entry := range state.Clients {
 		ip := net.ParseIP(entry.VirtualIP)
 		if ip == nil || ip.To4() == nil {
@@ -99,7 +107,7 @@ func (s *Server) loadState() error {
 		}
 
 		// Check IP is within subnet
-		if !s.subnet.Contains(ip) {
+		if !room.subnet.Contains(ip) {
 			continue
 		}
 
@@ -108,12 +116,12 @@ func (s *Server) loadState() error {
 			continue
 		}
 
-		// Reserve the IP in bitmap
-		if s.ipBitmap[octet/64]&(1<<(octet%64)) != 0 {
+		// Reserve IP in bitmap
+		if room.ipBitmap[octet/64]&(1<<(octet%64)) != 0 {
 			continue // already taken (e.g. server IP)
 		}
 
-		s.markIPUsed(ip)
+		room.markIPUsed(ip)
 
 		// Create a placeholder client entry. The client will get a fresh
 		// PublicAddr when it reconnects; until then it shows as "offline".
@@ -123,10 +131,11 @@ func (s *Server) loadState() error {
 			LastSeen:  entry.LastSeen,
 			auth:      authNone,
 		}
-		s.clients[ipKey(ip)] = c
+		room.clients[ipKey(ip)] = c
 		// NOTE: do NOT add to addrMap yet — no PublicAddr until reconnect
 		restored++
 	}
+	room.mu.Unlock()
 
 	if restored > 0 {
 		log.Printf(i18n.T().LogStateRestored, restored)
@@ -135,12 +144,6 @@ func (s *Server) loadState() error {
 	// Update the in-memory updatedAt so we know when the state was loaded
 	s.stateLoadedAt = now
 	return nil
-}
-
-// markDirty signals that the room state has changed and needs to be persisted.
-// Safe to call from any goroutine. Non-blocking.
-func (s *Server) markDirty() {
-	s.persistDirty.Store(true)
 }
 
 // persistLoop runs in a background goroutine and writes state to disk
@@ -173,7 +176,12 @@ func (s *Server) saveState() {
 		return
 	}
 
-	state := s.snapshotState()
+	// Only save state for single-room mode
+	if s.defaultRoom == nil {
+		return
+	}
+
+	state := s.defaultRoom.SnapshotState()
 
 	data, err := json.MarshalIndent(state, "", "  ")
 	if err != nil {
@@ -198,60 +206,4 @@ func (s *Server) saveState() {
 		os.Remove(tmpPath)
 		return
 	}
-}
-
-// snapshotState creates a RoomState from the current in-memory state.
-// Must be called with at least s.mu.RLock held... but we take it ourselves
-// to keep the calling code simple.
-func (s *Server) snapshotState() RoomState {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	clients := make(map[string]ClientEntry, len(s.clients))
-	for _, c := range s.clients {
-		// Skip clients still in auth challenge (not fully registered)
-		if c.auth == authChallengeSent {
-			continue
-		}
-		ipStr := c.VirtualIP.String()
-		clients[ipStr] = ClientEntry{
-			Username:  c.Username,
-			VirtualIP: ipStr,
-			LastSeen:  c.LastSeen,
-		}
-	}
-
-	return RoomState{
-		Version:   stateVersion,
-		Subnet:    s.subnet.String(),
-		UpdatedAt: time.Now(),
-		IPBitmap:  s.ipBitmap,
-		Clients:   clients,
-	}
-}
-
-// resolveRestoredClient handles a client that was restored from persisted state.
-// When a client reconnects and its virtual IP was pre-reserved, we attach the
-// real PublicAddr and return the existing IP.
-// Returns (client, true) if a restored slot was matched, (nil, false) otherwise.
-// MUST be called with s.mu held.
-func (s *Server) resolveRestoredClient(username string, roomID string, from *net.UDPAddr) *Client {
-	// Look for a placeholder client with matching username and no PublicAddr
-	for _, c := range s.clients {
-		if c.Username == username && c.PublicAddr == nil && c.auth == authNone {
-			// Attach the real address
-			c.PublicAddr = from
-			c.LastSeen = time.Now()
-			s.addrMap[addrToRateKey(from)] = c
-
-			// Track per-IP connection count
-			clientIP := from.IP.String()
-			s.ipConnMu.Lock()
-			s.ipConnCount[clientIP]++
-			s.ipConnMu.Unlock()
-
-			return c
-		}
-	}
-	return nil
 }

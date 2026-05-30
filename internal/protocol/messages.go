@@ -92,16 +92,45 @@ type PeerInfoPayload struct {
 	Peers []PeerInfoEntry
 }
 
+// peerInfoPayloadPool reuses PeerInfoPayload objects to reduce GC pressure.
+var peerInfoPayloadPool = sync.Pool{
+	New: func() interface{} { return &PeerInfoPayload{} },
+}
+
+// GetPeerInfoPayload gets a PeerInfoPayload from the pool.
+func GetPeerInfoPayload() *PeerInfoPayload {
+	return peerInfoPayloadPool.Get().(*PeerInfoPayload)
+}
+
+// PutPeerInfoPayload returns a PeerInfoPayload to the pool.
+// Callers MUST NOT use the object after calling this.
+func PutPeerInfoPayload(p *PeerInfoPayload) {
+	p.Peers = nil
+	peerInfoPayloadPool.Put(p)
+}
+
 func (p *PeerInfoPayload) Marshal() []byte {
-	total := 2 // peer count
+	// Pre-calculate total size to avoid multiple allocations
+	total := 2 // peer count (2 bytes)
 	for _, peer := range p.Peers {
-		total += 4 + 2 + len(peer.PublicAddr.String()) + 2 + len(peer.Username)
+		total += 4 // VirtualIP (4 bytes IPv4)
+		total += 2 // addr length prefix
+		if peer.PublicAddr != nil {
+			total += len(peer.PublicAddr.String())
+		}
+		total += 2 // username length prefix
+		total += len(peer.Username)
 	}
+
 	buf := make([]byte, 0, total)
 	buf = append(buf, byte(len(p.Peers)), byte(len(p.Peers)>>8))
 	for _, peer := range p.Peers {
 		vip := peer.VirtualIP.To4()
-		buf = append(buf, vip...)
+		if len(vip) == 4 {
+			buf = append(buf, vip...)
+		} else {
+			buf = append(buf, 0, 0, 0, 0) // fallback
+		}
 		addrStr := ""
 		if peer.PublicAddr != nil {
 			addrStr = peer.PublicAddr.String()

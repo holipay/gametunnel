@@ -58,34 +58,3 @@ func (s *Server) rateLimitLoop(ctx context.Context) {
 		}
 	}
 }
-
-// ── Registration Rate Limiting ─────────────────────────────────
-
-// checkRegRate returns true if the IP has not exceeded the registration rate limit.
-func (s *Server) checkRegRate(ip string) bool {
-	s.regMu.Lock()
-	s.regBuf[0][ip]++
-	ok := s.regBuf[0][ip] <= s.maxRegPerIP
-	s.regMu.Unlock()
-	return ok
-}
-
-// regRateLimitLoop resets the per-IP registration counter every second
-// using a double-buffer swap.
-func (s *Server) regRateLimitLoop(ctx context.Context) {
-	s.regTick = time.NewTicker(time.Second)
-	defer s.regTick.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-s.regTick.C:
-			s.regMu.Lock()
-			s.regBuf[0], s.regBuf[1] = s.regBuf[1], s.regBuf[0]
-			s.regMu.Unlock()
-			for k := range s.regBuf[1] {
-				delete(s.regBuf[1], k)
-			}
-		}
-	}
-}

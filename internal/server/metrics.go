@@ -111,25 +111,31 @@ func (s *Server) metricsLoop(ctx context.Context) {
 		regs := s.totalRegistrations.Load()
 		sendErr := s.sendErrors.Load()
 
-		// Calculate averages under lock
-		s.mu.RLock()
-		playerCount := len(s.clients)
+		// Collect stats from all rooms
+		var playerCount int
 		var totalRTT time.Duration
 		var rttCount int
 		var totalLoss float64
 		var lossCount int
-		for _, c := range s.clients {
-			if c.RTT > 0 {
-				totalRTT += c.RTT
-				rttCount++
+
+		s.roomMu.RLock()
+		for _, room := range s.rooms {
+			room.mu.RLock()
+			playerCount += len(room.clients)
+			for _, c := range room.clients {
+				if c.RTT > 0 {
+					totalRTT += c.RTT
+					rttCount++
+				}
+				if c.pingIdx > 0 {
+					loss, _ := c.PingStats()
+					totalLoss += loss
+					lossCount++
+				}
 			}
-			if c.pingIdx > 0 {
-				loss, _ := c.PingStats()
-				totalLoss += loss
-				lossCount++
-			}
+			room.mu.RUnlock()
 		}
-		s.mu.RUnlock()
+		s.roomMu.RUnlock()
 
 		var avgRTT float64
 		if rttCount > 0 {
