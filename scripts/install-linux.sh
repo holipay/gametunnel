@@ -22,6 +22,7 @@ LISTEN_ADDR="${LISTEN_ADDR:-:4700}"
 SUBNET="${SUBNET:-10.10.0.0/24}"
 MAX_PLAYERS="${MAX_PLAYERS:-10}"
 STATUS_ADDR="${STATUS_ADDR:-}"
+STATUS_TOKEN="${STATUS_TOKEN:-}"
 
 # 脚本所在目录（用于本地安装）
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd || pwd)"
@@ -143,7 +144,20 @@ if [ -z "$TMPFILE" ]; then
         echo "   $RELEASES_URL"
         exit 1
     fi
-    echo "  版本: $LATEST"
+    echo "  最新版本: $LATEST"
+
+    # ── 版本检查：已是最新则跳过 ──
+    if [ -f "$INSTALL_DIR/$BINARY_NAME" ]; then
+        CURRENT_VERSION=$("$INSTALL_DIR/$BINARY_NAME" -version 2>/dev/null | awk '{print $2}' || echo "")
+        if [ "$CURRENT_VERSION" = "$LATEST" ]; then
+            echo ""
+            echo "✅ 已是最新版本 ($LATEST)，无需更新"
+            exit 0
+        fi
+        if [ -n "$CURRENT_VERSION" ]; then
+            echo "  当前版本: $CURRENT_VERSION"
+        fi
+    fi
 
     # ── 下载（带重试 + 断点续传）──
     DOWNLOAD_URL="https://github.com/${REPO}/releases/download/${LATEST}/${LOCAL_BINARY}"
@@ -200,10 +214,29 @@ fi
 
 # ── 安装 ───────────────────────────────────────────────────────
 
+BACKUP_FILE=""
+
+rollback() {
+    if [ -n "$BACKUP_FILE" ] && [ -f "$BACKUP_FILE" ]; then
+        echo "🔄 回滚到旧版本..."
+        cp "$BACKUP_FILE" "$INSTALL_DIR/$BINARY_NAME"
+        systemctl start gtunnel-server 2>/dev/null || true
+        echo "  ✅ 已回滚"
+    fi
+    exit 1
+}
+
 # 停止旧服务（更新时）
 if systemctl is-active --quiet gtunnel-server 2>/dev/null; then
     echo "🔄 停止旧服务..."
     systemctl stop gtunnel-server
+fi
+
+# 备份旧版本（更新时）
+if [ -f "$INSTALL_DIR/$BINARY_NAME" ]; then
+    BACKUP_FILE="/tmp/gtunnel-server.backup.$(date +%s)"
+    cp "$INSTALL_DIR/$BINARY_NAME" "$BACKUP_FILE"
+    echo "  📦 已备份旧版本到 $BACKUP_FILE"
 fi
 
 cp "$TMPFILE" "$INSTALL_DIR/$BINARY_NAME"
@@ -263,6 +296,33 @@ EOF
 systemctl daemon-reload
 systemctl enable gtunnel-server
 systemctl start gtunnel-server
+
+# ── 健康检查 ───────────────────────────────────────────────────
+echo ""
+echo "⏳ 等待服务启动..."
+sleep 3
+
+# 检查进程是否存活
+if ! pgrep -x gtunnel-server >/dev/null 2>&1; then
+    echo "❌ 服务启动失败"
+    echo "  日志: journalctl -u gtunnel-server -n 20 --no-pager"
+    rollback
+fi
+
+# 检查端口是否监听
+sleep 2
+if ss -uln | grep -q ":${LISTEN_PORT} "; then
+    echo "✅ 服务已启动，端口 ${LISTEN_PORT} 已监听"
+else
+    echo "⚠️  进程运行中但端口未监听，可能启动异常"
+    echo "  日志: journalctl -u gtunnel-server -n 20 --no-pager"
+    rollback
+fi
+
+# 清理备份文件
+if [ -n "$BACKUP_FILE" ] && [ -f "$BACKUP_FILE" ]; then
+    rm -f "$BACKUP_FILE"
+fi
 
 echo ""
 echo "✅ 安装完成！"

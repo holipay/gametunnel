@@ -137,7 +137,20 @@ else
         echo "   $RELEASES_URL"
         exit 1
     fi
-    echo "  版本: $LATEST"
+    echo "  最新版本: $LATEST"
+
+    # ── 版本检查：已是最新则跳过 ──
+    if [ -f "$INSTALL_DIR/gtunnel-server" ]; then
+        CURRENT_VERSION=$("$INSTALL_DIR/gtunnel-server" -version 2>/dev/null | awk '{print $2}' || echo "")
+        if [ "$CURRENT_VERSION" = "$LATEST" ]; then
+            echo ""
+            echo "✅ 已是最新版本 ($LATEST)，无需更新"
+            exit 0
+        fi
+        if [ -n "$CURRENT_VERSION" ]; then
+            echo "  当前版本: $CURRENT_VERSION"
+        fi
+    fi
 
     ARCHIVE_NAME=""
     case "$ARCH" in
@@ -191,10 +204,29 @@ fi
 
 # ── 安装 ───────────────────────────────────────────────────────
 
+BACKUP_FILE=""
+
+rollback() {
+    if [ -n "$BACKUP_FILE" ] && [ -f "$BACKUP_FILE" ]; then
+        echo "🔄 回滚到旧版本..."
+        cp "$BACKUP_FILE" "$INSTALL_DIR/gtunnel-server"
+        "$INIT_SCRIPT" start 2>/dev/null || true
+        echo "  ✅ 已回滚"
+    fi
+    exit 1
+}
+
 # 停止旧服务
 if [ -x "$INIT_SCRIPT" ]; then
     echo "🔄 停止旧服务..."
     "$INIT_SCRIPT" stop 2>/dev/null || true
+fi
+
+# 备份旧版本（更新时）
+if [ -f "$INSTALL_DIR/gtunnel-server" ]; then
+    BACKUP_FILE="/tmp/gtunnel-server.backup.$(date +%s)"
+    cp "$INSTALL_DIR/gtunnel-server" "$BACKUP_FILE"
+    echo "  📦 已备份旧版本到 $BACKUP_FILE"
 fi
 
 cp "$TMPFILE" "$INSTALL_DIR/gtunnel-server"
@@ -320,13 +352,33 @@ echo "🚀 启动服务..."
 "$INIT_SCRIPT" enable 2>/dev/null || true
 "$INIT_SCRIPT" start 2>/dev/null || true
 
-# 等待启动
-sleep 1
-if pgrep -x gtunnel-server >/dev/null 2>&1; then
-    echo "  ✅ 服务已启动"
+# ── 健康检查 ───────────────────────────────────────────────────
+echo ""
+echo "⏳ 等待服务启动..."
+sleep 3
+
+# 检查进程是否存活
+if ! pgrep -x gtunnel-server >/dev/null 2>&1; then
+    echo "❌ 服务启动失败"
+    echo "  日志: logread | grep gtunnel | tail -20"
+    rollback
+fi
+
+# 检查端口是否监听
+sleep 2
+LISTEN_PORT="${LISTEN_ADDR##*:}"
+if netstat -uln 2>/dev/null | grep -q ":${LISTEN_PORT} " || \
+   ss -uln 2>/dev/null | grep -q ":${LISTEN_PORT} "; then
+    echo "✅ 服务已启动，端口 ${LISTEN_PORT} 已监听"
 else
-    echo "  ⚠️  服务可能未成功启动，请检查日志:"
-    echo "     logread | grep gtunnel"
+    echo "⚠️  进程运行中但端口未监听，可能启动异常"
+    echo "  日志: logread | grep gtunnel | tail -20"
+    rollback
+fi
+
+# 清理备份文件
+if [ -n "$BACKUP_FILE" ] && [ -f "$BACKUP_FILE" ]; then
+    rm -f "$BACKUP_FILE"
 fi
 
 echo ""
