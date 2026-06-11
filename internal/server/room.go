@@ -15,6 +15,19 @@ import (
 	"github.com/holipay/gametunnel/internal/protocol"
 )
 
+// connIPKey is a fixed-size key for per-IP connection counting.
+// Uses the raw 4-byte IPv4 address to avoid string allocation per packet.
+type connIPKey [4]byte
+
+func addrToConnIPKey(addr *net.UDPAddr) connIPKey {
+	ip4 := addr.IP.To4()
+	var k connIPKey
+	if ip4 != nil {
+		copy(k[:], ip4)
+	}
+	return k
+}
+
 // Room holds all per-room state. Each room has an independent virtual subnet,
 // player list, IP allocation, and authentication.
 type Room struct {
@@ -49,7 +62,7 @@ type Room struct {
 
 	// Per-IP connection count (per-room)
 	ipConnMu   sync.Mutex
-	ipConnCount map[string]int
+	ipConnCount map[connIPKey]int
 	maxPerIP    int
 
 	// PeerInfo batching
@@ -120,7 +133,7 @@ func NewRoom(cfg RoomConfig) (*Room, error) {
 		maxPending:  cfg.MaxPlayers * 3,
 		regBuf:      [2]map[string]int{make(map[string]int), make(map[string]int)},
 		maxRegPerIP: 5,
-		ipConnCount: make(map[string]int),
+		ipConnCount: make(map[connIPKey]int),
 		maxPerIP:    maxPerIP,
 		createdAt:   time.Now(),
 	}
@@ -245,8 +258,8 @@ func (r *Room) handleRegister(payload []byte, from *net.UDPAddr) {
 		return
 	}
 
-	clientIP := from.IP.String()
-	if !r.checkRegRate(clientIP) {
+	clientIP := addrToConnIPKey(from)
+	if !r.checkRegRate(from.IP.String()) {
 		r.sendKick(from, t.KickRateLimit)
 		return
 	}
@@ -330,7 +343,7 @@ func (r *Room) registerClientLocked(reg *protocol.RegisterPayload, from *net.UDP
 	r.clients[ipKey(vip)] = c
 	r.addrMap[addrToRateKey(from)] = c
 
-	clientIP := from.IP.String()
+	clientIP := addrToConnIPKey(from)
 	r.ipConnMu.Lock()
 	r.ipConnCount[clientIP]++
 	r.ipConnMu.Unlock()
@@ -484,7 +497,7 @@ func (r *Room) handleDisconnect(from *net.UDPAddr) {
 	} else {
 		r.markIPFree(c.VirtualIP)
 		delete(r.clients, ipKey(c.VirtualIP))
-		ip := c.PublicAddr.IP.String()
+		ip := addrToConnIPKey(c.PublicAddr)
 		r.ipConnMu.Lock()
 		r.ipConnCount[ip]--
 		if r.ipConnCount[ip] <= 0 {
@@ -772,7 +785,7 @@ func (r *Room) CleanupStale() bool {
 			r.markIPFree(sc.c.VirtualIP)
 			delete(r.clients, sc.key)
 			delete(r.addrMap, addrToRateKey(sc.c.PublicAddr))
-			ip := sc.c.PublicAddr.IP.String()
+			ip := addrToConnIPKey(sc.c.PublicAddr)
 			r.ipConnMu.Lock()
 			r.ipConnCount[ip]--
 			if r.ipConnCount[ip] <= 0 {
@@ -989,7 +1002,7 @@ func (r *Room) resolveRestoredClient(username string, roomID string, from *net.U
 			r.addrMap[addrToRateKey(from)] = c
 
 			// Track per-IP connection count
-			clientIP := from.IP.String()
+			clientIP := addrToConnIPKey(from)
 			r.ipConnMu.Lock()
 			r.ipConnCount[clientIP]++
 			r.ipConnMu.Unlock()

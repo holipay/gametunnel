@@ -3,6 +3,7 @@ package protocol
 import (
 	"encoding/binary"
 	"net"
+	"strconv"
 	"sync"
 )
 
@@ -167,9 +168,12 @@ func UnmarshalPeerInfo(data []byte) (*PeerInfoPayload, error) {
 		off += addrLen
 		var pubAddr *net.UDPAddr
 		if addrStr != "" {
-			a, err := net.ResolveUDPAddr("udp", addrStr)
-			if err == nil {
-				pubAddr = a
+			if host, portStr, err := net.SplitHostPort(addrStr); err == nil {
+				if port, err := strconv.Atoi(portStr); err == nil {
+					if ip := net.ParseIP(host); ip != nil {
+						pubAddr = &net.UDPAddr{IP: ip, Port: port}
+					}
+				}
 			}
 		}
 		userLen := int(binary.LittleEndian.Uint16(data[off:]))

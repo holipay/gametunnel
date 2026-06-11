@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"fmt"
 	"html/template"
@@ -92,13 +93,13 @@ func (s *Server) checkStatusToken(r *http.Request) bool {
 	}
 
 	// Check query parameter (works for both HTML and API)
-	if t := r.URL.Query().Get("token"); t == s.statusToken {
+	if t := r.URL.Query().Get("token"); subtle.ConstantTimeCompare([]byte(t), []byte(s.statusToken)) == 1 {
 		return true
 	}
 
 	// Check Authorization header (API use)
 	if auth := r.Header.Get("Authorization"); strings.HasPrefix(auth, "Bearer ") {
-		if auth[7:] == s.statusToken {
+		if subtle.ConstantTimeCompare([]byte(auth[7:]), []byte(s.statusToken)) == 1 {
 			return true
 		}
 	}

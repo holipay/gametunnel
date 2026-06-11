@@ -50,8 +50,8 @@ func (s *Server) rateLimitLoop(ctx context.Context) {
 		case <-s.rateTick.C:
 			s.rateMu.Lock()
 			s.rateBuf[0], s.rateBuf[1] = s.rateBuf[1], s.rateBuf[0]
-			// Clear stale buffer while holding the lock to prevent
-			// concurrent map mutation if a swap occurs mid-clear.
+			// Clear stale buffer under lock to prevent race with checkRate.
+			// The tick interval is 1s; map clear is fast; contention is negligible.
 			for k := range s.rateBuf[1] {
 				delete(s.rateBuf[1], k)
 			}
