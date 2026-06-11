@@ -808,8 +808,8 @@ func TestIsLoopback(t *testing.T) {
 		{net.ParseIP("2408:abcd::1"), false},
 	}
 	for _, tt := range tests {
-		if got := isLoopback(tt.ip); got != tt.want {
-			t.Errorf("isLoopback(%s) = %v, want %v", tt.ip, got, tt.want)
+		if got := tt.ip.IsLoopback(); got != tt.want {
+			t.Errorf("IsLoopback(%s) = %v, want %v", tt.ip, got, tt.want)
 		}
 	}
 }

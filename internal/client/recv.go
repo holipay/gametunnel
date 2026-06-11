@@ -77,7 +77,7 @@ func (t *Tunnel) receiveFromServer(ctx context.Context) {
 		// to avoid misclassifying peer packets as server traffic.
 		fromServer := from != nil && t.serverAddr != nil && from.IP.Equal(t.serverAddr.IP)
 		if !fromServer && t.serverAddr != nil && t.serverAddr.IP.IsUnspecified() {
-			fromServer = from.Port == t.serverAddr.Port && isLoopback(from.IP)
+			fromServer = from.Port == t.serverAddr.Port && from.IP.IsLoopback()
 		}
 		if fromServer {
 			// Server-relayed packet

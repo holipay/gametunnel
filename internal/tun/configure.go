@@ -285,12 +285,6 @@ func (d *Device) applyMetricPowerShell() {
 	}
 }
 
-// detectPhysicalGateway finds the default gateway of the physical NIC.
-// Searches for the IPv4 default route (0.0.0.0/0).
-func (d *Device) detectPhysicalGateway() string {
-	return d.detectPhysicalGatewayForPrefix("0.0.0.0/0")
-}
-
 // detectPhysicalGatewayForPrefix finds the default gateway of the physical NIC
 // for the given address family. prefix should be "0.0.0.0/0" for IPv4 or "::/0" for IPv6.
 func (d *Device) detectPhysicalGatewayForPrefix(prefix string) string {
