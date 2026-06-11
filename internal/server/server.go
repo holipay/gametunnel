@@ -126,6 +126,7 @@ type Server struct {
 	version     string
 	lang       i18n.Lang
 	startTime  time.Time
+	ctx        context.Context // stored for use in packet handlers
 
 	// Worker pool
 	workers int
@@ -284,6 +285,7 @@ func New(cfg Config) (*Server, error) {
 
 // Run starts the server and blocks until ctx is cancelled.
 func (s *Server) Run(ctx context.Context) {
+	s.ctx = ctx
 	s.startStatusServer(ctx, s.statusAddr)
 	go s.keepaliveLoop(ctx)
 	go s.rateLimitLoop(ctx)
@@ -311,7 +313,7 @@ func (s *Server) Run(ctx context.Context) {
 			case <-ctx.Done():
 				return
 			default:
-				continue
+				return // connection error (e.g. closed) — exit loop to avoid busy-spin
 			}
 		}
 		if n < 1 {
@@ -444,6 +446,9 @@ func (s *Server) handleRegisterMultiRoom(payload []byte, from *net.UDPAddr) {
 		}
 		s.rooms[reg.RoomID] = room
 		log.Printf("[room] created room %q with subnet %s", reg.RoomID, subnet)
+		// Start room lifecycle loops for the newly created room
+		go room.peerInfoLoop(s.ctx)
+		go room.pingLoop(s.ctx)
 	}
 	s.roomMu.Unlock()
 

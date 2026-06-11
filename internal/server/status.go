@@ -8,6 +8,7 @@ import (
 	"log"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/holipay/gametunnel/internal/i18n"
@@ -177,19 +178,16 @@ func (s *Server) handleStatusHTML(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-var statusTmplCache struct {
-	lang i18n.Lang
-	tmpl *template.Template
-}
+var (
+	statusTmplOnce sync.Once
+	statusTmpl     *template.Template
+)
 
 func getStatusTmpl(lang i18n.Lang) *template.Template {
-	if statusTmplCache.tmpl != nil && statusTmplCache.lang == lang {
-		return statusTmplCache.tmpl
-	}
-	tmpl := template.Must(template.New("status").Parse(statusHTML))
-	statusTmplCache.lang = lang
-	statusTmplCache.tmpl = tmpl
-	return tmpl
+	statusTmplOnce.Do(func() {
+		statusTmpl = template.Must(template.New("status").Parse(statusHTML))
+	})
+	return statusTmpl
 }
 
 const statusHTML = `<!DOCTYPE html>
