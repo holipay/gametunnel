@@ -216,6 +216,9 @@ func PutDataPayload(dp *DataPayload) {
 func (d *DataPayload) Marshal() []byte {
 	src := d.SrcIP.To4()
 	dst := d.DstIP.To4()
+	if src == nil || dst == nil {
+		return nil
+	}
 	buf := make([]byte, 8+len(d.Data))
 	copy(buf[0:4], src)
 	copy(buf[4:8], dst)
@@ -231,8 +234,13 @@ func (d *DataPayload) MarshalSize() int {
 // MarshalTo writes the encoded payload into dst (zero-copy).
 // Returns number of bytes written. Caller must ensure len(dst) >= MarshalSize().
 func (d *DataPayload) MarshalTo(dst []byte) int {
-	copy(dst[0:4], d.SrcIP.To4())
-	copy(dst[4:8], d.DstIP.To4())
+	src := d.SrcIP.To4()
+	dstIP := d.DstIP.To4()
+	if src == nil || dstIP == nil {
+		return 0
+	}
+	copy(dst[0:4], src)
+	copy(dst[4:8], dstIP)
 	return 8 + copy(dst[8:], d.Data)
 }
 

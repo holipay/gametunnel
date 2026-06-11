@@ -105,11 +105,20 @@ func (s *Server) metricsLoop(ctx context.Context) {
 		now := time.Now()
 
 		// Collect current values
-		relay := s.totalPacketsRelay.Load()
 		dropped := s.totalPacketsDropped.Load()
-		kicks := s.totalKicks.Load()
-		regs := s.totalRegistrations.Load()
 		sendErr := s.sendErrors.Load()
+
+		// Aggregate relay, kicks, registrations from all rooms
+		var relay uint64
+		var kicks uint64
+		var regs uint64
+		s.roomMu.RLock()
+		for _, room := range s.rooms {
+			relay += room.totalPacketsRelay.Load()
+			kicks += room.totalKicks.Load()
+			regs += room.totalRegistrations.Load()
+		}
+		s.roomMu.RUnlock()
 
 		// Collect stats from all rooms
 		var playerCount int

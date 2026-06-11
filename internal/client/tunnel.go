@@ -39,7 +39,7 @@ const tunWorkers = 2
 // ctrlTimerPool reuses timers for sendCtrl to avoid per-call allocation.
 // Timers are Reset before use and drained after use to ensure clean state.
 var ctrlTimerPool = sync.Pool{
-	New: func() interface{} { return time.NewTimer(0) },
+	New: func() interface{} { return time.NewTimer(time.Hour) },
 }
 
 // ipKey converts an IP address to a [16]byte map key.

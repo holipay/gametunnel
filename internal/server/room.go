@@ -152,12 +152,17 @@ func (r *Room) markIPFree(ip net.IP) {
 func (r *Room) nextAvailableIP() net.IP {
 	base := r.subnet.IP.To4()
 	for i, word := range r.ipBitmap {
-		if word != ^uint64(0) {
-			bit := bits.TrailingZeros64(^word)
+		if word == ^uint64(0) {
+			continue
+		}
+		free := ^word
+		for free != 0 {
+			bit := bits.TrailingZeros64(free)
 			octet := i*64 + bit
 			if octet >= 2 && octet < 255 {
 				return net.IPv4(base[0], base[1], base[2], byte(octet))
 			}
+			free &= free - 1 // clear lowest set bit
 		}
 	}
 	return nil
@@ -177,10 +182,10 @@ func (r *Room) regRateLimitLoop() {
 	for range r.regTick.C {
 		r.regMu.Lock()
 		r.regBuf[0], r.regBuf[1] = r.regBuf[1], r.regBuf[0]
-		r.regMu.Unlock()
 		for k := range r.regBuf[1] {
 			delete(r.regBuf[1], k)
 		}
+		r.regMu.Unlock()
 	}
 }
 
@@ -580,6 +585,10 @@ func (r *Room) handleHolePunch(payload []byte, from *net.UDPAddr) {
 	r.mu.RUnlock()
 
 	if !ok1 || !ok2 {
+		return
+	}
+
+	if src.VirtualIP == nil {
 		return
 	}
 

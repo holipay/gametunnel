@@ -13,9 +13,13 @@ func IsBroadcast(dst net.IP, subnet *net.IPNet) bool {
 		return true
 	}
 	if subnet != nil {
+		subIP := subnet.IP.To4()
+		if subIP == nil {
+			return false
+		}
 		bcast := make(net.IP, 4)
 		for i := 0; i < 4; i++ {
-			bcast[i] = ip4[i] | ^subnet.Mask[i]
+			bcast[i] = subIP[i] | ^subnet.Mask[i]
 		}
 		return ip4.Equal(bcast)
 	}
