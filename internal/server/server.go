@@ -226,7 +226,9 @@ func New(cfg Config) (*Server, error) {
 	}
 
 	// Tune UDP socket buffers (ignoring error on non-Linux platforms)
-	setSocketBuffers(conn)
+	if err := setSocketBuffers(conn); err != nil {
+		log.Printf("[server] set socket buffers: %v (using OS defaults)", err)
+	}
 
 	maxPerIP := cfg.MaxPerIP
 	if maxPerIP <= 0 {
@@ -527,6 +529,22 @@ func (s *Server) keepaliveLoop(ctx context.Context) {
 				room.peerInfoDirty.Store(true)
 			}
 		}
+
+		// Clean up stale addrToRoom entries in multi-room mode.
+		// When clients disconnect, the room removes from addrMap but
+		// addrToRoom is only cleaned here to avoid cross-package coupling.
+		if s.multiRoom {
+			s.roomMu.Lock()
+			for addrKey, room := range s.addrToRoom {
+				room.mu.RLock()
+				c := room.addrMap[addrKey]
+				room.mu.RUnlock()
+				if c == nil {
+					delete(s.addrToRoom, addrKey)
+				}
+			}
+			s.roomMu.Unlock()
+		}
 	}
 }
 
@@ -545,14 +563,6 @@ func (s *Server) sendChecked(typ byte, payload []byte, to *net.UDPAddr) {
 func (s *Server) sendKick(to *net.UDPAddr, reason string) {
 	kick := &protocol.KickPayload{Reason: reason}
 	s.sendChecked(protocol.TypeKick, kick.Marshal(), to)
-}
-
-// ── Types ──────────────────────────────────────────────────────
-
-type peerSnapshot struct {
-	virtualIP  net.IP
-	publicAddr *net.UDPAddr
-	username   string
 }
 
 // bwCleanupLoop periodically removes stale bandwidth limiter buckets.

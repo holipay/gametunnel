@@ -190,16 +190,34 @@ func (t *Tunnel) stalePeerCleanupLoop(ctx context.Context) {
 // cleanStalePeers removes peers whose lastSeen timestamp is too old.
 func (t *Tunnel) cleanStalePeers() {
 	now := time.Now()
-	t.mu.Lock()
-	defer t.mu.Unlock()
 
+	// Collect stale keys under read lock to minimize write lock hold time.
+	t.mu.RLock()
+	var staleKeys [][16]byte
+	var stalePeers []*Peer
 	for key, peer := range t.peers {
 		lastSeen := peer.lastSeen.Load()
 		if lastSeen != nil && now.Sub(*lastSeen) > stalePeerGracePeriod {
-			log.Printf(i18n.T().LogCleanPeer,
-				peer.Username, peer.VirtualIP, stalePeerGracePeriod)
-			delete(t.peers, key)
+			staleKeys = append(staleKeys, key)
+			stalePeers = append(stalePeers, peer)
 		}
+	}
+	t.mu.RUnlock()
+
+	if len(staleKeys) == 0 {
+		return
+	}
+
+	// Delete under write lock — fast since we already have the keys.
+	t.mu.Lock()
+	for _, key := range staleKeys {
+		delete(t.peers, key)
+	}
+	t.mu.Unlock()
+
+	for _, peer := range stalePeers {
+		log.Printf(i18n.T().LogCleanPeer,
+			peer.Username, peer.VirtualIP, stalePeerGracePeriod)
 	}
 }
 

@@ -50,11 +50,6 @@ func ipKey(ip net.IP) [16]byte {
 	return k
 }
 
-// isLoopback reports whether ip is a loopback address (127.0.0.0/8 or ::1).
-func isLoopback(ip net.IP) bool {
-	return ip.IsLoopback()
-}
-
 // Peer represents a remote player.
 type Peer struct {
 	VirtualIP     net.IP

@@ -535,6 +535,12 @@ func (r *Room) handlePong(payload []byte, from *net.UDPAddr) {
 
 // ── Relay ──────────────────────────────────────────────────────
 
+// relayBufPool reuses buffers for relay packet encoding to reduce GC pressure
+// on the hot path (every relayed game data packet).
+var relayBufPool = sync.Pool{
+	New: func() interface{} { return make([]byte, 0, protocol.MaxPacketLen) },
+}
+
 func (r *Room) handleRelay(payload []byte, from *net.UDPAddr) {
 	if len(payload) < 8 {
 		return
@@ -576,13 +582,15 @@ func (r *Room) handleRelay(payload []byte, from *net.UDPAddr) {
 	if len(targets) == 0 {
 		return
 	}
-	encoded := protocol.EncodeChecked(protocol.TypeData, payload)
+	buf := relayBufPool.Get().([]byte)[:0]
+	encoded := protocol.AppendEncodeChecked(buf, protocol.TypeData, payload)
 	packetSize := len(encoded)
 	for _, addr := range targets {
 		if r.bwLimiter == nil || r.bwLimiter.Allow(addr, packetSize) {
 			r.sendCheckedRaw(encoded, addr)
 		}
 	}
+	relayBufPool.Put(encoded[:cap(encoded)])
 	r.totalPacketsRelay.Add(1)
 }
 
