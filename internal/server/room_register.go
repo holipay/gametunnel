@@ -1,6 +1,7 @@
 package server
 
 import (
+	"fmt"
 	"log"
 	"net"
 	"time"
@@ -19,6 +20,14 @@ func (r *Room) handleRegister(payload []byte, from *net.UDPAddr) {
 	}
 
 	t := i18n.T()
+
+	// Version compatibility check
+	if !protocol.IsCompatible(reg.Version, protocol.AppVersion) {
+		r.sendKick(from, fmt.Sprintf(t.KickVersionMismatch,
+			protocol.VersionMajor(reg.Version)<<8|protocol.VersionMinor(reg.Version),
+			protocol.AppVersion))
+		return
+	}
 
 	if len(reg.Username) == 0 || len(reg.Username) > maxUsernameLen {
 		r.sendKick(from, t.KickInvalidName)

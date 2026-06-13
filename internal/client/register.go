@@ -19,6 +19,7 @@ func (t *Tunnel) register(ctx context.Context) error {
 	reg := &protocol.RegisterPayload{
 		RoomID:   t.roomID,
 		Username: t.username,
+		Version:  protocol.AppVersion,
 	}
 	packet := protocol.EncodeChecked(protocol.TypeRegister, reg.Marshal())
 
@@ -105,6 +106,13 @@ func (t *Tunnel) handleAssignIP(payload []byte) error {
 	assign, err := protocol.UnmarshalAssignIP(payload)
 	if err != nil {
 		return fmt.Errorf("%s", i18n.Format(i18n.T().ErrParseIPFailed, err))
+	}
+
+	// Version compatibility check
+	if !protocol.IsCompatible(protocol.AppVersion, assign.Version) {
+		return fmt.Errorf("server version v%d is incompatible with client v%d",
+			protocol.VersionMajor(assign.Version)<<8|protocol.VersionMinor(assign.Version),
+			protocol.AppVersion)
 	}
 
 	// Validate that assigned IPs are IPv4 and within the assigned subnet.

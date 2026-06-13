@@ -13,12 +13,13 @@ import (
 type RegisterPayload struct {
 	RoomID   string
 	Username string
+	Version  uint16 // client protocol version (0 = old client without version)
 }
 
 func (r *RegisterPayload) Marshal() []byte {
 	roomBytes := []byte(r.RoomID)
 	userBytes := []byte(r.Username)
-	buf := make([]byte, 2+len(roomBytes)+2+len(userBytes))
+	buf := make([]byte, 2+len(roomBytes)+2+len(userBytes)+2)
 	off := 0
 	binary.LittleEndian.PutUint16(buf[off:], uint16(len(roomBytes)))
 	off += 2
@@ -27,6 +28,8 @@ func (r *RegisterPayload) Marshal() []byte {
 	binary.LittleEndian.PutUint16(buf[off:], uint16(len(userBytes)))
 	off += 2
 	copy(buf[off:], userBytes)
+	off += len(userBytes)
+	binary.LittleEndian.PutUint16(buf[off:], r.Version)
 	return buf
 }
 
@@ -48,7 +51,13 @@ func UnmarshalRegister(data []byte) (*RegisterPayload, error) {
 		return nil, ErrPacketTooShort
 	}
 	username := string(data[off : off+userLen])
-	return &RegisterPayload{RoomID: roomID, Username: username}, nil
+	off += userLen
+	result := &RegisterPayload{RoomID: roomID, Username: username}
+	// Version is appended at the end (backward compatible: old clients don't send it)
+	if len(data) >= off+2 {
+		result.Version = binary.LittleEndian.Uint16(data[off:])
+	}
+	return result, nil
 }
 
 // ── Assign IP ──────────────────────────────────────────────────
@@ -58,13 +67,15 @@ type AssignIPPayload struct {
 	VirtualIP  net.IP
 	SubnetMask net.IPMask
 	ServerIP   net.IP
+	Version    uint16 // server protocol version (0 = old server without version)
 }
 
 func (a *AssignIPPayload) Marshal() []byte {
-	buf := make([]byte, 12)
+	buf := make([]byte, 14)
 	copy(buf[0:4], a.VirtualIP.To4())
 	copy(buf[4:8], net.IP(a.SubnetMask).To4())
 	copy(buf[8:12], a.ServerIP.To4())
+	binary.LittleEndian.PutUint16(buf[12:14], a.Version)
 	return buf
 }
 
@@ -72,11 +83,16 @@ func UnmarshalAssignIP(data []byte) (*AssignIPPayload, error) {
 	if len(data) < 12 {
 		return nil, ErrPacketTooShort
 	}
-	return &AssignIPPayload{
+	result := &AssignIPPayload{
 		VirtualIP:  net.IP(append([]byte(nil), data[0:4]...)),
 		SubnetMask: net.IPMask(append([]byte(nil), data[4:8]...)),
 		ServerIP:   net.IP(append([]byte(nil), data[8:12]...)),
-	}, nil
+	}
+	// Version is appended at the end (backward compatible: old servers don't send it)
+	if len(data) >= 14 {
+		result.Version = binary.LittleEndian.Uint16(data[12:14])
+	}
+	return result, nil
 }
 
 // ── Peer Info ──────────────────────────────────────────────────
