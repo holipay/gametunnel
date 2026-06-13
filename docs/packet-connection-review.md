@@ -109,19 +109,26 @@ func (t *Tunnel) handleDirectData(from *net.UDPAddr, msg *protocol.Message) {
 **修复**：将 back-punch 移到独立 goroutine：
 
 ```go
-func (t *Tunnel) handleHolePunchReceived(payload []byte) {
+func (t *Tunnel) handleHolePunchReceived(ctx context.Context, payload []byte) {
     // ... 验证 peer 存在 ...
     go func() {
         punchPayload := make([]byte, 4)
         copy(punchPayload, t.virtualIP.To4())
         packet := protocol.EncodeChecked(protocol.TypeHolePunch, punchPayload)
         for i := 0; i < holePunchBurstPerPhase; i++ {
+            select {
+            case <-ctx.Done():
+                return
+            default:
+            }
             t.sendUDP(packet, peer.PublicAddr)
             time.Sleep(50 * time.Millisecond)
         }
     }()
 }
 ```
+
+> **注**：`ctx` 参数在 2026-06-13 会话中添加（commit `7cbac5a`），使打洞 goroutine 在隧道断开时能正确取消。原修复中 goroutine 无法被取消，隧道关闭后仍会发送过期打洞包。
 
 **权衡**：goroutine 持有 peer 引用，可能在 `handlePeerInfo` 替换 peers map 后指向旧对象。但旧 peer 的 PublicAddr 仍有效（NAT mapping 仍在），且 `sendUDP` 是线程安全的，所以实际无害。
 
@@ -355,7 +362,7 @@ const readBufSize = 4096
 | `t.peers` | `t.mu` (RWMutex) | handlePeerInfo(W), routePacket(R), handleDataFromServer(R), handleDirectData(R) | ✓ |
 | `t.conn` | `t.connMu` (Mutex) | sendUDP(Lock), Disconnect(Close) | ⚠ Close 不持锁 |
 | `Peer.DirectReach` | atomic.Bool | handleDirectData(Store), hasDirectPeerTraffic(Load) | ✓ |
-| `t.tunDev` | 无显式保护 | receiveFromTUN(Read), handleDataFromServer(Write), createTUN(赋值) | ⚠ Connect 内顺序执行 |
+| `t.tunDev` | `t.mu` (RWMutex) | receiveFromTUN(RLock+Read), handleDataFromServer(RLock+Write), handleDirectData(RLock+Write), CloseTUN(Lock+nil) | ✓ (2026-06-13 修复) |
 | 服务端 `s.clients` | `s.mu` (RWMutex) | handleRelay(R), handleRegister(W), handleDisconnect(W) | ✓ |
 
 ### 5.3 Buffer 生命周期追踪

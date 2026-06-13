@@ -82,7 +82,9 @@ Cache miss 路径上释放 `peerInfoMu` 后再 rebuild，多个 goroutine 可能
 
 ### 3. pendingAuth 下溢保护
 
-**文件**: `internal/server/register.go` + `peer.go` (5 处)
+**文件**: `internal/server/room.go` (多处)
+
+> 注：本文档原始描述引用 `register.go` + `peer.go`，但实际 `pendingAuth` 字段及所有操作均在 `room.go` 中。以下代码示例已更正。
 
 ```go
 // 旧代码
@@ -93,11 +95,11 @@ if c.auth == authChallengeSent {
 
 如果异常导致 `pendingAuth` 减到负数，后续 `>= maxPending` 检查永久失效，auth flood 保护静默退化。
 
-**修复**: 所有 `s.pendingAuth--` 添加下限保护。
+**修复**: 所有 `pendingAuth--` 添加下限保护。
 
 ```go
-if s.pendingAuth > 0 {
-    s.pendingAuth--
+if r.pendingAuth > 0 {
+    r.pendingAuth--
 }
 ```
 
