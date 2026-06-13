@@ -116,10 +116,18 @@ func (t *Tunnel) handleDirectData(from *net.UDPAddr, msg *protocol.Message) {
 	}
 
 	dp, err := protocol.UnmarshalDataPooled(msg.Payload)
-	if err != nil || len(dp.Data) == 0 || t.tunDev == nil {
+	if err != nil || len(dp.Data) == 0 {
 		if dp != nil {
 			protocol.PutDataPayload(dp)
 		}
+		return
+	}
+
+	t.mu.RLock()
+	dev := t.tunDev
+	t.mu.RUnlock()
+	if dev == nil {
+		protocol.PutDataPayload(dp)
 		return
 	}
 
@@ -153,7 +161,7 @@ func (t *Tunnel) handleDirectData(from *net.UDPAddr, msg *protocol.Message) {
 		}
 	}
 
-	if _, err := t.tunDev.Write(outData); err != nil {
+	if _, err := dev.Write(outData); err != nil {
 		log.Printf(i18n.T().LogTUNWriteFail, err)
 	}
 	protocol.PutDataPayload(dp)
@@ -232,7 +240,15 @@ func (t *Tunnel) handleDataFromServer(payload []byte) {
 	if err != nil {
 		return
 	}
-	if len(dp.Data) == 0 || t.tunDev == nil {
+	if len(dp.Data) == 0 {
+		protocol.PutDataPayload(dp)
+		return
+	}
+
+	t.mu.RLock()
+	dev := t.tunDev
+	t.mu.RUnlock()
+	if dev == nil {
 		protocol.PutDataPayload(dp)
 		return
 	}
@@ -262,7 +278,7 @@ func (t *Tunnel) handleDataFromServer(payload []byte) {
 		}
 	}
 
-	if _, err := t.tunDev.Write(outData); err != nil {
+	if _, err := dev.Write(outData); err != nil {
 		log.Printf(i18n.T().LogTUNWriteFail, err)
 	}
 	protocol.PutDataPayload(dp)
@@ -283,10 +299,13 @@ func (t *Tunnel) receiveFromTUN(ctx context.Context) {
 		default:
 		}
 
-		if t.tunDev == nil {
+		t.mu.RLock()
+		dev := t.tunDev
+		t.mu.RUnlock()
+		if dev == nil {
 			return
 		}
-		n, err := t.tunDev.Read(buf)
+		n, err := dev.Read(buf)
 		if err != nil {
 			select {
 			case <-ctx.Done():
