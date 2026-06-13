@@ -847,3 +847,284 @@ func TestHandlePeerInfo_IPv6PublicAddr(t *testing.T) {
 		t.Errorf("expected username 'ipv6peer', got '%s'", peer.Username)
 	}
 }
+
+// ── ValidateServerAddr Tests ───────────────────────────────────
+
+func TestValidateServerAddr(t *testing.T) {
+	tests := []struct {
+		addr    string
+		wantErr bool
+	}{
+		{"1.2.3.4:4700", false},
+		{"example.com:4700", false},
+		{"[2408::1]:4700", false},
+		{"", true},
+		{"noport", true},
+		{"1.2.3.4", true},
+		{"1.2.3.4:abc", true},
+		{"1.2.3.4:0", false},
+		{"1.2.3.4:65535", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.addr, func(t *testing.T) {
+			err := ValidateServerAddr(tt.addr)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("ValidateServerAddr(%q) error = %v, wantErr %v", tt.addr, err, tt.wantErr)
+			}
+		})
+	}
+}
+
+// ── handleHolePunchReceived Tests ──────────────────────────────
+
+func TestHandleHolePunchReceived(t *testing.T) {
+	tunnel, _ := newTestTunnel(t)
+
+	peerIP := net.IPv4(10, 0, 0, 5).To4()
+	peerAddr := &net.UDPAddr{IP: net.IPv4(1, 2, 3, 4), Port: 12345}
+
+	tunnel.mu.Lock()
+	tunnel.peers[ipKey(peerIP)] = &Peer{
+		VirtualIP:  peerIP,
+		PublicAddr: peerAddr,
+		Username:   "peer1",
+	}
+	tunnel.mu.Unlock()
+
+	// Build hole punch payload: 4 bytes virtual IP
+	payload := make([]byte, 4)
+	copy(payload, peerIP.To4())
+
+	// Should not panic and should trigger sendCtrl
+	tunnel.handleHolePunchReceived(context.Background(), payload)
+
+	// Verify peer still exists
+	tunnel.mu.RLock()
+	_, ok := tunnel.peers[ipKey(peerIP)]
+	tunnel.mu.RUnlock()
+	if !ok {
+		t.Error("peer should still exist after hole punch")
+	}
+}
+
+func TestHandleHolePunchReceived_UnknownPeer(t *testing.T) {
+	tunnel, _ := newTestTunnel(t)
+
+	// Unknown peer IP
+	peerIP := net.IPv4(10, 0, 0, 99).To4()
+	payload := make([]byte, 4)
+	copy(payload, peerIP.To4())
+
+	// Should not panic
+	tunnel.handleHolePunchReceived(context.Background(), payload)
+}
+
+// ── cleanStalePeers Tests ──────────────────────────────────────
+
+func TestCleanStalePeers(t *testing.T) {
+	tunnel, _ := newTestTunnel(t)
+
+	// Add a peer with old lastSeen
+	peerIP := net.IPv4(10, 0, 0, 5).To4()
+	oldTime := time.Now().Add(-2 * time.Minute) // 2 minutes ago (> 90s grace period)
+	peer := &Peer{
+		VirtualIP:  peerIP,
+		PublicAddr: &net.UDPAddr{IP: net.IPv4(1, 2, 3, 4), Port: 12345},
+		Username:   "stale",
+	}
+	peer.lastSeen.Store(&oldTime)
+
+	tunnel.mu.Lock()
+	tunnel.peers[ipKey(peerIP)] = peer
+	tunnel.mu.Unlock()
+
+	tunnel.cleanStalePeers()
+
+	tunnel.mu.RLock()
+	_, ok := tunnel.peers[ipKey(peerIP)]
+	tunnel.mu.RUnlock()
+
+	if ok {
+		t.Error("stale peer should have been removed")
+	}
+}
+
+func TestCleanStalePeers_KeepsRecent(t *testing.T) {
+	tunnel, _ := newTestTunnel(t)
+
+	peerIP := net.IPv4(10, 0, 0, 5).To4()
+	recentTime := time.Now().Add(-10 * time.Second) // 10 seconds ago (< 90s grace period)
+	peer := &Peer{
+		VirtualIP:  peerIP,
+		PublicAddr: &net.UDPAddr{IP: net.IPv4(1, 2, 3, 4), Port: 12345},
+		Username:   "recent",
+	}
+	peer.lastSeen.Store(&recentTime)
+
+	tunnel.mu.Lock()
+	tunnel.peers[ipKey(peerIP)] = peer
+	tunnel.mu.Unlock()
+
+	tunnel.cleanStalePeers()
+
+	tunnel.mu.RLock()
+	_, ok := tunnel.peers[ipKey(peerIP)]
+	tunnel.mu.RUnlock()
+
+	if !ok {
+		t.Error("recent peer should NOT be removed")
+	}
+}
+
+// ── decryptWriteAndRelease Tests ───────────────────────────────
+
+func TestDecryptWriteAndRelease_NilTunDev(t *testing.T) {
+	tunnel, _ := newTestTunnel(t)
+	tunnel.tunDev = nil
+
+	dp := &protocol.DataPayload{
+		SrcIP: net.IPv4(10, 0, 0, 1).To4(),
+		DstIP: net.IPv4(10, 0, 0, 2).To4(),
+		Data:  []byte{0x01, 0x02},
+	}
+
+	// Should not panic, should release payload
+	tunnel.decryptWriteAndRelease(dp, nil)
+}
+
+func TestDecryptWriteAndRelease_NoCipher(t *testing.T) {
+	tunnel, _ := newTestTunnel(t)
+	mock := &mockTunDevice{}
+	tunnel.tunDev = mock
+
+	dp := &protocol.DataPayload{
+		SrcIP: net.IPv4(10, 0, 0, 1).To4(),
+		DstIP: net.IPv4(10, 0, 0, 2).To4(),
+		Data:  []byte{0x45, 0x00, 0x00, 0x1c},
+	}
+	dataLen := len(dp.Data) // save before PutDataPayload clears it
+
+	tunnel.decryptWriteAndRelease(dp, nil)
+
+	if len(mock.writeBuf) != dataLen {
+		t.Errorf("expected %d bytes written, got %d", dataLen, len(mock.writeBuf))
+	}
+}
+
+// ── handleDirectData Tests ─────────────────────────────────────
+
+func TestHandleDirectData_UnknownPeer(t *testing.T) {
+	tunnel, _ := newTestTunnel(t)
+	mock := &mockTunDevice{}
+	tunnel.tunDev = mock
+
+	// Unknown peer
+	peerIP := net.IPv4(10, 0, 0, 99).To4()
+	fromAddr := &net.UDPAddr{IP: net.IPv4(1, 2, 3, 4), Port: 12345}
+
+	dp := &protocol.DataPayload{
+		SrcIP: peerIP,
+		DstIP: tunnel.virtualIP,
+		Data:  []byte{0x01, 0x02},
+	}
+
+	msg := &protocol.Message{
+		Type:    protocol.TypeData,
+		Payload: dp.Marshal(),
+	}
+
+	tunnel.handleDirectData(fromAddr, msg)
+
+	// Should not write to TUN
+	if len(mock.writeBuf) != 0 {
+		t.Error("unknown peer data should not be written to TUN")
+	}
+}
+
+func TestHandleDirectData_WrongAddress(t *testing.T) {
+	tunnel, _ := newTestTunnel(t)
+	mock := &mockTunDevice{}
+	tunnel.tunDev = mock
+
+	peerIP := net.IPv4(10, 0, 0, 5).To4()
+	correctAddr := &net.UDPAddr{IP: net.IPv4(1, 2, 3, 4), Port: 12345}
+	wrongAddr := &net.UDPAddr{IP: net.IPv4(99, 99, 99, 99), Port: 12345}
+	wrongPort := &net.UDPAddr{IP: net.IPv4(1, 2, 3, 4), Port: 9999}
+
+	tunnel.mu.Lock()
+	tunnel.peers[ipKey(peerIP)] = &Peer{
+		VirtualIP:  peerIP,
+		PublicAddr: correctAddr,
+		Username:   "peer1",
+	}
+	tunnel.mu.Unlock()
+
+	dp := &protocol.DataPayload{
+		SrcIP: peerIP,
+		DstIP: tunnel.virtualIP,
+		Data:  []byte{0x01, 0x02},
+	}
+	msg := &protocol.Message{Type: protocol.TypeData, Payload: dp.Marshal()}
+
+	// Wrong IP
+	tunnel.handleDirectData(wrongAddr, msg)
+	if len(mock.writeBuf) != 0 {
+		t.Error("wrong IP should not write to TUN")
+	}
+
+	// Wrong port
+	tunnel.handleDirectData(wrongPort, msg)
+	if len(mock.writeBuf) != 0 {
+		t.Error("wrong port should not write to TUN")
+	}
+}
+
+// ── handleDataFromServer Tests ─────────────────────────────────
+
+func TestHandleDataFromServer_UnknownSrcIP(t *testing.T) {
+	tunnel, _ := newTestTunnel(t)
+	mock := &mockTunDevice{}
+	tunnel.tunDev = mock
+
+	serverIP := net.IPv4(10, 0, 0, 1).To4()
+	tunnel.serverIP = serverIP
+	tunnel.serverIPKey = ipKey(serverIP)
+
+	// Unknown srcIP (not server, not peer)
+	unknownIP := net.IPv4(99, 99, 99, 99).To4()
+	dp := &protocol.DataPayload{
+		SrcIP: unknownIP,
+		DstIP: net.IPv4(10, 0, 0, 2).To4(),
+		Data:  []byte{0x01, 0x02},
+	}
+
+	tunnel.handleDataFromServer(dp.Marshal())
+
+	// Should not write to TUN
+	if len(mock.writeBuf) != 0 {
+		t.Error("unknown srcIP should not be written to TUN")
+	}
+}
+
+// ── markServerResponse Tests ───────────────────────────────────
+
+func TestMarkServerResponse(t *testing.T) {
+	tunnel, _ := newTestTunnel(t)
+
+	// Initially nil
+	if tunnel.lastServerResponse.Load() != nil {
+		t.Error("expected nil initially")
+	}
+
+	tunnel.markServerResponse()
+
+	now := time.Now()
+	lastSeen := tunnel.lastServerResponse.Load()
+	if lastSeen == nil {
+		t.Fatal("expected non-nil after markServerResponse")
+	}
+	if now.Sub(*lastSeen) > time.Second {
+		t.Error("timestamp should be recent")
+	}
+}
