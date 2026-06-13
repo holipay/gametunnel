@@ -304,6 +304,7 @@ func (r *Room) sendAssignIP(vip net.IP, to *net.UDPAddr) {
 		VirtualIP:  vip,
 		SubnetMask: r.subnet.Mask,
 		ServerIP:   r.serverIP,
+		Version:    protocol.AppVersion,
 	}
 	r.sendChecked(protocol.TypeAssignIP, assign.Marshal(), to)
 }

@@ -17,6 +17,11 @@ import (
 // Protocol version. Bump on breaking wire-format changes.
 const ProtocolVersion byte = 1
 
+// AppVersion is the application version encoded as (major << 8 | minor).
+// Used for client-server compatibility negotiation during handshake.
+// v1.2 = 0x0102 = 258
+const AppVersion uint16 = 0x0102
+
 // HeaderLen is the fixed header size: version(1) + type(1).
 const HeaderLen = 2
 
@@ -135,4 +140,28 @@ func AppendEncodeChecked(dst []byte, typ byte, payload []byte) []byte {
 		byte(crc>>24),
 	)
 	return dst
+}
+
+// ── Version Compatibility ─────────────────────────────────────
+
+// VersionMajor returns the major version from an encoded version number.
+func VersionMajor(v uint16) uint16 { return v >> 8 }
+
+// VersionMinor returns the minor version from an encoded version number.
+func VersionMinor(v uint16) uint16 { return v & 0xFF }
+
+// IsCompatible checks if two application versions are compatible.
+// Rules:
+//   - Major version must match (breaking wire-format change)
+//   - Client minor version must be ≤ server minor version (server supports older clients)
+//   - Version 0 means "unknown" (old client/server without version field) — always compatible
+func IsCompatible(clientVer, serverVer uint16) bool {
+	// Old clients/servers that don't send version are always allowed
+	if clientVer == 0 || serverVer == 0 {
+		return true
+	}
+	if VersionMajor(clientVer) != VersionMajor(serverVer) {
+		return false
+	}
+	return VersionMinor(clientVer) <= VersionMinor(serverVer)
 }

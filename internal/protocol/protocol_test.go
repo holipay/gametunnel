@@ -2,6 +2,7 @@ package protocol
 
 import (
 	"bytes"
+	"encoding/binary"
 	"net"
 	"testing"
 )
@@ -457,5 +458,117 @@ func TestPeerInfoWithIPv6PublicAddr(t *testing.T) {
 	}
 	if p2.Peers[0].PublicAddr.Port != 4700 {
 		t.Errorf("PublicAddr Port: got %d, want 4700", p2.Peers[0].PublicAddr.Port)
+	}
+}
+
+// ── Version Compatibility ─────────────────────────────────────
+
+func TestIsCompatible(t *testing.T) {
+	tests := []struct {
+		name     string
+		client   uint16
+		server   uint16
+		expected bool
+	}{
+		{"both zero (old versions)", 0, 0, true},
+		{"client zero (old client)", 0, 0x0102, true},
+		{"server zero (old server)", 0x0102, 0, true},
+		{"same version", 0x0102, 0x0102, true},
+		{"client older minor", 0x0101, 0x0102, true},
+		{"client newer minor", 0x0103, 0x0102, false},
+		{"different major", 0x0102, 0x0200, false},
+		{"different major reverse", 0x0200, 0x0102, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := IsCompatible(tt.client, tt.server)
+			if got != tt.expected {
+				t.Errorf("IsCompatible(0x%04x, 0x%04x) = %v, want %v",
+					tt.client, tt.server, got, tt.expected)
+			}
+		})
+	}
+}
+
+func TestVersionMajorMinor(t *testing.T) {
+	v := uint16(0x0102) // v1.2
+	if major := VersionMajor(v); major != 1 {
+		t.Errorf("VersionMajor(0x%04x) = %d, want 1", v, major)
+	}
+	if minor := VersionMinor(v); minor != 2 {
+		t.Errorf("VersionMinor(0x%04x) = %d, want 2", v, minor)
+	}
+}
+
+func TestRegisterVersionRoundTrip(t *testing.T) {
+	r := &RegisterPayload{
+		RoomID:   "test",
+		Username: "player1",
+		Version:  0x0102,
+	}
+	data := r.Marshal()
+	r2, err := UnmarshalRegister(data)
+	if err != nil {
+		t.Fatalf("UnmarshalRegister failed: %v", err)
+	}
+	if r2.Version != 0x0102 {
+		t.Errorf("Version: got 0x%04x, want 0x%04x", r2.Version, 0x0102)
+	}
+}
+
+func TestRegisterBackwardCompatible(t *testing.T) {
+	// Simulate old client that doesn't send version (shorter payload)
+	roomBytes := []byte("test")
+	userBytes := []byte("player1")
+	buf := make([]byte, 2+len(roomBytes)+2+len(userBytes))
+	off := 0
+	binary.LittleEndian.PutUint16(buf[off:], uint16(len(roomBytes)))
+	off += 2
+	copy(buf[off:], roomBytes)
+	off += len(roomBytes)
+	binary.LittleEndian.PutUint16(buf[off:], uint16(len(userBytes)))
+	off += 2
+	copy(buf[off:], userBytes)
+
+	r, err := UnmarshalRegister(buf)
+	if err != nil {
+		t.Fatalf("UnmarshalRegister failed: %v", err)
+	}
+	if r.Version != 0 {
+		t.Errorf("Version: got %d, want 0 (old client)", r.Version)
+	}
+}
+
+func TestAssignIPVersionRoundTrip(t *testing.T) {
+	a := &AssignIPPayload{
+		VirtualIP:  net.IPv4(10, 10, 0, 2),
+		SubnetMask: net.CIDRMask(24, 32),
+		ServerIP:   net.IPv4(10, 10, 0, 1),
+		Version:    0x0102,
+	}
+	data := a.Marshal()
+	a2, err := UnmarshalAssignIP(data)
+	if err != nil {
+		t.Fatalf("UnmarshalAssignIP failed: %v", err)
+	}
+	if a2.Version != 0x0102 {
+		t.Errorf("Version: got 0x%04x, want 0x%04x", a2.Version, 0x0102)
+	}
+}
+
+func TestAssignIPBackwardCompatible(t *testing.T) {
+	// Simulate old server that doesn't send version (12 bytes)
+	buf := make([]byte, 12)
+	copy(buf[0:4], net.IPv4(10, 10, 0, 2).To4())
+	copy(buf[4:8], net.CIDRMask(24, 32))
+	copy(buf[8:12], net.IPv4(10, 10, 0, 1).To4())
+
+	a, err := UnmarshalAssignIP(buf)
+	if err != nil {
+		t.Fatalf("UnmarshalAssignIP failed: %v", err)
+	}
+	if a.Version != 0 {
+		t.Errorf("Version: got %d, want 0 (old server)", a.Version)
 	}
 }
