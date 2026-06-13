@@ -197,12 +197,14 @@ func (t *Tunnel) Connect(ctx context.Context, serverAddr string, mtu int, newTUN
 		t.tunDev.Close()
 		t.tunDev = nil
 		if err := t.createTUN(mtu); err != nil {
+			conn.Close()
 			return err
 		}
 
 	case !tunAlive:
 		// First connection or TUN was lost — create new.
 		if err := t.createTUN(mtu); err != nil {
+			conn.Close()
 			return err
 		}
 	}
@@ -238,7 +240,7 @@ func (t *Tunnel) Connect(ctx context.Context, serverAddr string, mtu int, newTUN
 		}()
 	}
 	go func() {
-		t.keepaliveLoop(runCtx)
+		t.keepaliveLoop(runCtx, runCancel)
 		onGoroutineExit("keepaliveLoop")
 	}()
 	go func() {

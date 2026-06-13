@@ -67,7 +67,9 @@ func (tr *Tray) setup() {
 			statusText := s.TrayNoServer
 			if showSettingsDialog(statusText) {
 				cfg := client.LoadConfig()
+				tr.app.mu.Lock()
 				tr.app.cfg = cfg
+				tr.app.mu.Unlock()
 				if cfg.Lang != "" {
 					i18n.Set(i18n.ParseLang(cfg.Lang))
 				}
@@ -90,10 +92,12 @@ func (tr *Tray) setup() {
 					if status.Connected {
 						statusText = fmt.Sprintf(i18n.T().DlgStatusConn, status.VirtualIP, status.PeerCount)
 					}
-					if showSettingsDialog(statusText) {
-						cfg := client.LoadConfig()
-						tr.app.cfg = cfg
-						if cfg.Lang != "" {
+				if showSettingsDialog(statusText) {
+					cfg := client.LoadConfig()
+					tr.app.mu.Lock()
+					tr.app.cfg = cfg
+					tr.app.mu.Unlock()
+					if cfg.Lang != "" {
 							i18n.Set(i18n.ParseLang(cfg.Lang))
 						}
 						log.Printf("%s", i18n.T().TrayCfgUpdated)
@@ -131,7 +135,9 @@ func (tr *Tray) doConnect() {
 		statusText := i18n.T().TrayNoServer
 		if showSettingsDialog(statusText) {
 			cfg := client.LoadConfig()
+			tr.app.mu.Lock()
 			tr.app.cfg = cfg
+			tr.app.mu.Unlock()
 			if cfg.Lang != "" {
 				i18n.Set(i18n.ParseLang(cfg.Lang))
 			}
