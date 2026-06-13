@@ -316,6 +316,10 @@ func formatDuration(d time.Duration) string {
 
 // JSON serializes the status to JSON bytes.
 func (s StatusResponse) JSON() []byte {
-	b, _ := json.Marshal(s)
+	b, err := json.Marshal(s)
+	if err != nil {
+		log.Printf("status JSON marshal: %v", err)
+		return []byte("{}")
+	}
 	return b
 }

@@ -84,7 +84,7 @@ func (t *Tunnel) startHolePunch(ctx context.Context, peerIP net.IP) {
 //
 // Rate-limited: responds at most once per peer per holePunchBackoff interval
 // to prevent amplification attacks.
-func (t *Tunnel) handleHolePunchReceived(payload []byte) {
+func (t *Tunnel) handleHolePunchReceived(ctx context.Context, payload []byte) {
 	if len(payload) < 4 {
 		return
 	}
@@ -109,6 +109,11 @@ func (t *Tunnel) handleHolePunchReceived(payload []byte) {
 	go func() {
 		packet := t.cachedPunchPacket
 		for i := 0; i < holePunchBurstPerPhase; i++ {
+			select {
+			case <-ctx.Done():
+				return
+			default:
+			}
 			t.sendCtrl(packet, peer.PublicAddr)
 			time.Sleep(50 * time.Millisecond)
 		}
