@@ -1128,3 +1128,360 @@ func TestMarkServerResponse(t *testing.T) {
 		t.Error("timestamp should be recent")
 	}
 }
+
+// ── hasDirectPeerTraffic Tests ─────────────────────────────────
+
+func TestHasDirectPeerTraffic_DirectReach(t *testing.T) {
+	tunnel, _ := newTestTunnel(t)
+
+	peerIP := net.IPv4(10, 0, 0, 5).To4()
+	peer := &Peer{
+		VirtualIP:  peerIP,
+		PublicAddr: &net.UDPAddr{IP: net.IPv4(1, 2, 3, 4), Port: 12345},
+		Username:   "peer1",
+	}
+	peer.DirectReach.Store(true)
+
+	tunnel.mu.Lock()
+	tunnel.peers[ipKey(peerIP)] = peer
+	tunnel.mu.Unlock()
+
+	if !tunnel.hasDirectPeerTraffic(peerIP) {
+		t.Error("expected true for peer with DirectReach")
+	}
+}
+
+func TestHasDirectPeerTraffic_NoDirectReach(t *testing.T) {
+	tunnel, _ := newTestTunnel(t)
+
+	peerIP := net.IPv4(10, 0, 0, 5).To4()
+	peer := &Peer{
+		VirtualIP:  peerIP,
+		PublicAddr: &net.UDPAddr{IP: net.IPv4(1, 2, 3, 4), Port: 12345},
+		Username:   "peer1",
+	}
+
+	tunnel.mu.Lock()
+	tunnel.peers[ipKey(peerIP)] = peer
+	tunnel.mu.Unlock()
+
+	if tunnel.hasDirectPeerTraffic(peerIP) {
+		t.Error("expected false for peer without DirectReach")
+	}
+}
+
+func TestHasDirectPeerTraffic_UnknownPeer(t *testing.T) {
+	tunnel, _ := newTestTunnel(t)
+
+	peerIP := net.IPv4(10, 0, 0, 99).To4()
+
+	if tunnel.hasDirectPeerTraffic(peerIP) {
+		t.Error("expected false for unknown peer")
+	}
+}
+
+// ── sendP2PKeepalives Tests ────────────────────────────────────
+
+func TestSendP2PKeepalives_NoPeers(t *testing.T) {
+	tunnel, _ := newTestTunnel(t)
+
+	// Should not panic
+	tunnel.sendP2PKeepalives()
+}
+
+func TestSendP2PKeepalives_WithDirectPeers(t *testing.T) {
+	tunnel, _ := newTestTunnel(t)
+
+	peerIP := net.IPv4(10, 0, 0, 5).To4()
+	peerAddr := &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 12345}
+
+	peer := &Peer{
+		VirtualIP:  peerIP,
+		PublicAddr: peerAddr,
+		Username:   "peer1",
+	}
+	peer.DirectReach.Store(true)
+
+	tunnel.mu.Lock()
+	tunnel.peers[ipKey(peerIP)] = peer
+	tunnel.cachedPunchPacket = protocol.EncodeChecked(protocol.TypeHolePunch, tunnel.virtualIP.To4())
+	tunnel.mu.Unlock()
+
+	// Should not panic
+	tunnel.sendP2PKeepalives()
+}
+
+// ── Tunnel Status Tests ────────────────────────────────────────
+
+func TestTunnelStatus_Connected(t *testing.T) {
+	tunnel, _ := newTestTunnel(t)
+	mock := &mockTunDevice{}
+	tunnel.tunDev = mock
+	tunnel.virtualIP = net.IPv4(10, 10, 0, 2).To4()
+	tunnel.subnetMask = net.CIDRMask(24, 32)
+	tunnel.serverIP = net.IPv4(10, 10, 0, 1).To4()
+
+	status := tunnel.Status()
+
+	if !status.Connected {
+		t.Error("expected Connected to be true")
+	}
+	if !status.VirtualIP.Equal(tunnel.virtualIP) {
+		t.Errorf("VirtualIP: got %v, want %v", status.VirtualIP, tunnel.virtualIP)
+	}
+	if !status.ServerIP.Equal(tunnel.serverIP) {
+		t.Errorf("ServerIP: got %v, want %v", status.ServerIP, tunnel.serverIP)
+	}
+}
+
+func TestTunnelStatus_Disconnected(t *testing.T) {
+	tunnel, _ := newTestTunnel(t)
+
+	status := tunnel.Status()
+
+	if status.Connected {
+		t.Error("expected Connected to be false")
+	}
+}
+
+func TestTunnelStatus_WithPeers(t *testing.T) {
+	tunnel, _ := newTestTunnel(t)
+	mock := &mockTunDevice{}
+	tunnel.tunDev = mock
+	tunnel.virtualIP = net.IPv4(10, 10, 0, 2).To4()
+
+	// Add P2P peer
+	peer1IP := net.IPv4(10, 0, 0, 5).To4()
+	peer1 := &Peer{VirtualIP: peer1IP, Username: "p2p"}
+	peer1.DirectReach.Store(true)
+
+	// Add relay peer
+	peer2IP := net.IPv4(10, 0, 0, 6).To4()
+	peer2 := &Peer{VirtualIP: peer2IP, Username: "relay"}
+
+	tunnel.mu.Lock()
+	tunnel.peers[ipKey(peer1IP)] = peer1
+	tunnel.peers[ipKey(peer2IP)] = peer2
+	tunnel.mu.Unlock()
+
+	status := tunnel.Status()
+
+	if status.PeerCount != 2 {
+		t.Errorf("PeerCount: got %d, want 2", status.PeerCount)
+	}
+	if status.P2PPeers != 1 {
+		t.Errorf("P2PPeers: got %d, want 1", status.P2PPeers)
+	}
+	if status.RelayPeers != 1 {
+		t.Errorf("RelayPeers: got %d, want 1", status.RelayPeers)
+	}
+}
+
+// ── VirtualIP Tests ────────────────────────────────────────────
+
+func TestVirtualIP(t *testing.T) {
+	tunnel, _ := newTestTunnel(t)
+
+	// Initially nil
+	if tunnel.VirtualIP() != nil {
+		t.Error("expected nil initially")
+	}
+
+	ip := net.IPv4(10, 10, 0, 2).To4()
+	tunnel.virtualIP = ip
+
+	if !tunnel.VirtualIP().Equal(ip) {
+		t.Errorf("got %v, want %v", tunnel.VirtualIP(), ip)
+	}
+}
+
+// ── CloseTUN Tests ─────────────────────────────────────────────
+
+func TestCloseTUN(t *testing.T) {
+	tunnel, _ := newTestTunnel(t)
+	mock := &mockTunDevice{}
+	tunnel.tunDev = mock
+	tunnel.lastAssignedIP = net.IPv4(10, 10, 0, 2).To4()
+
+	tunnel.CloseTUN()
+
+	if !mock.closed {
+		t.Error("expected TUN device to be closed")
+	}
+	if tunnel.tunDev != nil {
+		t.Error("expected tunDev to be nil")
+	}
+	if tunnel.lastAssignedIP != nil {
+		t.Error("expected lastAssignedIP to be nil")
+	}
+}
+
+func TestCloseTUN_NilDevice(t *testing.T) {
+	tunnel, _ := newTestTunnel(t)
+	tunnel.tunDev = nil
+
+	// Should not panic
+	tunnel.CloseTUN()
+}
+
+// ── Disconnect Tests ───────────────────────────────────────────
+
+func TestDisconnect(t *testing.T) {
+	tunnel, _ := newTestTunnel(t)
+	mock := &mockTunDevice{}
+	tunnel.tunDev = mock
+	tunnel.serverAddr = &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 4700}
+
+	tunnel.Disconnect()
+
+	// Disconnect should be idempotent
+	tunnel.Disconnect()
+}
+
+// ── loadINI / loadJSON Tests ───────────────────────────────────
+
+func TestLoadINI_AllFields(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.ini")
+
+	content := `# Comment
+server=1.2.3.4:4700
+name=TestPlayer
+room=myroom
+password=secret123
+lang=en
+mtu=1200
+`
+	os.WriteFile(path, []byte(content), 0644)
+
+	cfg := &Config{}
+	ok := loadINI(path, cfg)
+
+	if !ok {
+		t.Fatal("loadINI should return true")
+	}
+	if cfg.ServerAddr != "1.2.3.4:4700" {
+		t.Errorf("ServerAddr: got %q", cfg.ServerAddr)
+	}
+	if cfg.PlayerName != "TestPlayer" {
+		t.Errorf("PlayerName: got %q", cfg.PlayerName)
+	}
+	if cfg.RoomID != "myroom" {
+		t.Errorf("RoomID: got %q", cfg.RoomID)
+	}
+	if cfg.RoomPassword != "secret123" {
+		t.Errorf("RoomPassword: got %q", cfg.RoomPassword)
+	}
+	if cfg.Lang != "en" {
+		t.Errorf("Lang: got %q", cfg.Lang)
+	}
+	if cfg.MTU != 1200 {
+		t.Errorf("MTU: got %d", cfg.MTU)
+	}
+}
+
+func TestLoadINI_MtuOutOfRange(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.ini")
+
+	// MTU too low
+	os.WriteFile(path, []byte("mtu=100"), 0644)
+	cfg := &Config{MTU: 1400}
+	loadINI(path, cfg)
+	if cfg.MTU != 1400 {
+		t.Errorf("MTU should be unchanged for out-of-range value, got %d", cfg.MTU)
+	}
+
+	// MTU too high
+	os.WriteFile(path, []byte("mtu=99999"), 0644)
+	cfg.MTU = 1400
+	loadINI(path, cfg)
+	if cfg.MTU != 1400 {
+		t.Errorf("MTU should be unchanged for out-of-range value, got %d", cfg.MTU)
+	}
+}
+
+func TestLoadJSON_AllFields(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+
+	content := `{
+		"server_addr": "5.6.7.8:4700",
+		"player_name": "JSONPlayer",
+		"room_id": "jsonroom",
+		"room_password": "jsonpass",
+		"lang": "en",
+		"mtu": 1300
+	}`
+	os.WriteFile(path, []byte(content), 0644)
+
+	cfg := &Config{MTU: 1400}
+	loadJSON(path, cfg)
+
+	if cfg.ServerAddr != "5.6.7.8:4700" {
+		t.Errorf("ServerAddr: got %q", cfg.ServerAddr)
+	}
+	if cfg.PlayerName != "JSONPlayer" {
+		t.Errorf("PlayerName: got %q", cfg.PlayerName)
+	}
+	if cfg.RoomID != "jsonroom" {
+		t.Errorf("RoomID: got %q", cfg.RoomID)
+	}
+	if cfg.RoomPassword != "jsonpass" {
+		t.Errorf("RoomPassword: got %q", cfg.RoomPassword)
+	}
+	if cfg.Lang != "en" {
+		t.Errorf("Lang: got %q", cfg.Lang)
+	}
+	if cfg.MTU != 1300 {
+		t.Errorf("MTU: got %d", cfg.MTU)
+	}
+}
+
+func TestSaveConfig(t *testing.T) {
+	cfg := &Config{
+		ServerAddr:   "1.2.3.4:4700",
+		PlayerName:   "TestPlayer",
+		RoomID:       "testroom",
+		RoomPassword: "pass",
+		Lang:         "en",
+		MTU:          1200,
+	}
+
+	err := SaveConfig(cfg)
+	if err != nil {
+		t.Fatalf("SaveConfig failed: %v", err)
+	}
+
+	// Clean up
+	defer os.Remove(PortableConfigPath())
+}
+
+// ── ValidateServerAddr Edge Cases ──────────────────────────────
+
+func TestValidateServerAddr_IPv6(t *testing.T) {
+	tests := []struct {
+		addr    string
+		wantErr bool
+	}{
+		{"[2408::1]:4700", false},
+		{"[::1]:4700", false},
+		{"2408::1:4700", true}, // missing brackets
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.addr, func(t *testing.T) {
+			err := ValidateServerAddr(tt.addr)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("ValidateServerAddr(%q) error = %v, wantErr %v", tt.addr, err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestValidateServerAddr_NonNumericPort(t *testing.T) {
+	err := ValidateServerAddr("1.2.3.4:abc")
+	if err == nil {
+		t.Error("expected error for non-numeric port")
+	}
+}
