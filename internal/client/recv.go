@@ -110,6 +110,33 @@ func (t *Tunnel) handleServerData(ctx context.Context, msg *protocol.Message) {
 // address (not via the server relay). Only TypeData is expected on this path.
 // This is the ONLY place DirectReach should be set — it confirms actual P2P
 // connectivity because the packet arrived from the peer's real address.
+// decryptWriteAndRelease decrypts data (if encrypted) and writes to TUN device.
+// Releases the DataPayload back to the pool when done.
+func (t *Tunnel) decryptWriteAndRelease(dp *protocol.DataPayload, cipher *crypto.Cipher) {
+	t.mu.RLock()
+	dev := t.tunDev
+	t.mu.RUnlock()
+	if dev == nil {
+		protocol.PutDataPayload(dp)
+		return
+	}
+
+	outData := dp.Data
+	if cipher != nil && crypto.IsEncrypted(dp.Data) {
+		var err error
+		outData, err = cipher.Decrypt(dp.Data)
+		if err != nil {
+			protocol.PutDataPayload(dp)
+			return
+		}
+	}
+
+	if _, err := dev.Write(outData); err != nil {
+		log.Printf(i18n.T().LogTUNWriteFail, err)
+	}
+	protocol.PutDataPayload(dp)
+}
+
 func (t *Tunnel) handleDirectData(from *net.UDPAddr, msg *protocol.Message) {
 	if msg.Type != protocol.TypeData {
 		return
@@ -120,14 +147,6 @@ func (t *Tunnel) handleDirectData(from *net.UDPAddr, msg *protocol.Message) {
 		if dp != nil {
 			protocol.PutDataPayload(dp)
 		}
-		return
-	}
-
-	t.mu.RLock()
-	dev := t.tunDev
-	t.mu.RUnlock()
-	if dev == nil {
-		protocol.PutDataPayload(dp)
 		return
 	}
 
@@ -150,21 +169,8 @@ func (t *Tunnel) handleDirectData(from *net.UDPAddr, msg *protocol.Message) {
 	// Mark P2P direct path confirmed — this is the legitimate DirectReach signal
 	peer.DirectReach.Store(true)
 
-	// Decrypt if encrypted — P2P uses p2pCipher (DirClientToClient),
-	// not decCipher (DirServerToClient) which is for relay path only.
-	outData := dp.Data
-	if t.p2pCipher != nil && crypto.IsEncrypted(dp.Data) {
-		outData, err = t.p2pCipher.Decrypt(dp.Data)
-		if err != nil {
-			protocol.PutDataPayload(dp)
-			return
-		}
-	}
-
-	if _, err := dev.Write(outData); err != nil {
-		log.Printf(i18n.T().LogTUNWriteFail, err)
-	}
-	protocol.PutDataPayload(dp)
+	// Decrypt (P2P uses p2pCipher) and write to TUN
+	t.decryptWriteAndRelease(dp, t.p2pCipher)
 }
 
 // handlePeerInfo updates the peer list from the server.
@@ -245,14 +251,6 @@ func (t *Tunnel) handleDataFromServer(payload []byte) {
 		return
 	}
 
-	t.mu.RLock()
-	dev := t.tunDev
-	t.mu.RUnlock()
-	if dev == nil {
-		protocol.PutDataPayload(dp)
-		return
-	}
-
 	srcKey := ipKey(dp.SrcIP)
 
 	// Allow traffic from the server's virtual IP (relay path) or known peers.
@@ -267,21 +265,8 @@ func (t *Tunnel) handleDataFromServer(payload []byte) {
 		}
 	}
 
-	// Decrypt if encrypted
-	outData := dp.Data
-	if t.decCipher != nil && crypto.IsEncrypted(dp.Data) {
-		outData, err = t.decCipher.Decrypt(dp.Data)
-		if err != nil {
-			// Decrypt failure — drop packet (tampered or wrong key)
-			protocol.PutDataPayload(dp)
-			return
-		}
-	}
-
-	if _, err := dev.Write(outData); err != nil {
-		log.Printf(i18n.T().LogTUNWriteFail, err)
-	}
-	protocol.PutDataPayload(dp)
+	// Decrypt (relay uses decCipher) and write to TUN
+	t.decryptWriteAndRelease(dp, t.decCipher)
 }
 
 // receiveFromTUN reads IP packets from the TUN device and dispatches them
