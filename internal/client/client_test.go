@@ -1485,3 +1485,390 @@ func TestValidateServerAddr_NonNumericPort(t *testing.T) {
 		t.Error("expected error for non-numeric port")
 	}
 }
+
+// ── sendUDP Tests ──────────────────────────────────────────────
+
+func TestSendUDP_Normal(t *testing.T) {
+	tunnel, serverConn := newTestTunnel(t)
+
+	data := []byte{0x01, 0x02, 0x03}
+	tunnel.sendUDP(data, tunnel.serverAddr)
+
+	pkt := readUDPWithTimeout(serverConn, 100*time.Millisecond)
+	if pkt == nil {
+		t.Fatal("expected packet")
+	}
+	if !bytes.Equal(pkt, data) {
+		t.Errorf("data mismatch: got %v, want %v", pkt, data)
+	}
+}
+
+// ── sendCtrl Tests ─────────────────────────────────────────────
+
+func TestSendCtrl_Normal(t *testing.T) {
+	tunnel, serverConn := newTestTunnel(t)
+
+	data := []byte{0x01, 0x02}
+	tunnel.sendCtrl(data, tunnel.serverAddr)
+
+	pkt := readUDPWithTimeout(serverConn, 100*time.Millisecond)
+	if pkt == nil {
+		t.Fatal("expected packet")
+	}
+}
+
+// ── sendLoop Tests ─────────────────────────────────────────────
+
+func TestSendLoop_CtrlPriority(t *testing.T) {
+	tunnel, serverConn := newTestTunnel(t)
+
+	// Send data first, then ctrl
+	tunnel.sendCh <- sendJob{data: []byte{0x01}, addr: tunnel.serverAddr}
+	tunnel.ctrlCh <- sendJob{data: []byte{0x02}, addr: tunnel.serverAddr}
+
+	// Both should be received
+	pkt1 := readUDPWithTimeout(serverConn, 100*time.Millisecond)
+	if pkt1 == nil {
+		t.Fatal("expected first packet")
+	}
+
+	pkt2 := readUDPWithTimeout(serverConn, 100*time.Millisecond)
+	if pkt2 == nil {
+		t.Fatal("expected second packet")
+	}
+}
+
+// ── handleDirectData More Tests ────────────────────────────────
+
+func TestHandleDirectData_NonTypeData(t *testing.T) {
+	tunnel, _ := newTestTunnel(t)
+	mock := &mockTunDevice{}
+	tunnel.tunDev = mock
+
+	fromAddr := &net.UDPAddr{IP: net.IPv4(1, 2, 3, 4), Port: 12345}
+
+	msg := &protocol.Message{
+		Type:    protocol.TypeKeepAlive, // not TypeData
+		Payload: []byte{},
+	}
+
+	tunnel.handleDirectData(fromAddr, msg)
+
+	if len(mock.writeBuf) != 0 {
+		t.Error("non-TypeData should not write to TUN")
+	}
+}
+
+func TestHandleDirectData_EmptyPayload(t *testing.T) {
+	tunnel, _ := newTestTunnel(t)
+	mock := &mockTunDevice{}
+	tunnel.tunDev = mock
+
+	fromAddr := &net.UDPAddr{IP: net.IPv4(1, 2, 3, 4), Port: 12345}
+
+	dp := &protocol.DataPayload{
+		SrcIP: net.IPv4(10, 0, 0, 5).To4(),
+		DstIP: tunnel.virtualIP,
+		Data:  []byte{}, // empty
+	}
+
+	msg := &protocol.Message{
+		Type:    protocol.TypeData,
+		Payload: dp.Marshal(),
+	}
+
+	tunnel.handleDirectData(fromAddr, msg)
+
+	if len(mock.writeBuf) != 0 {
+		t.Error("empty data should not write to TUN")
+	}
+}
+
+// ── handleServerData Tests ─────────────────────────────────────
+
+func TestHandleServerData_Ping(t *testing.T) {
+	tunnel, serverConn := newTestTunnel(t)
+
+	// Build a ping payload
+	ping := &protocol.PingPayload{Timestamp: time.Now().UnixNano()}
+	msg := &protocol.Message{
+		Type:    protocol.TypePing,
+		Payload: ping.Marshal(),
+	}
+
+	tunnel.handleServerData(context.Background(), msg)
+
+	// Should have sent a pong
+	pkt := readUDPWithTimeout(serverConn, 100*time.Millisecond)
+	if pkt == nil {
+		t.Error("expected pong packet")
+	}
+}
+
+func TestHandleServerData_MarkServerResponse(t *testing.T) {
+	tunnel, _ := newTestTunnel(t)
+
+	// Initially nil
+	if tunnel.lastServerResponse.Load() != nil {
+		t.Error("expected nil initially")
+	}
+
+	msg := &protocol.Message{
+		Type:    protocol.TypePing,
+		Payload: (&protocol.PingPayload{Timestamp: time.Now().UnixNano()}).Marshal(),
+	}
+
+	tunnel.handleServerData(context.Background(), msg)
+
+	// Should have marked server response
+	if tunnel.lastServerResponse.Load() == nil {
+		t.Error("expected server response to be marked")
+	}
+}
+
+// ── handleAssignIP Tests ───────────────────────────────────────
+
+func TestHandleAssignIP_Valid(t *testing.T) {
+	tunnel, _ := newTestTunnel(t)
+
+	assign := &protocol.AssignIPPayload{
+		VirtualIP:  net.IPv4(10, 10, 0, 5).To4(),
+		SubnetMask: net.CIDRMask(24, 32),
+		ServerIP:   net.IPv4(10, 10, 0, 1).To4(),
+		Version:    protocol.AppVersion,
+	}
+
+	err := tunnel.handleAssignIP(assign.Marshal())
+	if err != nil {
+		t.Fatalf("handleAssignIP failed: %v", err)
+	}
+
+	if !tunnel.virtualIP.Equal(net.IPv4(10, 10, 0, 5)) {
+		t.Errorf("VirtualIP: got %v", tunnel.virtualIP)
+	}
+	if !tunnel.serverIP.Equal(net.IPv4(10, 10, 0, 1)) {
+		t.Errorf("ServerIP: got %v", tunnel.serverIP)
+	}
+}
+
+func TestHandleAssignIP_VersionIncompatible(t *testing.T) {
+	tunnel, _ := newTestTunnel(t)
+
+	assign := &protocol.AssignIPPayload{
+		VirtualIP:  net.IPv4(10, 10, 0, 5).To4(),
+		SubnetMask: net.CIDRMask(24, 32),
+		ServerIP:   net.IPv4(10, 10, 0, 1).To4(),
+		Version:    0xFF00, // different major version
+	}
+
+	err := tunnel.handleAssignIP(assign.Marshal())
+	if err == nil {
+		t.Error("expected error for incompatible version")
+	}
+}
+
+func TestHandleAssignIP_InvalidIP(t *testing.T) {
+	tunnel, _ := newTestTunnel(t)
+
+	// IP not in subnet
+	assign := &protocol.AssignIPPayload{
+		VirtualIP:  net.IPv4(192, 168, 1, 1).To4(), // different subnet
+		SubnetMask: net.CIDRMask(24, 32),
+		ServerIP:   net.IPv4(10, 10, 0, 1).To4(),
+	}
+
+	err := tunnel.handleAssignIP(assign.Marshal())
+	if err == nil {
+		t.Error("expected error for IP not in subnet")
+	}
+}
+
+// ── startHolePunch Tests ───────────────────────────────────────
+
+func TestStartHolePunch_UnknownPeer(t *testing.T) {
+	tunnel, _ := newTestTunnel(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+
+	// Should not panic for unknown peer
+	tunnel.startHolePunch(ctx, net.IPv4(10, 0, 0, 99).To4())
+}
+
+func TestStartHolePunch_ContextCancel(t *testing.T) {
+	tunnel, _ := newTestTunnel(t)
+
+	peerIP := net.IPv4(10, 0, 0, 5).To4()
+	peer := &Peer{
+		VirtualIP:  peerIP,
+		PublicAddr: &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 12345},
+		Username:   "peer1",
+	}
+
+	tunnel.mu.Lock()
+	tunnel.peers[ipKey(peerIP)] = peer
+	tunnel.cachedPunchPacket = protocol.EncodeChecked(protocol.TypeHolePunch, tunnel.virtualIP.To4())
+	tunnel.mu.Unlock()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // cancel immediately
+
+	// Should return quickly
+	done := make(chan struct{})
+	go func() {
+		tunnel.startHolePunch(ctx, peerIP)
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		// expected
+	case <-time.After(1 * time.Second):
+		t.Error("startHolePunch should return when context is cancelled")
+	}
+}
+
+// ── retryFailedHolePunches Tests ───────────────────────────────
+
+func TestRetryFailedHolePunches_NoPeers(t *testing.T) {
+	tunnel, _ := newTestTunnel(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+
+	// Should not panic
+	tunnel.retryFailedHolePunches(ctx)
+}
+
+func TestRetryFailedHolePunches_WithPeers(t *testing.T) {
+	tunnel, _ := newTestTunnel(t)
+
+	peerIP := net.IPv4(10, 0, 0, 5).To4()
+	peer := &Peer{
+		VirtualIP:  peerIP,
+		PublicAddr: &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 12345},
+		Username:   "peer1",
+	}
+	// DirectReach is false by default
+
+	tunnel.mu.Lock()
+	tunnel.peers[ipKey(peerIP)] = peer
+	tunnel.cachedPunchPacket = protocol.EncodeChecked(protocol.TypeHolePunch, tunnel.virtualIP.To4())
+	tunnel.mu.Unlock()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+
+	// Should not panic
+	tunnel.retryFailedHolePunches(ctx)
+}
+
+// ── routePacket Tests ──────────────────────────────────────────
+
+func TestRoutePacket_BroadcastToServer(t *testing.T) {
+	tunnel, serverConn := newTestTunnel(t)
+	mock := &mockTunDevice{}
+	tunnel.tunDev = mock
+	tunnel.virtualIP = net.IPv4(10, 10, 0, 2).To4()
+	tunnel.subnetMask = net.CIDRMask(24, 32)
+	tunnel.serverIP = net.IPv4(10, 10, 0, 1).To4()
+	tunnel.serverIPKey = ipKey(tunnel.serverIP)
+	tunnel.cachedSubnet = &net.IPNet{
+		IP:   tunnel.virtualIP.Mask(tunnel.subnetMask),
+		Mask: tunnel.subnetMask,
+	}
+
+	// Broadcast packet (255.255.255.255)
+	pkt := make([]byte, 20)
+	pkt[0] = 0x45 // IPv4
+	srcIP := net.IPv4(10, 10, 0, 2).To4()
+	dstIP := net.IPv4(255, 255, 255, 255).To4()
+
+	tunnel.routePacket(pkt, srcIP, dstIP)
+
+	// Should have sent to server
+	pkt2 := readUDPWithTimeout(serverConn, 100*time.Millisecond)
+	if pkt2 == nil {
+		t.Error("expected broadcast packet to be sent to server")
+	}
+}
+
+func TestRoutePacket_UnicastToServer(t *testing.T) {
+	tunnel, serverConn := newTestTunnel(t)
+	mock := &mockTunDevice{}
+	tunnel.tunDev = mock
+	tunnel.virtualIP = net.IPv4(10, 10, 0, 2).To4()
+	tunnel.subnetMask = net.CIDRMask(24, 32)
+	tunnel.serverIP = net.IPv4(10, 10, 0, 1).To4()
+	tunnel.serverIPKey = ipKey(tunnel.serverIP)
+	tunnel.cachedSubnet = &net.IPNet{
+		IP:   tunnel.virtualIP.Mask(tunnel.subnetMask),
+		Mask: tunnel.subnetMask,
+	}
+
+	// Unicast to server
+	pkt := make([]byte, 20)
+	pkt[0] = 0x45
+	srcIP := net.IPv4(10, 10, 0, 2).To4()
+	dstIP := net.IPv4(10, 10, 0, 1).To4() // server IP
+
+	tunnel.routePacket(pkt, srcIP, dstIP)
+
+	pkt2 := readUDPWithTimeout(serverConn, 100*time.Millisecond)
+	if pkt2 == nil {
+		t.Error("expected packet to be sent to server")
+	}
+}
+
+func TestRoutePacket_PeerFallbackToRelay(t *testing.T) {
+	tunnel, serverConn := newTestTunnel(t)
+	mock := &mockTunDevice{}
+	tunnel.tunDev = mock
+	tunnel.virtualIP = net.IPv4(10, 10, 0, 2).To4()
+	tunnel.subnetMask = net.CIDRMask(24, 32)
+	tunnel.serverIP = net.IPv4(10, 10, 0, 1).To4()
+	tunnel.serverIPKey = ipKey(tunnel.serverIP)
+	tunnel.cachedSubnet = &net.IPNet{
+		IP:   tunnel.virtualIP.Mask(tunnel.subnetMask),
+		Mask: tunnel.subnetMask,
+	}
+
+	// Peer exists but no DirectReach - should fallback to relay
+	peerIP := net.IPv4(10, 10, 0, 5).To4()
+	peer := &Peer{
+		VirtualIP:  peerIP,
+		PublicAddr: &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 12345},
+		Username:   "peer1",
+	}
+	// DirectReach is false
+
+	tunnel.mu.Lock()
+	tunnel.peers[ipKey(peerIP)] = peer
+	tunnel.mu.Unlock()
+
+	pkt := make([]byte, 20)
+	pkt[0] = 0x45
+	srcIP := net.IPv4(10, 10, 0, 2).To4()
+	dstIP := peerIP
+
+	tunnel.routePacket(pkt, srcIP, dstIP)
+
+	// Should have sent to server (relay)
+	pkt2 := readUDPWithTimeout(serverConn, 100*time.Millisecond)
+	if pkt2 == nil {
+		t.Error("expected packet to be relayed to server")
+	}
+}
+
+// ── Disconnect Tests ───────────────────────────────────────────
+
+func TestDisconnect_ClosesConn(t *testing.T) {
+	tunnel, _ := newTestTunnel(t)
+	mock := &mockTunDevice{}
+	tunnel.tunDev = mock
+
+	tunnel.Disconnect()
+
+	// Disconnect should be idempotent
+	tunnel.Disconnect()
+}
