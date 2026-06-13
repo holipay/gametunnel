@@ -16,6 +16,7 @@ func newTestRoom(subnetStr string, serverIP net.IP) *Room {
 		ipBitmap:    make([]uint64, 4),
 		maxPlayers:  10,
 		ipConnCount: make(map[connIPKey]int),
+		regBuf:      [2]map[string]int{make(map[string]int), make(map[string]int)},
 		done:        make(chan struct{}),
 	}
 	r.markIPUsed(net.IPv4(serverIP[0], serverIP[1], serverIP[2], 0))   // network address
@@ -398,4 +399,262 @@ func TestAllocateSubnet(t *testing.T) {
 	if !subnet.IP.Equal(expected) {
 		t.Errorf("subnet IP: got %v, want %v", subnet.IP, expected)
 	}
+}
+
+func TestAllocateSubnet_MultipleRooms(t *testing.T) {
+	conn, _ := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 0})
+	defer conn.Close()
+
+	_, defaultSubnet, _ := net.ParseCIDR("10.10.0.0/24")
+	defaultRoom, _ := NewRoom(RoomConfig{
+		RoomID:     "default",
+		Subnet:     defaultSubnet,
+		MaxPlayers: 10,
+		Conn:       conn,
+	})
+
+	_, room2Subnet, _ := net.ParseCIDR("10.10.5.0/24")
+	room2, _ := NewRoom(RoomConfig{
+		RoomID:     "room2",
+		Subnet:     room2Subnet,
+		MaxPlayers: 10,
+		Conn:       conn,
+	})
+
+	s := &Server{
+		rooms: map[string]*Room{
+			"default": defaultRoom,
+			"room2":   room2,
+		},
+		defaultRoom: defaultRoom,
+	}
+
+	subnet := s.allocateSubnet()
+	if subnet == nil {
+		t.Fatal("allocateSubnet returned nil")
+	}
+
+	// Should be 10.10.6.0/24 (maxIdx=5, then +1)
+	expected := net.IPv4(10, 10, 6, 0)
+	if !subnet.IP.Equal(expected) {
+		t.Errorf("subnet IP: got %v, want %v", subnet.IP, expected)
+	}
+}
+
+func TestAllocateSubnet_NilDefaultRoom(t *testing.T) {
+	s := &Server{
+		rooms:       map[string]*Room{},
+		defaultRoom: nil,
+	}
+
+	subnet := s.allocateSubnet()
+	if subnet != nil {
+		t.Errorf("expected nil for nil defaultRoom, got %v", subnet)
+	}
+}
+
+// ── formatDuration Tests ───────────────────────────────────────
+
+func TestFormatDuration(t *testing.T) {
+	tests := []struct {
+		d    time.Duration
+		want string
+	}{
+		{30 * time.Second, "30s"},
+		{90 * time.Second, "1m30s"},
+		{1 * time.Hour, "1h0m"},
+		{25 * time.Hour, "1d1h"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.want, func(t *testing.T) {
+			got := formatDuration(tt.d)
+			if got != tt.want {
+				t.Errorf("formatDuration(%v) = %q, want %q", tt.d, got, tt.want)
+			}
+		})
+	}
+}
+
+// ── connIPKey Tests ────────────────────────────────────────────
+
+func TestAddrToConnIPKey(t *testing.T) {
+	addr := &net.UDPAddr{IP: net.IPv4(192, 168, 1, 100), Port: 12345}
+	k := addrToConnIPKey(addr)
+
+	expected := connIPKey{192, 168, 1, 100}
+	if k != expected {
+		t.Errorf("got %v, want %v", k, expected)
+	}
+}
+
+func TestAddrToConnIPKey_IPv6(t *testing.T) {
+	addr := &net.UDPAddr{IP: net.ParseIP("2408::1"), Port: 12345}
+	k := addrToConnIPKey(addr)
+
+	// IPv6 should return zero key
+	expected := connIPKey{}
+	if k != expected {
+		t.Errorf("got %v, want %v for IPv6", k, expected)
+	}
+}
+
+// ── Room SnapshotState Tests ───────────────────────────────────
+
+func TestSnapshotState(t *testing.T) {
+	r := newTestRoom("10.10.0.0/24", net.IPv4(10, 10, 0, 1))
+	r.roomID = "testroom"
+
+	addr := &net.UDPAddr{IP: net.IPv4(1, 2, 3, 4), Port: 12345}
+	c := &Client{
+		Username:  "player1",
+		VirtualIP: net.IPv4(10, 10, 0, 2),
+		PublicAddr: addr,
+		LastSeen:  time.Now(),
+		auth:      authNone,
+	}
+
+	r.mu.Lock()
+	r.clients[ipKey(c.VirtualIP)] = c
+	r.markIPUsed(c.VirtualIP)
+	r.mu.Unlock()
+
+	state := r.SnapshotState()
+
+	if state.Version != stateVersion {
+		t.Errorf("Version: got %d, want %d", state.Version, stateVersion)
+	}
+	if state.Subnet != "10.10.0.0/24" {
+		t.Errorf("Subnet: got %q", state.Subnet)
+	}
+	if len(state.Clients) != 1 {
+		t.Errorf("Clients: got %d, want 1", len(state.Clients))
+	}
+
+	entry, ok := state.Clients["10.10.0.2"]
+	if !ok {
+		t.Fatal("expected client 10.10.0.2 in snapshot")
+	}
+	if entry.Username != "player1" {
+		t.Errorf("Username: got %q", entry.Username)
+	}
+}
+
+func TestSnapshotState_SkipsAuthChallenge(t *testing.T) {
+	r := newTestRoom("10.10.0.0/24", net.IPv4(10, 10, 0, 1))
+
+	addr := &net.UDPAddr{IP: net.IPv4(1, 2, 3, 4), Port: 12345}
+	c := &Client{
+		Username:  "challenger",
+		VirtualIP: net.IPv4(10, 10, 0, 2),
+		PublicAddr: addr,
+		LastSeen:  time.Now(),
+		auth:      authChallengeSent, // not fully authenticated
+	}
+
+	r.mu.Lock()
+	r.clients[ipKey(c.VirtualIP)] = c
+	r.mu.Unlock()
+
+	state := r.SnapshotState()
+
+	if len(state.Clients) != 0 {
+		t.Errorf("expected 0 clients (auth challenge), got %d", len(state.Clients))
+	}
+}
+
+// ── Room IP Bitmap Tests ───────────────────────────────────────
+
+func TestMarkIPUsedAndFree(t *testing.T) {
+	r := newTestRoom("10.10.0.0/24", net.IPv4(10, 10, 0, 1))
+
+	ip := net.IPv4(10, 10, 0, 50)
+
+	// Mark used
+	r.markIPUsed(ip)
+	octet := ip.To4()[3]
+	if r.ipBitmap[octet/64]&(1<<(octet%64)) == 0 {
+		t.Error("IP should be marked as used")
+	}
+
+	// Mark free
+	r.markIPFree(ip)
+	if r.ipBitmap[octet/64]&(1<<(octet%64)) != 0 {
+		t.Error("IP should be marked as free")
+	}
+}
+
+// ── Room checkRegRate Tests ────────────────────────────────────
+
+func TestCheckRegRate(t *testing.T) {
+	r := newTestRoom("10.10.0.0/24", net.IPv4(10, 10, 0, 1))
+	r.maxRegPerIP = 3
+
+	ip := "1.2.3.4"
+
+	// Should allow up to maxRegPerIP
+	for i := 0; i < 3; i++ {
+		if !r.checkRegRate(ip) {
+			t.Errorf("request %d should be allowed", i)
+		}
+	}
+
+	// Next should be rejected
+	if r.checkRegRate(ip) {
+		t.Error("request should be rejected after limit")
+	}
+}
+
+// ── Room getAuthKey Tests ──────────────────────────────────────
+
+func TestGetAuthKey_NilPassword(t *testing.T) {
+	r := newTestRoom("10.10.0.0/24", net.IPv4(10, 10, 0, 1))
+	r.roomPass = ""
+
+	key := r.getAuthKey("testroom")
+	if key != nil {
+		t.Error("expected nil key for empty password")
+	}
+}
+
+func TestGetAuthKey_WithPassword(t *testing.T) {
+	r := newTestRoom("10.10.0.0/24", net.IPv4(10, 10, 0, 1))
+	r.roomPass = "secret"
+
+	key := r.getAuthKey("testroom")
+	if key == nil {
+		t.Fatal("expected non-nil key")
+	}
+	if len(key) != 32 {
+		t.Errorf("key length: got %d, want 32", len(key))
+	}
+
+	// Should be cached
+	key2 := r.getAuthKey("testroom")
+	if len(key2) != len(key) {
+		t.Error("cached key should have same length")
+	}
+}
+
+// ── markDirty Tests ────────────────────────────────────────────
+
+func TestMarkDirty(t *testing.T) {
+	r := newTestRoom("10.10.0.0/24", net.IPv4(10, 10, 0, 1))
+
+	called := false
+	r.onDirty = func() { called = true }
+
+	r.markDirty()
+
+	if !called {
+		t.Error("onDirty should be called")
+	}
+}
+
+func TestMarkDirty_NilCallback(t *testing.T) {
+	r := newTestRoom("10.10.0.0/24", net.IPv4(10, 10, 0, 1))
+	r.onDirty = nil
+
+	// Should not panic
+	r.markDirty()
 }
