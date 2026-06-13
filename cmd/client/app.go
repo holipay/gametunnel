@@ -141,10 +141,12 @@ func (a *App) Connect(cfg *client.Config) {
 	a.tunnel.Disconnect()
 	a.tunnel.CloseTUN()
 
-	// Update config and create new tunnel
+	// Update config and create new tunnel (under lock to avoid data race)
+	a.mu.Lock()
 	a.cfg = cfg
 	a.tunnel = client.New(cfg)
 	a.ctx, a.cancel = context.WithCancel(context.Background())
+	a.mu.Unlock()
 
 	if err := client.SaveConfig(cfg); err != nil {
 		log.Printf("%s", i18n.Format(i18n.T().AppSaveFail, err))
@@ -155,18 +157,17 @@ func (a *App) Connect(cfg *client.Config) {
 
 // Disconnect stops the tunnel.
 func (a *App) Disconnect() {
-	a.cancel()
-	a.tunnel.Disconnect()
-	a.tunnel.CloseTUN()
-
 	a.mu.Lock()
+	a.cancel()
+	oldTun := a.tunnel
 	a.connected = false
 	a.connecting = false
 	a.peerCount = 0
+	a.ctx, a.cancel = context.WithCancel(context.Background())
 	a.mu.Unlock()
 
-	// Reset context for next connection
-	a.ctx, a.cancel = context.WithCancel(context.Background())
+	oldTun.Disconnect()
+	oldTun.CloseTUN()
 }
 
 // statusLoop polls tunnel.Status() and syncs to App fields.
@@ -190,7 +191,7 @@ func (a *App) statusLoop(ctx context.Context) {
 			continue
 		}
 
-		ts := a.tunnel.Status()
+		ts := tun.Status()
 
 		a.mu.Lock()
 		if ts.Connected {
@@ -216,14 +217,21 @@ func (a *App) statusLoop(ctx context.Context) {
 // After fastRetries (3) rapid attempts, it pauses and calls onConnFailed
 // to let the user decide: retry, edit settings, or stop.
 func (a *App) connectLoop() {
+	// Capture config under lock to avoid data race with Connect()
+	a.mu.RLock()
+	cfg := a.cfg
+	tun := a.tunnel
+	ctx := a.ctx
+	a.mu.RUnlock()
+
 	// Validate server address format before attempting connection
-	if err := client.ValidateServerAddr(a.cfg.ServerAddr); err != nil {
+	if err := client.ValidateServerAddr(cfg.ServerAddr); err != nil {
 		log.Printf("Invalid server address: %v", err)
 		return
 	}
 
 	// Start status polling for this connection session
-	pollCtx, pollCancel := context.WithCancel(a.ctx)
+	pollCtx, pollCancel := context.WithCancel(ctx)
 	defer pollCancel()
 	go a.statusLoop(pollCtx)
 
@@ -251,14 +259,14 @@ func (a *App) connectLoop() {
 			jitter := time.Duration(rand.Int63n(int64(delay) / 5))
 			delay = delay - delay/10 + jitter
 			select {
-			case <-a.ctx.Done():
+			case <-ctx.Done():
 				return
 			case <-time.After(delay):
 			}
 		}
 
-		err := a.tunnel.Connect(a.ctx, a.cfg.ServerAddr, a.cfg.MTU, a.newTUN)
-		if a.ctx.Err() != nil {
+		err := tun.Connect(ctx, cfg.ServerAddr, cfg.MTU, a.newTUN)
+		if ctx.Err() != nil {
 			return
 		}
 

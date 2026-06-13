@@ -130,7 +130,7 @@ func (t *Tunnel) hasDirectPeerTraffic(peerIP net.IP) bool {
 // tracks the last time we received any data from the server (pong, peer info, etc.).
 // If the server appears dead for too long, the tunnel context is cancelled
 // to trigger a reconnect.
-func (t *Tunnel) keepaliveLoop(ctx context.Context) {
+func (t *Tunnel) keepaliveLoop(ctx context.Context, cancel context.CancelFunc) {
 	const serverTimeout = 30 * time.Second // 3 missed keepalives
 
 	ticker := time.NewTicker(10 * time.Second)
@@ -148,8 +148,8 @@ func (t *Tunnel) keepaliveLoop(ctx context.Context) {
 			lastSeen := t.lastServerResponse.Load()
 			if lastSeen != nil && time.Since(*lastSeen) > serverTimeout {
 				log.Printf(i18n.T().LogServerTimeout, serverTimeout)
-				// Don't cancel ctx here — let the outer connectLoop handle reconnection.
-				// The ReadFromUDP goroutine will eventually fail and exit.
+				cancel()
+				return
 			}
 		}
 	}
