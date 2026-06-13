@@ -192,6 +192,8 @@ if tun == nil { continue }
 ts := tun.Status()
 ```
 
+> **注**：此修复在 2026-06-13 会话中进一步完善（commit `2a1bf92`）。原修复仅保护了 `statusLoop` 中的读取，但 `connectLoop` 和 `Disconnect` 仍然存在对 `a.tunnel`/`a.cfg` 的无锁访问。2026-06-13 的修复将 `Connect()` 中的 cfg/tunnel/ctx 更新移入 `mu.Lock` 块，`Disconnect()` 中所有状态变更在锁内完成，`connectLoop()` 启动时在 `RLock` 下捕获所有共享状态。详见 `2026-06-13-comprehensive-bug-fix.md`。
+
 ---
 
 ### 问题 7：`main_other.go` 死代码导入
