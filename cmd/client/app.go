@@ -12,6 +12,7 @@ import (
 
 	"github.com/holipay/gametunnel/internal/client"
 	"github.com/holipay/gametunnel/internal/i18n"
+	"github.com/holipay/gametunnel/internal/protocol"
 )
 
 // App wraps the tunnel with HTTP API and status tracking.
@@ -64,6 +65,11 @@ type StatusResponse struct {
 	RoomID     string `json:"room_id"`
 	ServerAddr string `json:"server_addr"`
 
+	// Version info
+	ServerVersion     string `json:"server_version,omitempty"`
+	UpgradeAvailable  bool   `json:"upgrade_available,omitempty"`
+	UpgradeMessage    string `json:"upgrade_message,omitempty"`
+
 	// Connection quality
 	AvgRTT     float64 `json:"avg_rtt"`
 	LossRate   float64 `json:"loss_rate"`
@@ -112,13 +118,24 @@ func (a *App) GetStatus() StatusResponse {
 		if !a.uptime.IsZero() {
 			s.Uptime = formatDuration(time.Since(a.uptime))
 		}
-		// Connection quality from tunnel
+		// Connection quality and version from tunnel
 		if a.tunnel != nil {
 			ts := a.tunnel.Status()
 			s.AvgRTT = ts.AvgRTT
 			s.LossRate = ts.LossRate
 			s.P2PPeers = ts.P2PPeers
 			s.RelayPeers = ts.RelayPeers
+
+			// Version info
+			if ts.ServerVersion > 0 {
+				s.ServerVersion = formatVersion(ts.ServerVersion)
+				if ts.ServerVersion > protocol.AppVersion {
+					s.UpgradeAvailable = true
+					s.UpgradeMessage = fmt.Sprintf(i18n.T().UpgradePrompt,
+						formatVersion(protocol.AppVersion),
+						formatVersion(ts.ServerVersion))
+				}
+			}
 		}
 	}
 
@@ -312,6 +329,11 @@ func formatDuration(d time.Duration) string {
 		return fmt.Sprintf("%02d:%02d:%02d", h, m, s)
 	}
 	return fmt.Sprintf("%02d:%02d", m, s)
+}
+
+// formatVersion formats an encoded version number (major<<8|minor) as "vX.Y".
+func formatVersion(v uint16) string {
+	return fmt.Sprintf("v%d.%d", protocol.VersionMajor(v), protocol.VersionMinor(v))
 }
 
 // JSON serializes the status to JSON bytes.
