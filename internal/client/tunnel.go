@@ -107,6 +107,9 @@ type Tunnel struct {
 	// Server liveness tracking — updated by handleServerData
 	lastServerResponse atomic.Pointer[time.Time]
 
+	// Server version from AssignIP response (0 = old server without version)
+	serverVersion uint16
+
 	// Cached hole punch packet — built once on Connect, reused by
 	// startHolePunch, handleHolePunchReceived, and sendP2PKeepalives.
 	cachedPunchPacket []byte
@@ -326,6 +329,9 @@ type TunnelStatus struct {
 	ServerIP   net.IP
 	PeerCount  int
 
+	// Server version from handshake (0 = old server without version)
+	ServerVersion uint16
+
 	// Connection quality metrics
 	AvgRTT      float64 // average RTT in ms across all peers (0 = no data)
 	LossRate    float64 // average loss rate 0.0-1.0
@@ -339,11 +345,12 @@ func (t *Tunnel) Status() TunnelStatus {
 	defer t.mu.RUnlock()
 
 	st := TunnelStatus{
-		Connected:  t.tunDev != nil && t.virtualIP != nil,
-		VirtualIP:  t.virtualIP,
-		SubnetMask: t.subnetMask,
-		ServerIP:   t.serverIP,
-		PeerCount:  len(t.peers),
+		Connected:     t.tunDev != nil && t.virtualIP != nil,
+		VirtualIP:     t.virtualIP,
+		SubnetMask:    t.subnetMask,
+		ServerIP:      t.serverIP,
+		PeerCount:     len(t.peers),
+		ServerVersion: t.serverVersion,
 	}
 
 	if !st.Connected || len(t.peers) == 0 {

@@ -1277,7 +1277,55 @@ func TestTunnelStatus_WithPeers(t *testing.T) {
 	}
 }
 
-// ── VirtualIP Tests ────────────────────────────────────────────
+// ── Server Version Tests ───────────────────────────────────────
+
+func TestTunnelStatus_ServerVersion(t *testing.T) {
+	tunnel, _ := newTestTunnel(t)
+	mock := &mockTunDevice{}
+	tunnel.tunDev = mock
+	tunnel.virtualIP = net.IPv4(10, 10, 0, 2).To4()
+	tunnel.serverVersion = 0x0102 // v1.2
+
+	status := tunnel.Status()
+
+	if status.ServerVersion != 0x0102 {
+		t.Errorf("ServerVersion: got 0x%04x, want 0x0102", status.ServerVersion)
+	}
+}
+
+func TestTunnelStatus_ServerVersionZero(t *testing.T) {
+	tunnel, _ := newTestTunnel(t)
+	mock := &mockTunDevice{}
+	tunnel.tunDev = mock
+	tunnel.virtualIP = net.IPv4(10, 10, 0, 2).To4()
+	tunnel.serverVersion = 0 // old server
+
+	status := tunnel.Status()
+
+	if status.ServerVersion != 0 {
+		t.Errorf("ServerVersion: got 0x%04x, want 0", status.ServerVersion)
+	}
+}
+
+func TestHandleAssignIP_StoresVersion(t *testing.T) {
+	tunnel, _ := newTestTunnel(t)
+
+	assign := &protocol.AssignIPPayload{
+		VirtualIP:  net.IPv4(10, 10, 0, 5).To4(),
+		SubnetMask: net.CIDRMask(24, 32),
+		ServerIP:   net.IPv4(10, 10, 0, 1).To4(),
+		Version:    0x0103, // v1.3 (same major, higher minor — compatible)
+	}
+
+	err := tunnel.handleAssignIP(assign.Marshal())
+	if err != nil {
+		t.Fatalf("handleAssignIP failed: %v", err)
+	}
+
+	if tunnel.serverVersion != 0x0103 {
+		t.Errorf("serverVersion: got 0x%04x, want 0x0103", tunnel.serverVersion)
+	}
+}
 
 func TestVirtualIP(t *testing.T) {
 	tunnel, _ := newTestTunnel(t)

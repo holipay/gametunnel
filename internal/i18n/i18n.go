@@ -143,6 +143,7 @@ type Strings struct {
 	KickAuthTimeout    string // "认证超时"
 	KickWrongPassword  string // "密码错误"
 	KickVersionMismatch string // "版本不兼容: 客户端 v%d, 服务端需要 v%d"
+	UpgradePrompt       string // "当前版本 %s，服务端已是 %s，建议升级客户端"
 	LogPlayerJoin      string // "[+] %s (%s) → %s  [在线: %d]"
 	LogChallengeFail   string // "[auth] 生成 challenge 失败: %v"
 	LogAuthFail        string // "[auth] 认证失败: %s (%s)"
@@ -303,6 +304,7 @@ var zhStrings = &Strings{
 	KickAuthTimeout:   "认证超时",
 	KickWrongPassword: "密码错误",
 	KickVersionMismatch: "版本不兼容: 客户端 v%d, 服务端需要 v%d",
+	UpgradePrompt:       "当前版本 %s，服务端已是 %s，建议升级客户端",
 	LogPlayerJoin:     "[+] %s (%s) → %s  [在线: %d]",
 	LogChallengeFail:  "[auth] 生成 challenge 失败: %v",
 	LogAuthFail:       "[auth] 认证失败: %s (%s)",
@@ -462,6 +464,7 @@ var enStrings = &Strings{
 	KickAuthTimeout:   "Authentication timed out",
 	KickWrongPassword: "Wrong password",
 	KickVersionMismatch: "Version incompatible: client v%d, server requires v%d",
+	UpgradePrompt:       "Current version %s, server is %s. Please upgrade your client",
 	LogPlayerJoin:     "[+] %s (%s) → %s  [Online: %d]",
 	LogChallengeFail:  "[auth] Failed to generate challenge: %v",
 	LogAuthFail:       "[auth] Authentication failed: %s (%s)",

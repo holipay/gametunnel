@@ -130,6 +130,7 @@ func (t *Tunnel) handleAssignIP(payload []byte) error {
 	t.virtualIP = assign.VirtualIP
 	t.serverIP = assign.ServerIP
 	t.subnetMask = net.IPMask(assign.SubnetMask)
+	t.serverVersion = assign.Version
 	// Cache subnet and serverIPKey for hot-path lookups
 	t.cachedSubnet = &net.IPNet{
 		IP:   t.virtualIP.Mask(t.subnetMask),
