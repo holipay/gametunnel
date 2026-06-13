@@ -303,10 +303,13 @@ func (t *Tunnel) Disconnect() {
 // CloseTUN closes the TUN device if open. Call this when exiting the program
 // (not on every reconnect — the TUN should survive transient disconnections).
 func (t *Tunnel) CloseTUN() {
-	if t.tunDev != nil {
-		t.tunDev.Close()
-		t.tunDev = nil
-		t.lastAssignedIP = nil
+	t.mu.Lock()
+	dev := t.tunDev
+	t.tunDev = nil
+	t.lastAssignedIP = nil
+	t.mu.Unlock()
+	if dev != nil {
+		dev.Close()
 	}
 }
 
