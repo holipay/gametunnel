@@ -4,6 +4,8 @@ import (
 	"net"
 	"testing"
 	"time"
+
+	"github.com/holipay/gametunnel/internal/protocol"
 )
 
 func newTestRoom(subnetStr string, serverIP net.IP) *Room {
@@ -657,4 +659,535 @@ func TestMarkDirty_NilCallback(t *testing.T) {
 
 	// Should not panic
 	r.markDirty()
+}
+
+// ── PingStats Tests ────────────────────────────────────────────
+
+func TestPingStats_NoData(t *testing.T) {
+	c := &Client{}
+	loss, jitter := c.PingStats()
+	if loss != 0 {
+		t.Errorf("loss: got %f, want 0", loss)
+	}
+	if jitter != 0 {
+		t.Errorf("jitter: got %v, want 0", jitter)
+	}
+}
+
+func TestPingStats_AllReceived(t *testing.T) {
+	c := &Client{}
+	// Simulate 5 successful pings
+	for i := 0; i < 5; i++ {
+		c.pingHistory[c.pingIdx%pingHistorySize] = time.Duration(50+i*5) * time.Millisecond
+		c.pingIdx++
+	}
+
+	loss, _ := c.PingStats()
+	if loss != 0 {
+		t.Errorf("loss: got %f, want 0", loss)
+	}
+}
+
+func TestPingStats_AllMissed(t *testing.T) {
+	c := &Client{}
+	// Simulate 5 missed pings (RTT = 0)
+	for i := 0; i < 5; i++ {
+		c.pingHistory[c.pingIdx%pingHistorySize] = 0
+		c.pingIdx++
+	}
+
+	loss, _ := c.PingStats()
+	if loss != 1.0 {
+		t.Errorf("loss: got %f, want 1.0", loss)
+	}
+}
+
+func TestPingStats_MixedResults(t *testing.T) {
+	c := &Client{}
+	// 3 received, 2 missed
+	rtts := []time.Duration{
+		50 * time.Millisecond,
+		0, // missed
+		55 * time.Millisecond,
+		0, // missed
+		60 * time.Millisecond,
+	}
+	for _, rtt := range rtts {
+		c.pingHistory[c.pingIdx%pingHistorySize] = rtt
+		c.pingIdx++
+	}
+
+	loss, _ := c.PingStats()
+	expectedLoss := 1.0 - 3.0/5.0
+	if loss != expectedLoss {
+		t.Errorf("loss: got %f, want %f", loss, expectedLoss)
+	}
+}
+
+func TestPingStats_RingBufferWraparound(t *testing.T) {
+	c := &Client{}
+	// Fill beyond pingHistorySize (12)
+	for i := 0; i < 15; i++ {
+		c.pingHistory[c.pingIdx%pingHistorySize] = time.Duration(50) * time.Millisecond
+		c.pingIdx++
+	}
+
+	loss, _ := c.PingStats()
+	if loss != 0 {
+		t.Errorf("loss: got %f, want 0", loss)
+	}
+}
+
+// ── HandlePacket Tests ─────────────────────────────────────────
+
+func TestHandlePacket_KeepAlive(t *testing.T) {
+	r := newTestRoom("10.10.0.0/24", net.IPv4(10, 10, 0, 1))
+	conn, _ := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 0})
+	r.conn = conn
+	defer conn.Close()
+
+	addr := &net.UDPAddr{IP: net.IPv4(1, 2, 3, 4), Port: 12345}
+	c := &Client{
+		Username:  "player1",
+		VirtualIP: net.IPv4(10, 10, 0, 2),
+		PublicAddr: addr,
+		LastSeen:  time.Now().Add(-1 * time.Minute),
+		auth:      authNone,
+	}
+
+	r.mu.Lock()
+	r.clients[ipKey(c.VirtualIP)] = c
+	r.addrMap[addrToRateKey(addr)] = c
+	r.mu.Unlock()
+
+	r.HandlePacket(protocol.TypeKeepAlive, []byte{}, addr)
+
+	r.mu.RLock()
+	updated := r.addrMap[addrToRateKey(addr)]
+	r.mu.RUnlock()
+
+	if updated.LastSeen.Before(time.Now().Add(-10 * time.Second)) {
+		t.Error("LastSeen should be updated after keepalive")
+	}
+}
+
+func TestHandlePacket_PeerRequest(t *testing.T) {
+	r := newTestRoom("10.10.0.0/24", net.IPv4(10, 10, 0, 1))
+	conn, _ := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 0})
+	r.conn = conn
+	defer conn.Close()
+
+	addr := &net.UDPAddr{IP: net.IPv4(1, 2, 3, 4), Port: 12345}
+	c := &Client{
+		Username:  "player1",
+		VirtualIP: net.IPv4(10, 10, 0, 2),
+		PublicAddr: addr,
+		LastSeen:  time.Now(),
+		auth:      authNone,
+	}
+
+	r.mu.Lock()
+	r.clients[ipKey(c.VirtualIP)] = c
+	r.addrMap[addrToRateKey(addr)] = c
+	r.mu.Unlock()
+
+	// Should not panic
+	r.HandlePacket(protocol.TypePeerRequest, []byte{}, addr)
+}
+
+func TestHandlePacket_Disconnect(t *testing.T) {
+	r := newTestRoom("10.10.0.0/24", net.IPv4(10, 10, 0, 1))
+	conn, _ := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 0})
+	r.conn = conn
+	defer conn.Close()
+
+	addr := &net.UDPAddr{IP: net.IPv4(1, 2, 3, 4), Port: 12345}
+	c := &Client{
+		Username:  "leaver",
+		VirtualIP: net.IPv4(10, 10, 0, 2),
+		PublicAddr: addr,
+		LastSeen:  time.Now(),
+		auth:      authNone,
+	}
+
+	r.mu.Lock()
+	r.clients[ipKey(c.VirtualIP)] = c
+	r.addrMap[addrToRateKey(addr)] = c
+	r.markIPUsed(c.VirtualIP)
+	r.mu.Unlock()
+
+	r.HandlePacket(protocol.TypeDisconnect, []byte{}, addr)
+
+	r.mu.RLock()
+	_, ok := r.clients[ipKey(c.VirtualIP)]
+	r.mu.RUnlock()
+
+	if ok {
+		t.Error("client should be removed after disconnect")
+	}
+}
+
+// ── handleRelay Tests ──────────────────────────────────────────
+
+func TestHandleRelay_Unicast(t *testing.T) {
+	r := newTestRoom("10.10.0.0/24", net.IPv4(10, 10, 0, 1))
+	conn, _ := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 0})
+	r.conn = conn
+	defer conn.Close()
+
+	senderAddr := &net.UDPAddr{IP: net.IPv4(1, 2, 3, 4), Port: 1000}
+	receiverAddr := &net.UDPAddr{IP: net.IPv4(1, 2, 3, 5), Port: 2000}
+
+	sender := &Client{
+		Username:  "sender",
+		VirtualIP: net.IPv4(10, 10, 0, 2),
+		PublicAddr: senderAddr,
+		LastSeen:  time.Now(),
+		auth:      authNone,
+	}
+	receiver := &Client{
+		Username:  "receiver",
+		VirtualIP: net.IPv4(10, 10, 0, 3),
+		PublicAddr: receiverAddr,
+		LastSeen:  time.Now(),
+		auth:      authNone,
+	}
+
+	r.mu.Lock()
+	r.clients[ipKey(sender.VirtualIP)] = sender
+	r.clients[ipKey(receiver.VirtualIP)] = receiver
+	r.addrMap[addrToRateKey(senderAddr)] = sender
+	r.addrMap[addrToRateKey(receiverAddr)] = receiver
+	r.mu.Unlock()
+
+	// Build relay payload: srcIP(4) + dstIP(4) + data
+	payload := make([]byte, 4+4+5)
+	copy(payload[0:4], sender.VirtualIP.To4())
+	copy(payload[4:8], receiver.VirtualIP.To4())
+	copy(payload[8:], []byte{0x01, 0x02, 0x03, 0x04, 0x05})
+
+	r.handleRelay(payload, senderAddr)
+
+	if r.totalPacketsRelay.Load() != 1 {
+		t.Errorf("totalPacketsRelay: got %d, want 1", r.totalPacketsRelay.Load())
+	}
+}
+
+func TestHandleRelay_Broadcast(t *testing.T) {
+	r := newTestRoom("10.10.0.0/24", net.IPv4(10, 10, 0, 1))
+	conn, _ := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 0})
+	r.conn = conn
+	defer conn.Close()
+
+	senderAddr := &net.UDPAddr{IP: net.IPv4(1, 2, 3, 4), Port: 1000}
+	receiver1Addr := &net.UDPAddr{IP: net.IPv4(1, 2, 3, 5), Port: 2000}
+	receiver2Addr := &net.UDPAddr{IP: net.IPv4(1, 2, 3, 6), Port: 3000}
+
+	sender := &Client{
+		Username:  "sender",
+		VirtualIP: net.IPv4(10, 10, 0, 2),
+		PublicAddr: senderAddr,
+		LastSeen:  time.Now(),
+		auth:      authNone,
+	}
+	receiver1 := &Client{
+		Username:  "receiver1",
+		VirtualIP: net.IPv4(10, 10, 0, 3),
+		PublicAddr: receiver1Addr,
+		LastSeen:  time.Now(),
+		auth:      authNone,
+	}
+	receiver2 := &Client{
+		Username:  "receiver2",
+		VirtualIP: net.IPv4(10, 10, 0, 4),
+		PublicAddr: receiver2Addr,
+		LastSeen:  time.Now(),
+		auth:      authNone,
+	}
+
+	r.mu.Lock()
+	r.clients[ipKey(sender.VirtualIP)] = sender
+	r.clients[ipKey(receiver1.VirtualIP)] = receiver1
+	r.clients[ipKey(receiver2.VirtualIP)] = receiver2
+	r.addrMap[addrToRateKey(senderAddr)] = sender
+	r.addrMap[addrToRateKey(receiver1Addr)] = receiver1
+	r.addrMap[addrToRateKey(receiver2Addr)] = receiver2
+	r.mu.Unlock()
+
+	// Build broadcast payload (dstIP = 255.255.255.255)
+	payload := make([]byte, 4+4+3)
+	copy(payload[0:4], sender.VirtualIP.To4())
+	copy(payload[4:8], net.IPv4(255, 255, 255, 255).To4())
+	copy(payload[8:], []byte{0x01, 0x02, 0x03})
+
+	r.handleRelay(payload, senderAddr)
+
+	if r.totalPacketsRelay.Load() != 1 {
+		t.Errorf("totalPacketsRelay: got %d, want 1", r.totalPacketsRelay.Load())
+	}
+}
+
+func TestHandleRelay_ShortPayload(t *testing.T) {
+	r := newTestRoom("10.10.0.0/24", net.IPv4(10, 10, 0, 1))
+
+	// Payload too short (< 8 bytes)
+	r.handleRelay([]byte{0x01, 0x02}, &net.UDPAddr{IP: net.IPv4(1, 2, 3, 4), Port: 1000})
+
+	if r.totalPacketsRelay.Load() != 0 {
+		t.Error("short payload should not be relayed")
+	}
+}
+
+func TestHandleRelay_UnknownSender(t *testing.T) {
+	r := newTestRoom("10.10.0.0/24", net.IPv4(10, 10, 0, 1))
+
+	// Sender not in addrMap
+	payload := make([]byte, 4+4+3)
+	copy(payload[0:4], net.IPv4(10, 10, 0, 2).To4())
+	copy(payload[4:8], net.IPv4(10, 10, 0, 3).To4())
+
+	r.handleRelay(payload, &net.UDPAddr{IP: net.IPv4(99, 99, 99, 99), Port: 1000})
+
+	if r.totalPacketsRelay.Load() != 0 {
+		t.Error("unknown sender should not relay")
+	}
+}
+
+// ── handleHolePunch Tests ──────────────────────────────────────
+
+func TestHandleHolePunch_Valid(t *testing.T) {
+	r := newTestRoom("10.10.0.0/24", net.IPv4(10, 10, 0, 1))
+	conn, _ := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 0})
+	r.conn = conn
+	defer conn.Close()
+
+	srcAddr := &net.UDPAddr{IP: net.IPv4(1, 2, 3, 4), Port: 1000}
+	dstAddr := &net.UDPAddr{IP: net.IPv4(1, 2, 3, 5), Port: 2000}
+
+	src := &Client{
+		Username:  "src",
+		VirtualIP: net.IPv4(10, 10, 0, 2),
+		PublicAddr: srcAddr,
+		LastSeen:  time.Now(),
+		auth:      authNone,
+	}
+	dst := &Client{
+		Username:  "dst",
+		VirtualIP: net.IPv4(10, 10, 0, 3),
+		PublicAddr: dstAddr,
+		LastSeen:  time.Now(),
+		auth:      authNone,
+	}
+
+	r.mu.Lock()
+	r.clients[ipKey(src.VirtualIP)] = src
+	r.clients[ipKey(dst.VirtualIP)] = dst
+	r.addrMap[addrToRateKey(srcAddr)] = src
+	r.addrMap[addrToRateKey(dstAddr)] = dst
+	r.mu.Unlock()
+
+	// Build hole punch payload: dstIP(4)
+	payload := make([]byte, 4)
+	copy(payload, dst.VirtualIP.To4())
+
+	r.handleHolePunch(payload, srcAddr)
+
+	// Should have sent to dst
+	// (can't easily verify packet content without reading from dstAddr)
+}
+
+func TestHandleHolePunch_ShortPayload(t *testing.T) {
+	r := newTestRoom("10.10.0.0/24", net.IPv4(10, 10, 0, 1))
+
+	// Payload too short (< 4 bytes)
+	r.handleHolePunch([]byte{0x01}, &net.UDPAddr{IP: net.IPv4(1, 2, 3, 4), Port: 1000})
+	// Should not panic
+}
+
+func TestHandleHolePunch_UnknownSource(t *testing.T) {
+	r := newTestRoom("10.10.0.0/24", net.IPv4(10, 10, 0, 1))
+
+	dstIP := net.IPv4(10, 10, 0, 3).To4()
+	payload := make([]byte, 4)
+	copy(payload, dstIP)
+
+	// Source not in addrMap
+	r.handleHolePunch(payload, &net.UDPAddr{IP: net.IPv4(99, 99, 99, 99), Port: 1000})
+	// Should not panic
+}
+
+// ── handlePong Tests ───────────────────────────────────────────
+
+func TestHandlePong_Valid(t *testing.T) {
+	r := newTestRoom("10.10.0.0/24", net.IPv4(10, 10, 0, 1))
+
+	addr := &net.UDPAddr{IP: net.IPv4(1, 2, 3, 4), Port: 12345}
+	c := &Client{
+		Username:  "player1",
+		VirtualIP: net.IPv4(10, 10, 0, 2),
+		PublicAddr: addr,
+		LastSeen:  time.Now(),
+		auth:      authNone,
+	}
+
+	r.mu.Lock()
+	r.clients[ipKey(c.VirtualIP)] = c
+	r.addrMap[addrToRateKey(addr)] = c
+	r.mu.Unlock()
+
+	// Build pong payload with recent timestamp
+	ping := &protocol.PingPayload{Timestamp: time.Now().Add(-50 * time.Millisecond).UnixNano()}
+	r.handlePong(ping.Marshal(), addr)
+
+	r.mu.RLock()
+	updated := r.addrMap[addrToRateKey(addr)]
+	r.mu.RUnlock()
+
+	if updated.RTT <= 0 {
+		t.Error("RTT should be positive after pong")
+	}
+}
+
+func TestHandlePong_InvalidTimestamp(t *testing.T) {
+	r := newTestRoom("10.10.0.0/24", net.IPv4(10, 10, 0, 1))
+
+	addr := &net.UDPAddr{IP: net.IPv4(1, 2, 3, 4), Port: 12345}
+	c := &Client{
+		Username:  "player1",
+		VirtualIP: net.IPv4(10, 10, 0, 2),
+		PublicAddr: addr,
+		LastSeen:  time.Now(),
+		auth:      authNone,
+	}
+
+	r.mu.Lock()
+	r.clients[ipKey(c.VirtualIP)] = c
+	r.addrMap[addrToRateKey(addr)] = c
+	r.mu.Unlock()
+
+	// Future timestamp (invalid)
+	ping := &protocol.PingPayload{Timestamp: time.Now().Add(1 * time.Hour).UnixNano()}
+	r.handlePong(ping.Marshal(), addr)
+
+	r.mu.RLock()
+	updated := r.addrMap[addrToRateKey(addr)]
+	r.mu.RUnlock()
+
+	if updated.RTT != 0 {
+		t.Error("RTT should be 0 for invalid timestamp")
+	}
+}
+
+func TestHandlePong_UnknownClient(t *testing.T) {
+	r := newTestRoom("10.10.0.0/24", net.IPv4(10, 10, 0, 1))
+
+	addr := &net.UDPAddr{IP: net.IPv4(99, 99, 99, 99), Port: 12345}
+	ping := &protocol.PingPayload{Timestamp: time.Now().UnixNano()}
+
+	// Should not panic
+	r.handlePong(ping.Marshal(), addr)
+}
+
+// ── BandwidthLimiter Tests ─────────────────────────────────────
+
+func TestBandwidthLimiter_Allow(t *testing.T) {
+	bl := NewBandwidthLimiter(1024) // 1KB/s
+
+	addr := &net.UDPAddr{IP: net.IPv4(1, 2, 3, 4), Port: 12345}
+
+	// Should allow small packets
+	if !bl.Allow(addr, 100) {
+		t.Error("should allow small packet")
+	}
+}
+
+func TestBandwidthLimiter_Remove(t *testing.T) {
+	bl := NewBandwidthLimiter(1024)
+
+	addr := &net.UDPAddr{IP: net.IPv4(1, 2, 3, 4), Port: 12345}
+
+	// Create bucket
+	bl.Allow(addr, 100)
+
+	// Remove
+	bl.Remove(addr)
+
+	// Should create new bucket on next access
+	if !bl.Allow(addr, 100) {
+		t.Error("should allow after remove")
+	}
+}
+
+func TestBandwidthLimiter_NilLimiter(t *testing.T) {
+	var bl *BandwidthLimiter
+
+	addr := &net.UDPAddr{IP: net.IPv4(1, 2, 3, 4), Port: 12345}
+
+	// Should always allow
+	if !bl.Allow(addr, 100) {
+		t.Error("nil limiter should always allow")
+	}
+}
+
+func TestBandwidthLimiter_Disabled(t *testing.T) {
+	bl := NewBandwidthLimiter(0) // disabled
+
+	addr := &net.UDPAddr{IP: net.IPv4(1, 2, 3, 4), Port: 12345}
+
+	if !bl.Allow(addr, 100) {
+		t.Error("disabled limiter should always allow")
+	}
+}
+
+// ── MetricsTimeSeries Tests ────────────────────────────────────
+
+func TestMetricsTimeSeries_AppendAndSnapshot(t *testing.T) {
+	ts := NewMetricsTimeSeries()
+
+	// Empty snapshot
+	if ts.Snapshot() != nil {
+		t.Error("expected nil for empty series")
+	}
+
+	// Append samples
+	for i := 0; i < 5; i++ {
+		ts.Append(MetricsSample{
+			Timestamp: int64(i),
+			Players:   i * 10,
+		})
+	}
+
+	samples := ts.Snapshot()
+	if len(samples) != 5 {
+		t.Errorf("got %d samples, want 5", len(samples))
+	}
+
+	// Should be in chronological order
+	for i, s := range samples {
+		if s.Timestamp != int64(i) {
+			t.Errorf("sample[%d].Timestamp: got %d, want %d", i, s.Timestamp, i)
+		}
+	}
+}
+
+func TestMetricsTimeSeries_Wraparound(t *testing.T) {
+	ts := NewMetricsTimeSeries()
+
+	// Fill beyond metricsSlots (60)
+	for i := 0; i < 70; i++ {
+		ts.Append(MetricsSample{
+			Timestamp: int64(i),
+			Players:   i,
+		})
+	}
+
+	samples := ts.Snapshot()
+	if len(samples) != metricsSlots {
+		t.Errorf("got %d samples, want %d", len(samples), metricsSlots)
+	}
+
+	// Should contain the most recent 60 samples
+	if samples[0].Timestamp != 10 { // 70 - 60 = 10
+		t.Errorf("first sample Timestamp: got %d, want 10", samples[0].Timestamp)
+	}
 }
