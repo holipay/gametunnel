@@ -47,16 +47,20 @@ const maxLogBackups = 1
 
 func setupLog() *os.File {
 	logDir := filepath.Join(appDataPath(), "GameTunnel")
-	os.MkdirAll(logDir, 0755)
+	if err := os.MkdirAll(logDir, 0755); err != nil {
+		log.SetOutput(os.Stderr)
+		log.Printf("create log dir: %v", err)
+		return os.Stderr
+	}
 	logPath := filepath.Join(logDir, "gametunnel.log")
 	logBackup := filepath.Join(logDir, "gametunnel.log.1")
 
 	// Rotate: if log exceeds maxLogSize, rename to backup
 	if info, err := os.Stat(logPath); err == nil && info.Size() > maxLogSize {
-		// Remove old backup if it exists
 		os.Remove(logBackup)
-		// Rename current log to backup
-		os.Rename(logPath, logBackup)
+		if err := os.Rename(logPath, logBackup); err != nil {
+			log.Printf("rotate log: %v", err)
+		}
 	}
 
 	f, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)

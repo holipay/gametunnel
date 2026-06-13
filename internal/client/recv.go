@@ -102,7 +102,7 @@ func (t *Tunnel) handleServerData(ctx context.Context, msg *protocol.Message) {
 	case protocol.TypePing:
 		t.sendCtrl(protocol.EncodeChecked(protocol.TypePong, msg.Payload), t.serverAddr)
 	case protocol.TypeHolePunch:
-		t.handleHolePunchReceived(msg.Payload)
+		t.handleHolePunchReceived(ctx, msg.Payload)
 	}
 }
 
@@ -283,6 +283,9 @@ func (t *Tunnel) receiveFromTUN(ctx context.Context) {
 		default:
 		}
 
+		if t.tunDev == nil {
+			return
+		}
 		n, err := t.tunDev.Read(buf)
 		if err != nil {
 			select {

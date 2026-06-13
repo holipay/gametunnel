@@ -58,6 +58,7 @@ type Room struct {
 	regMu       sync.Mutex
 	regBuf      [2]map[string]int
 	regTick     *time.Ticker
+	done        chan struct{}
 	maxRegPerIP int
 
 	// Per-IP connection count (per-room)
@@ -135,6 +136,7 @@ func NewRoom(cfg RoomConfig) (*Room, error) {
 		maxRegPerIP: 5,
 		ipConnCount: make(map[connIPKey]int),
 		maxPerIP:    maxPerIP,
+		done:        make(chan struct{}),
 		createdAt:   time.Now(),
 	}
 
@@ -192,14 +194,25 @@ func (r *Room) checkRegRate(ip string) bool {
 }
 
 func (r *Room) regRateLimitLoop() {
-	for range r.regTick.C {
-		r.regMu.Lock()
-		r.regBuf[0], r.regBuf[1] = r.regBuf[1], r.regBuf[0]
-		for k := range r.regBuf[1] {
-			delete(r.regBuf[1], k)
+	for {
+		select {
+		case <-r.done:
+			return
+		case <-r.regTick.C:
+			r.regMu.Lock()
+			r.regBuf[0], r.regBuf[1] = r.regBuf[1], r.regBuf[0]
+			for k := range r.regBuf[1] {
+				delete(r.regBuf[1], k)
+			}
+			r.regMu.Unlock()
 		}
-		r.regMu.Unlock()
 	}
+}
+
+// Stop shuts down per-room background goroutines.
+func (r *Room) Stop() {
+	close(r.done)
+	r.regTick.Stop()
 }
 
 // ── Auth ───────────────────────────────────────────────────────
@@ -806,7 +819,9 @@ func (r *Room) CleanupStale() bool {
 	for _, sa := range staleAuths {
 		if cur, ok := r.addrMap[sa.key]; ok && cur == sa.c {
 			delete(r.addrMap, sa.key)
-			r.pendingAuth--
+			if r.pendingAuth > 0 {
+				r.pendingAuth--
+			}
 		}
 	}
 	r.mu.Unlock()
