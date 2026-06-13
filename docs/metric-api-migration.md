@@ -38,26 +38,22 @@ RunCmd("powershell", "-NoProfile", "-Command", psMetric)
 
 ### 3.1 核心函数
 
+> **注**: 以下代码已更新为当前实现。原始版本使用 `SetIpInterfaceEntry` IP Helper API，但因 wintun 虚拟适配器返回 `ret=87`，改为 `netsh` 命令行方式。
+
 ```go
-// setMetricAPI 通过 IP Helper API 禁用网卡的 AutomaticMetric
+// setMetricAPI 通过 netsh 禁用指定网卡的 AutomaticMetric 并设置 metric 值。
 func setMetricAPI(ifIndex uint32, luid uint64) error {
-    row := mibIPInterfaceRow{}
-    row.Family = syscall.AF_INET
-    row.InterfaceLuid = luid
-    row.InterfaceIndex = ifIndex
-
-    // 必须先 Get 填充行
-    r1, _, e1 := procGetIpInterfaceEntry.Call(uintptr(unsafe.Pointer(&row)))
-    if r1 != 0 {
-        return fmt.Errorf("GetIpInterfaceEntry: ret=%d", r1)
+    name, err := findAdapterNameByIndex(ifIndex)
+    if err != nil {
+        return fmt.Errorf("find adapter name: %w", err)
     }
 
-    row.UseAutomaticMetric = 0  // 禁用自动 metric
-
-    r1, _, e1 = procSetIpInterfaceEntry.Call(uintptr(unsafe.Pointer(&row)))
-    if r1 != 0 {
-        return fmt.Errorf("SetIpInterfaceEntry: ret=%d", r1)
+    if err := RunCmd("netsh", "interface", "ip", "set", "interface",
+        fmt.Sprintf("name=%s", name), "metric=1"); err != nil {
+        return fmt.Errorf("netsh set metric: %w", err)
     }
+
+    log.Printf("[tun] AutomaticMetric disabled via netsh: %s (idx=%d)", name, ifIndex)
     return nil
 }
 ```

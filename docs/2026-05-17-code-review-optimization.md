@@ -190,7 +190,13 @@ func (t *Tunnel) sendCtrl(data []byte, addr *net.UDPAddr) {
             log.Printf(...)
         }
     }
-    timer.Stop()
+    // 必须 drain timer channel，否则下次 Get() 可能收到过期值
+    if !timer.Stop() {
+        select {
+        case <-timer.C:
+        default:
+        }
+    }
     ctrlTimerPool.Put(timer)
 }
 ```
@@ -202,24 +208,10 @@ func (t *Tunnel) sendCtrl(data []byte, addr *net.UDPAddr) {
 ```go
 func (t *Tunnel) sendP2PKeepalives() {
     // ...
-    payload := make([]byte, 4)           // ← 每次分配
-    copy(payload, t.virtualIP.To4())
-    packet := protocol.EncodeChecked(protocol.TypeHolePunch, payload)
+    // 复用缓存的打洞包（在 handleAssignIP 中构建一次）
+    packet := t.cachedPunchPacket
     for _, peer := range directPeers {
         t.sendCtrl(packet, peer.PublicAddr)
-    }
-}
-
-func (t *Tunnel) startHolePunch(ctx context.Context, peerIP net.IP) {
-    // ...
-    punchPayload := make([]byte, 4)      // ← 每次分配
-    copy(punchPayload, t.virtualIP.To4())
-    packet := protocol.EncodeChecked(protocol.TypeHolePunch, punchPayload)
-    for phase, interval := range holePunchIntervals {
-        for i := 0; i < holePunchBurstPerPhase; i++ {
-            t.sendCtrl(packet, peer.PublicAddr)
-            time.Sleep(interval)
-        }
     }
 }
 ```

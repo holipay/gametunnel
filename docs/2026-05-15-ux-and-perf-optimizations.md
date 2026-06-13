@@ -62,23 +62,54 @@ if isFirstRun {
 
 **实现细节**：
 
+> **注**: 以下代码已更新为当前实现。原始版本使用 Named Mutex（`Global\GameTunnel_SingleInstance`），但因 UAC 提权进程在不同安全上下文中运行导致互斥体失效，改为进程枚举方式。
+
 ```go
 func checkSingleInstance() {
-    name, _ := windows.UTF16PtrFromString("Global\\GameTunnel_SingleInstance")
-    handle, _, _ := procCreateMutexW.Call(0, 0, uintptr(unsafe.Pointer(name)))
-    if handle == 0 {
-        return // CreateMutex failed silently; let the app run
+    if !isAnotherInstanceRunning() {
+        return
     }
-    mutexHandle = handle
+    windows.MessageBox(0,
+        windows.StringToUTF16Ptr("GameTunnel 已经在运行中，请检查右下角系统托盘图标。\nGameTunnel is already running. Check the system tray icon."),
+        windows.StringToUTF16Ptr("GameTunnel"),
+        windows.MB_OK|windows.MB_ICONWARNING)
+    os.Exit(0)
+}
 
-    err := windows.GetLastError()
-    if err != nil && err == syscall.Errno(errorAlreadyExists) {
-        windows.MessageBox(0,
-            windows.StringToUTF16Ptr("GameTunnel 已经在运行中..."),
-            windows.StringToUTF16Ptr("GameTunnel"),
-            windows.MB_OK|windows.MB_ICONWARNING)
-        os.Exit(0)
+func isAnotherInstanceRunning() bool {
+    selfExe, err := os.Executable()
+    if err != nil {
+        return false
     }
+    selfName := strings.ToLower(filepath.Base(selfExe))
+
+    snapshot, _, _ := procCreateToolhelp32.Call(uintptr(0x00000002), 0)
+    if snapshot == 0 || snapshot == uintptr(syscall.InvalidHandle) {
+        return false
+    }
+    defer procCloseHandle.Call(snapshot)
+
+    var entry processEntry32
+    entry.Size = uint32(unsafe.Sizeof(entry))
+    ret, _, _ := procProcess32First.Call(snapshot, uintptr(unsafe.Pointer(&entry)))
+    if ret == 0 {
+        return false
+    }
+
+    currentPID := uint32(os.Getpid())
+    for {
+        if entry.ProcessID != currentPID {
+            name := windows.UTF16PtrToString(&entry.ExeFile[0])
+            if strings.ToLower(name) == selfName {
+                return true
+            }
+        }
+        ret, _, _ = procProcess32Next.Call(snapshot, uintptr(unsafe.Pointer(&entry)))
+        if ret == 0 {
+            break
+        }
+    }
+    return false
 }
 ```
 
@@ -141,7 +172,7 @@ copy(pkt, buf[:n])                // 多余拷贝
 t.routePacket(pkt, srcIP, dstIP)  // Marshal 时又拷一次
 ```
 
-**优化后**：
+**优化后（中间版本）**：
 ```go
 n, err := t.tunDev.Read(buf)
 // Zero-copy: pass buf slice directly. routePacket is synchronous and
@@ -149,9 +180,19 @@ n, err := t.tunDev.Read(buf)
 t.routePacket(buf[:n], srcIP, dstIP)
 ```
 
-**安全性**：`routePacket` 是同步函数，`Marshal()` 会拷贝数据用于 UDP 发送，因此 TUN buffer 在下一次 Read 前可以安全重用。
-
-**收益**：每包省 1 次 1400 字节分配 + 拷贝（~50ns）。
+> **注**: 此零拷贝优化在后续重构中被还原。当前代码使用 `tunWorker` goroutine 池异步处理 TUN 包，`buf` 在下一次 `Read` 前可能被覆盖，因此必须拷贝。当前实现：
+>
+> ```go
+> pkt := make([]byte, n)
+> copy(pkt, buf[:n])
+> select {
+> case t.tunCh <- tunJob{data: pkt, srcIP: srcIP, dstIP: dstIP}:
+> default:
+>     // Worker channel full — drop packet (backpressure)
+> }
+> ```
+>
+> 拷贝开销（~50ns）相对于并行加密+UDP发送的收益可忽略。
 
 **文件**：`internal/client/recv.go`
 

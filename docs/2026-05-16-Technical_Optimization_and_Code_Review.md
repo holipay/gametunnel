@@ -180,29 +180,40 @@ go test ./internal/protocol/ ./internal/auth/
 
 ```go
 func (t *Tunnel) sendUDP(data []byte, addr *net.UDPAddr) {
-    select {
-    case t.sendCh <- sendJob{data: data, addr: addr}:
-    default:
-        n := t.sendErrors.Add(1)
-        if n == 1 || n%100 == 0 {
-            log.Printf("send channel full")
-        }
-    }
+	select {
+	case t.sendCh <- sendJob{data: data, addr: addr}:
+	default:
+		n := t.sendErrors.Add(1)
+		if n == 1 || n%100 == 0 {
+			log.Printf("%s", i18n.Format(i18n.T().LogSendFail, n, fmt.Errorf("send channel full")))
+		}
+	}
 }
 ```
 
 ```go
 func (t *Tunnel) sendCtrl(data []byte, addr *net.UDPAddr) {
-    select {
-    case t.ctrlCh <- sendJob{data: data, addr: addr}:
-    case <-time.After(50 * time.Millisecond):
-        n := t.sendErrors.Add(1)
-        if n == 1 || n%100 == 0 {
-            log.Printf("ctrl channel full")
-        }
-    }
+	timer := ctrlTimerPool.Get().(*time.Timer)
+	timer.Reset(50 * time.Millisecond)
+	select {
+	case t.ctrlCh <- sendJob{data: data, addr: addr}:
+	case <-timer.C:
+		n := t.sendErrors.Add(1)
+		if n == 1 || n%100 == 0 {
+			log.Printf("ctrl channel full")
+		}
+	}
+	if !timer.Stop() {
+		select {
+		case <-timer.C:
+		default:
+		}
+	}
+	ctrlTimerPool.Put(timer)
 }
 ```
+
+> **注**: 此代码示例已更新为当前实现。原始版本使用 `time.After(50ms)`，当前版本使用 `ctrlTimerPool`（`sync.Pool` 复用 `time.Timer`）避免高频调用下的内存分配。
 
 **`sendLoop` 优先级逻辑**：
 
@@ -236,12 +247,14 @@ keepalive 间隔保持 10 秒不变。
 
 ```go
 // 客户端
-func (t *Tunnel) keepaliveLoop(ctx context.Context) {
+func (t *Tunnel) keepaliveLoop(ctx context.Context, cancel context.CancelFunc) {
     const serverTimeout = 30 * time.Second // 3 missed keepalives
     ticker := time.NewTicker(10 * time.Second)
     ...
 }
 ```
+
+> **注**: `cancel` 参数在 2026-06-13 会话中添加（commit `2a1bf92`），使超时检测能触发 context 取消以启动重连。
 
 ```go
 // 服务端
