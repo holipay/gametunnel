@@ -111,7 +111,7 @@ func (t *Tunnel) handleAssignIP(payload []byte) error {
 	// Version compatibility check
 	if !protocol.IsCompatible(protocol.AppVersion, assign.Version) {
 		return fmt.Errorf("server version v%d is incompatible with client v%d",
-			protocol.VersionMajor(assign.Version)<<8|protocol.VersionMinor(assign.Version),
+			assign.Version,
 			protocol.AppVersion)
 	}
 

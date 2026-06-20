@@ -45,6 +45,15 @@ func NewMetricsTimeSeries() *MetricsTimeSeries {
 	return &MetricsTimeSeries{}
 }
 
+// subUint64 returns a-b, clamped to 0 on underflow.
+// Used for metric deltas where counters may decrease (e.g. room recreated).
+func subUint64(a, b uint64) uint64 {
+	if a > b {
+		return a - b
+	}
+	return 0
+}
+
 // Append adds a sample to the ring buffer.
 func (ts *MetricsTimeSeries) Append(sample MetricsSample) {
 	ts.mu.Lock()
@@ -89,11 +98,9 @@ func (s *Server) metricsLoop(ctx context.Context) {
 	defer ticker.Stop()
 
 	// Initialize "previous" counters for delta calculation
-	prevRelay := s.totalPacketsRelay.Load()
 	prevDropped := s.totalPacketsDropped.Load()
-	prevKicks := s.totalKicks.Load()
-	prevRegs := s.totalRegistrations.Load()
 	prevSendErr := s.sendErrors.Load()
+	var prevRelay, prevKicks, prevRegs uint64
 
 	for {
 		select {
@@ -154,11 +161,11 @@ func (s *Server) metricsLoop(ctx context.Context) {
 			Players:      playerCount,
 			AvgRTT:       avgRTT,
 			AvgLoss:      avgLoss,
-			RelayPkts:    relay - prevRelay,
-			DroppedPkts:  dropped - prevDropped,
-			Kicks:        kicks - prevKicks,
-			Registrations: regs - prevRegs,
-			SendErrors:   uint64(sendErr - prevSendErr),
+			RelayPkts:    subUint64(relay, prevRelay),
+			DroppedPkts:  subUint64(dropped, prevDropped),
+			Kicks:        subUint64(kicks, prevKicks),
+			Registrations: subUint64(regs, prevRegs),
+			SendErrors:   subUint64(uint64(sendErr), uint64(prevSendErr)),
 		}
 		s.metricsTS.Append(sample)
 

@@ -161,12 +161,7 @@ type Server struct {
 	persistDirty  atomic.Bool  // true if state needs to be written to disk
 
 	// Operational metrics (lifetime counters, never reset)
-	totalRegistrations atomic.Uint64 // successful joins
-	authFailures       atomic.Uint64 // wrong password attempts
-	peakPlayers        atomic.Uint32 // high watermark of concurrent players
-	totalPacketsRelay  atomic.Uint64 // packets relayed (unicast + broadcast)
 	totalPacketsDropped atomic.Uint64 // packets dropped (rate limit, full channel, invalid)
-	totalKicks         atomic.Uint64 // clients kicked (rate limit, room full, auth fail, etc.)
 }
 
 // pktJob represents a packet to be processed by the worker pool.
@@ -340,8 +335,13 @@ func (s *Server) Run(ctx context.Context) {
 	}
 }
 
-// Close shuts down the server.
+// Close shuts down the server and all room background goroutines.
 func (s *Server) Close() error {
+	s.roomMu.RLock()
+	for _, room := range s.rooms {
+		room.Stop()
+	}
+	s.roomMu.RUnlock()
 	return s.conn.Close()
 }
 
