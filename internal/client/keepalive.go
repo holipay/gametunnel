@@ -54,7 +54,9 @@ func (t *Tunnel) startHolePunch(ctx context.Context, peerIP net.IP) {
 	}
 
 	// Use cached hole punch packet (built once in handleAssignIP)
+	t.mu.RLock()
 	packet := t.cachedPunchPacket
+	t.mu.RUnlock()
 
 	for phase, interval := range holePunchIntervals {
 		for i := 0; i < holePunchBurstPerPhase; i++ {
@@ -107,7 +109,9 @@ func (t *Tunnel) handleHolePunchReceived(ctx context.Context, payload []byte) {
 
 	// Punch back in a goroutine — don't block the receive loop.
 	go func() {
+		t.mu.RLock()
 		packet := t.cachedPunchPacket
+		t.mu.RUnlock()
 		for i := 0; i < holePunchBurstPerPhase; i++ {
 			select {
 			case <-ctx.Done():
@@ -309,7 +313,9 @@ func (t *Tunnel) sendP2PKeepalives() {
 	}
 
 	// Reuse cached hole punch packet — built once in handleAssignIP.
+	t.mu.RLock()
 	packet := t.cachedPunchPacket
+	t.mu.RUnlock()
 
 	for _, peer := range directPeers {
 		t.sendCtrl(packet, peer.PublicAddr)

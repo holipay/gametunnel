@@ -101,7 +101,7 @@ type Tunnel struct {
 	username       string
 	roomID         string
 	roomPass       string
-	disconnectOnce sync.Once
+	disconnectOnce atomic.Pointer[sync.Once]
 	sendErrors     atomic.Int64 // send failure counter
 
 	// Server liveness tracking — updated by handleServerData
@@ -135,7 +135,7 @@ const ctrlChanSize = 256
 
 // New creates a new Tunnel. Call Connect to start it.
 func New(cfg *Config) *Tunnel {
-	return &Tunnel{
+	t := &Tunnel{
 		username: cfg.PlayerName,
 		roomID:   cfg.RoomID,
 		roomPass: cfg.RoomPassword,
@@ -144,6 +144,8 @@ func New(cfg *Config) *Tunnel {
 		ctrlCh:   make(chan sendJob, ctrlChanSize),
 		tunCh:    make(chan tunJob, tunChanSize),
 	}
+	t.disconnectOnce.Store(&sync.Once{})
+	return t
 }
 
 // Connect registers with the server, creates or reuses the TUN device,
@@ -170,7 +172,7 @@ func (t *Tunnel) Connect(ctx context.Context, serverAddr string, mtu int, newTUN
 	t.serverAddr = sAddr
 
 	// Reset disconnectOnce so Disconnect() can send leave packet on each attempt.
-	t.disconnectOnce = sync.Once{}
+	t.disconnectOnce.Store(&sync.Once{})
 
 	conn, err := net.ListenUDP("udp", &net.UDPAddr{})
 	if err != nil {
@@ -291,16 +293,18 @@ func (t *Tunnel) createTUN(mtu int) error {
 // Disconnect gracefully disconnects from the server.
 // Safe to call multiple times (uses sync.Once).
 func (t *Tunnel) Disconnect() {
-	t.disconnectOnce.Do(func() {
-		if t.serverAddr != nil {
-			packet := protocol.EncodeChecked(protocol.TypeDisconnect, nil)
-			t.sendUDP(packet, t.serverAddr)
-			time.Sleep(50 * time.Millisecond)
-		}
-		if t.conn != nil {
-			t.conn.Close()
-		}
-	})
+	if once := t.disconnectOnce.Load(); once != nil {
+		once.Do(func() {
+			if t.serverAddr != nil {
+				packet := protocol.EncodeChecked(protocol.TypeDisconnect, nil)
+				t.sendUDP(packet, t.serverAddr)
+				time.Sleep(50 * time.Millisecond)
+			}
+			if t.conn != nil {
+				t.conn.Close()
+			}
+		})
+	}
 }
 
 // CloseTUN closes the TUN device if open. Call this when exiting the program

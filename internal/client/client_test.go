@@ -862,8 +862,10 @@ func TestValidateServerAddr(t *testing.T) {
 		{"noport", true},
 		{"1.2.3.4", true},
 		{"1.2.3.4:abc", true},
-		{"1.2.3.4:0", false},
+		{"1.2.3.4:0", true},
 		{"1.2.3.4:65535", false},
+		{"1.2.3.4:65536", true},
+		{"1.2.3.4:99999", true},
 	}
 
 	for _, tt := range tests {

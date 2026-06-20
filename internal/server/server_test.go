@@ -613,7 +613,10 @@ func TestGetAuthKey_NilPassword(t *testing.T) {
 	r := newTestRoom("10.10.0.0/24", net.IPv4(10, 10, 0, 1))
 	r.roomPass = ""
 
-	key := r.getAuthKey("testroom")
+	key, err := r.getAuthKey("testroom")
+	if err != nil {
+		t.Errorf("unexpected error: %v", err)
+	}
 	if key != nil {
 		t.Error("expected nil key for empty password")
 	}
@@ -623,7 +626,10 @@ func TestGetAuthKey_WithPassword(t *testing.T) {
 	r := newTestRoom("10.10.0.0/24", net.IPv4(10, 10, 0, 1))
 	r.roomPass = "secret"
 
-	key := r.getAuthKey("testroom")
+	key, err := r.getAuthKey("testroom")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 	if key == nil {
 		t.Fatal("expected non-nil key")
 	}
@@ -632,7 +638,10 @@ func TestGetAuthKey_WithPassword(t *testing.T) {
 	}
 
 	// Should be cached
-	key2 := r.getAuthKey("testroom")
+	key2, err := r.getAuthKey("testroom")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 	if len(key2) != len(key) {
 		t.Error("cached key should have same length")
 	}

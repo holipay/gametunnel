@@ -5,6 +5,7 @@ import (
 	"hash/crc32"
 	"net"
 
+	"github.com/holipay/gametunnel/internal/crypto"
 	"github.com/holipay/gametunnel/internal/protocol"
 )
 
@@ -30,16 +31,24 @@ func buildDataPacket(srcIP, dstIP net.IP, data []byte) []byte {
 // pkt is a slice of the TUN read buffer; it must not be retained beyond
 // this call — Marshal copies the data for the UDP send.
 func (t *Tunnel) routePacket(pkt []byte, srcIP, dstIP net.IP) {
+	// Take a snapshot of fields under read lock to avoid races with reconnect
+	t.mu.RLock()
+	serverIPKey := t.serverIPKey
+	cachedSubnet := t.cachedSubnet
+	encCipher := t.encCipher
+	p2pCipher := t.p2pCipher
+	t.mu.RUnlock()
+
 	// Fast path: check server destination first (most common for relay)
 	dstKey := ipKey(dstIP)
-	if dstKey == t.serverIPKey {
-		t.sendToServer(pkt, srcIP, dstIP)
+	if dstKey == serverIPKey {
+		t.sendToServer(pkt, srcIP, dstIP, encCipher)
 		return
 	}
 
 	// Broadcast/multicast: relay to all peers via server
-	if t.cachedSubnet != nil && protocol.IsRelayTarget(dstIP, t.cachedSubnet) {
-		t.sendToServer(pkt, srcIP, dstIP)
+	if cachedSubnet != nil && protocol.IsRelayTarget(dstIP, cachedSubnet) {
+		t.sendToServer(pkt, srcIP, dstIP, encCipher)
 		return
 	}
 
@@ -51,21 +60,21 @@ func (t *Tunnel) routePacket(pkt []byte, srcIP, dstIP net.IP) {
 	if ok && peer.PublicAddr != nil && peer.DirectReach.Load() {
 		// P2P direct path confirmed — send directly for low latency.
 		data := pkt
-		if t.p2pCipher != nil {
-			data = t.p2pCipher.Encrypt(pkt)
+		if p2pCipher != nil {
+			data = p2pCipher.Encrypt(pkt)
 		}
 		t.sendUDP(buildDataPacket(srcIP, dstIP, data), peer.PublicAddr)
 	} else {
 		// Fallback: relay through server.
-		t.sendToServer(pkt, srcIP, dstIP)
+		t.sendToServer(pkt, srcIP, dstIP, encCipher)
 	}
 }
 
-// sendToServer sends a packet via the server relay.
-func (t *Tunnel) sendToServer(pkt []byte, srcIP, dstIP net.IP) {
+// sendToServer sends a packet via the server relay with the given cipher.
+func (t *Tunnel) sendToServer(pkt []byte, srcIP, dstIP net.IP, cipher *crypto.Cipher) {
 	data := pkt
-	if t.encCipher != nil {
-		data = t.encCipher.Encrypt(pkt)
+	if cipher != nil {
+		data = cipher.Encrypt(pkt)
 	}
 	t.sendUDP(buildDataPacket(srcIP, dstIP, data), t.serverAddr)
 }

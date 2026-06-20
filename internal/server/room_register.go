@@ -205,8 +205,8 @@ func (r *Room) handleAuthResponse(payload []byte, from *net.UDPAddr) {
 		return
 	}
 
-	authKey := r.getAuthKey(c.authRoomID)
-	if authKey == nil {
+	authKey, err := r.getAuthKey(c.authRoomID)
+	if err != nil || authKey == nil {
 		delete(r.addrMap, fromKey)
 		if r.pendingAuth > 0 {
 			r.pendingAuth--

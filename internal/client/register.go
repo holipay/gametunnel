@@ -127,37 +127,51 @@ func (t *Tunnel) handleAssignIP(payload []byte) error {
 		return fmt.Errorf("server IP %s is not in subnet %s", assign.ServerIP, subnet)
 	}
 
-	t.virtualIP = assign.VirtualIP
-	t.serverIP = assign.ServerIP
-	t.subnetMask = net.IPMask(assign.SubnetMask)
-	t.serverVersion = assign.Version
-	// Cache subnet and serverIPKey for hot-path lookups
-	t.cachedSubnet = &net.IPNet{
-		IP:   t.virtualIP.Mask(t.subnetMask),
-		Mask: t.subnetMask,
-	}
-	t.serverIPKey = ipKey(t.serverIP)
-
-	// Cache the hole punch packet once — reused by startHolePunch,
-	// handleHolePunchReceived, and sendP2PKeepalives.
-	t.cachedPunchPacket = protocol.EncodeChecked(protocol.TypeHolePunch, t.virtualIP.To4())
-
 	// Initialize end-to-end encryption if password is set
+	var encCipher, decCipher, p2pCipher *crypto.Cipher
 	if t.roomPass != "" {
-		key := auth.DeriveKey(t.roomPass, t.roomID)
+		key, err := auth.DeriveKey(t.roomPass, t.roomID)
+		if err != nil {
+			return fmt.Errorf("derive key: %w", err)
+		}
 		if key != nil {
-			if t.encCipher, err = crypto.NewCipher(key, crypto.DirClientToServer); err != nil {
+			if encCipher, err = crypto.NewCipher(key, crypto.DirClientToServer); err != nil {
 				return fmt.Errorf("init encrypt cipher: %w", err)
 			}
-			if t.decCipher, err = crypto.NewCipher(key, crypto.DirServerToClient); err != nil {
+			if decCipher, err = crypto.NewCipher(key, crypto.DirServerToClient); err != nil {
 				return fmt.Errorf("init decrypt cipher: %w", err)
 			}
-			if t.p2pCipher, err = crypto.NewCipher(key, crypto.DirClientToClient); err != nil {
+			if p2pCipher, err = crypto.NewCipher(key, crypto.DirClientToClient); err != nil {
 				return fmt.Errorf("init p2p cipher: %w", err)
 			}
 			log.Printf("[tunnel] encryption enabled (ChaCha20-Poly1305)")
 		}
 	}
+
+	// Cache subnet and serverIPKey for hot-path lookups
+	cachedSubnet := &net.IPNet{
+		IP:   assign.VirtualIP.Mask(net.IPMask(assign.SubnetMask)),
+		Mask: net.IPMask(assign.SubnetMask),
+	}
+	serverIPKey := ipKey(assign.ServerIP)
+
+	// Cache the hole punch packet once — reused by startHolePunch,
+	// handleHolePunchReceived, and sendP2PKeepalives.
+	cachedPunchPacket := protocol.EncodeChecked(protocol.TypeHolePunch, assign.VirtualIP.To4())
+
+	// Atomically update all fields under lock to prevent races with readers
+	t.mu.Lock()
+	t.virtualIP = assign.VirtualIP
+	t.serverIP = assign.ServerIP
+	t.subnetMask = net.IPMask(assign.SubnetMask)
+	t.serverVersion = assign.Version
+	t.cachedSubnet = cachedSubnet
+	t.serverIPKey = serverIPKey
+	t.cachedPunchPacket = cachedPunchPacket
+	t.encCipher = encCipher
+	t.decCipher = decCipher
+	t.p2pCipher = p2pCipher
+	t.mu.Unlock()
 
 	return nil
 }
@@ -173,7 +187,10 @@ func (t *Tunnel) handleAuthChallenge(payload []byte) error {
 		return fmt.Errorf("%s", i18n.Format(i18n.T().ErrParseAuthFailed, err))
 	}
 
-	key := auth.DeriveKey(t.roomPass, t.roomID)
+	key, err := auth.DeriveKey(t.roomPass, t.roomID)
+	if err != nil {
+		return fmt.Errorf("derive key: %w", err)
+	}
 	if key == nil {
 		return fmt.Errorf("%s", i18n.T().ErrDeriveKeyFailed)
 	}

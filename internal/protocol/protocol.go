@@ -19,8 +19,8 @@ const ProtocolVersion byte = 1
 
 // AppVersion is the application version encoded as (major << 8 | minor).
 // Used for client-server compatibility negotiation during handshake.
-// v1.2 = 0x0102 = 258
-const AppVersion uint16 = 0x0102
+// v1.3 = 0x0103 = 259
+const AppVersion uint16 = 0x0103
 
 // HeaderLen is the fixed header size: version(1) + type(1).
 const HeaderLen = 2
@@ -97,6 +97,7 @@ func VerifyChecksum(data []byte) ([]byte, error) {
 }
 
 // Decode extracts the version, message type and payload from a raw packet.
+// The returned Payload is a copy of the input data to prevent aliasing.
 func Decode(data []byte) (*Message, error) {
 	if len(data) < HeaderLen {
 		return nil, ErrPacketTooShort
@@ -104,9 +105,11 @@ func Decode(data []byte) (*Message, error) {
 	if data[0] != ProtocolVersion {
 		return nil, fmt.Errorf("%w: got %d, want %d", ErrUnsupportedVersion, data[0], ProtocolVersion)
 	}
+	payload := make([]byte, len(data)-HeaderLen)
+	copy(payload, data[HeaderLen:])
 	return &Message{
 		Type:    data[1],
-		Payload: data[HeaderLen:],
+		Payload: payload,
 	}, nil
 }
 

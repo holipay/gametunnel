@@ -7,38 +7,41 @@ import (
 )
 
 func TestDeriveKeyEmptyPassword(t *testing.T) {
-	key := DeriveKey("", "room1")
+	key, err := DeriveKey("", "room1")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 	if key != nil {
 		t.Fatalf("expected nil for empty password, got %v", key)
 	}
 }
 
 func TestDeriveKeyDeterministic(t *testing.T) {
-	key1 := DeriveKey("secret", "room1")
-	key2 := DeriveKey("secret", "room1")
+	key1, _ := DeriveKey("secret", "room1")
+	key2, _ := DeriveKey("secret", "room1")
 	if !bytes.Equal(key1, key2) {
 		t.Fatal("same inputs should produce same key")
 	}
 }
 
 func TestDeriveKeyDifferentRoom(t *testing.T) {
-	key1 := DeriveKey("secret", "room1")
-	key2 := DeriveKey("secret", "room2")
+	key1, _ := DeriveKey("secret", "room1")
+	key2, _ := DeriveKey("secret", "room2")
 	if bytes.Equal(key1, key2) {
 		t.Fatal("different rooms should produce different keys")
 	}
 }
 
 func TestDeriveKeyDifferentPassword(t *testing.T) {
-	key1 := DeriveKey("pass1", "room1")
-	key2 := DeriveKey("pass2", "room1")
+	key1, _ := DeriveKey("pass1", "room1")
+	key2, _ := DeriveKey("pass2", "room1")
 	if bytes.Equal(key1, key2) {
 		t.Fatal("different passwords should produce different keys")
 	}
 }
 
 func TestDeriveKeyLength(t *testing.T) {
-	key := DeriveKey("secret", "room1")
+	key, _ := DeriveKey("secret", "room1")
 	if len(key) != KeySize {
 		t.Fatalf("key length: got %d, want %d", len(key), KeySize)
 	}
@@ -63,7 +66,7 @@ func TestGenerateChallengeUnique(t *testing.T) {
 }
 
 func TestComputeAndVerifyHMAC(t *testing.T) {
-	key := DeriveKey("testpassword", "room1")
+	key, _ := DeriveKey("testpassword", "room1")
 	challenge, _ := GenerateChallenge()
 	addr := &net.UDPAddr{IP: net.IPv4(192, 168, 1, 100), Port: 12345}
 
@@ -78,8 +81,8 @@ func TestComputeAndVerifyHMAC(t *testing.T) {
 }
 
 func TestVerifyHMACWrongKey(t *testing.T) {
-	key := DeriveKey("correct", "room1")
-	wrongKey := DeriveKey("wrong", "room1")
+	key, _ := DeriveKey("correct", "room1")
+	wrongKey, _ := DeriveKey("wrong", "room1")
 	challenge, _ := GenerateChallenge()
 	addr := &net.UDPAddr{IP: net.IPv4(1, 2, 3, 4), Port: 1000}
 
@@ -90,7 +93,7 @@ func TestVerifyHMACWrongKey(t *testing.T) {
 }
 
 func TestVerifyHMACWrongChallenge(t *testing.T) {
-	key := DeriveKey("secret", "room1")
+	key, _ := DeriveKey("secret", "room1")
 	challenge, _ := GenerateChallenge()
 	wrongChallenge, _ := GenerateChallenge()
 	addr := &net.UDPAddr{IP: net.IPv4(1, 2, 3, 4), Port: 1000}
@@ -102,7 +105,7 @@ func TestVerifyHMACWrongChallenge(t *testing.T) {
 }
 
 func TestVerifyHMACWrongRoom(t *testing.T) {
-	key := DeriveKey("secret", "room1")
+	key, _ := DeriveKey("secret", "room1")
 	challenge, _ := GenerateChallenge()
 	addr := &net.UDPAddr{IP: net.IPv4(1, 2, 3, 4), Port: 1000}
 
@@ -113,7 +116,7 @@ func TestVerifyHMACWrongRoom(t *testing.T) {
 }
 
 func TestVerifyHMACWrongUsername(t *testing.T) {
-	key := DeriveKey("secret", "room1")
+	key, _ := DeriveKey("secret", "room1")
 	challenge, _ := GenerateChallenge()
 	addr := &net.UDPAddr{IP: net.IPv4(1, 2, 3, 4), Port: 1000}
 
@@ -124,7 +127,7 @@ func TestVerifyHMACWrongUsername(t *testing.T) {
 }
 
 func TestVerifyHMACWrongAddr(t *testing.T) {
-	key := DeriveKey("secret", "room1")
+	key, _ := DeriveKey("secret", "room1")
 	challenge, _ := GenerateChallenge()
 	addr1 := &net.UDPAddr{IP: net.IPv4(1, 2, 3, 4), Port: 1000}
 	addr2 := &net.UDPAddr{IP: net.IPv4(5, 6, 7, 8), Port: 2000}
@@ -136,12 +139,43 @@ func TestVerifyHMACWrongAddr(t *testing.T) {
 }
 
 func TestVerifyHMACNilAddr(t *testing.T) {
-	key := DeriveKey("secret", "room1")
+	key, _ := DeriveKey("secret", "room1")
 	challenge, _ := GenerateChallenge()
 
 	hmacVal := ComputeHMAC(key, challenge, "room1", "user", nil)
 	if !VerifyHMAC(key, hmacVal, challenge, "room1", "user", nil) {
 		t.Fatal("should verify with nil address")
+	}
+}
+
+func TestComputeHMACNilKey(t *testing.T) {
+	challenge, _ := GenerateChallenge()
+	hmacVal := ComputeHMAC(nil, challenge, "room1", "user", nil)
+	if hmacVal != nil {
+		t.Fatal("should return nil for nil key")
+	}
+}
+
+func TestComputeHMACEmptyKey(t *testing.T) {
+	challenge, _ := GenerateChallenge()
+	hmacVal := ComputeHMAC([]byte{}, challenge, "room1", "user", nil)
+	if hmacVal != nil {
+		t.Fatal("should return nil for empty key")
+	}
+}
+
+func TestVerifyHMACNilKey(t *testing.T) {
+	challenge, _ := GenerateChallenge()
+	if VerifyHMAC(nil, []byte{1, 2, 3}, challenge, "room1", "user", nil) {
+		t.Fatal("should not verify with nil key")
+	}
+}
+
+func TestVerifyHMACNilClientHMAC(t *testing.T) {
+	key, _ := DeriveKey("secret", "room1")
+	challenge, _ := GenerateChallenge()
+	if VerifyHMAC(key, nil, challenge, "room1", "user", nil) {
+		t.Fatal("should not verify with nil client HMAC")
 	}
 }
 
@@ -151,10 +185,10 @@ func TestFullAuthFlow(t *testing.T) {
 	username := "ProPlayer"
 	serverAddr := &net.UDPAddr{IP: net.IPv4(203, 0, 113, 1), Port: 4700}
 
-	serverKey := DeriveKey(password, roomID)
+	serverKey, _ := DeriveKey(password, roomID)
 	challenge, _ := GenerateChallenge()
 
-	clientKey := DeriveKey(password, roomID)
+	clientKey, _ := DeriveKey(password, roomID)
 	if !bytes.Equal(serverKey, clientKey) {
 		t.Fatal("client and server keys should match")
 	}
@@ -162,5 +196,21 @@ func TestFullAuthFlow(t *testing.T) {
 	clientHMAC := ComputeHMAC(clientKey, challenge, roomID, username, serverAddr)
 	if !VerifyHMAC(serverKey, clientHMAC, challenge, roomID, username, serverAddr) {
 		t.Fatal("full auth flow: verification should pass")
+	}
+}
+
+func TestFieldBoundaryAmbiguity(t *testing.T) {
+	// Verify that length-prefixed encoding prevents field boundary ambiguity
+	key, _ := DeriveKey("secret", "room1")
+	challenge, _ := GenerateChallenge()
+	addr := &net.UDPAddr{IP: net.IPv4(1, 2, 3, 4), Port: 1000}
+
+	// These two tuples would produce identical HMAC without length prefixing:
+	// roomID="ab", username="c" → [0x61, 0x62, 0x63]
+	// roomID="a",  username="bc" → [0x61, 0x62, 0x63]
+	hmac1 := ComputeHMAC(key, challenge, "ab", "c", addr)
+	hmac2 := ComputeHMAC(key, challenge, "a", "bc", addr)
+	if bytes.Equal(hmac1, hmac2) {
+		t.Fatal("length-prefixed encoding should prevent field boundary ambiguity")
 	}
 }
