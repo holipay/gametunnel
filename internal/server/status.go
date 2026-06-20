@@ -310,11 +310,13 @@ func (s *Server) buildStatusInfo() StatusInfo {
 	var totalPacketsDropped uint64
 	var totalKicks uint64
 
+	// Multi-room: collect all rooms in a single lock acquisition
+	var roomInfos []RoomStatusInfo
 	if s.multiRoom {
-		// Multi-room: aggregate from all rooms
 		s.roomMu.RLock()
 		for _, room := range s.rooms {
 			status := room.BuildRoomStatus()
+			roomInfos = append(roomInfos, status)
 			conns = append(conns, status.Connections...)
 			totalPlayers += status.Players
 			maxPlayers += status.MaxPlayers
@@ -350,16 +352,6 @@ func (s *Server) buildStatusInfo() StatusInfo {
 	}
 
 	uptime := now.Sub(s.startTime)
-
-	// Multi-room: collect all rooms
-	var roomInfos []RoomStatusInfo
-	if s.multiRoom {
-		s.roomMu.RLock()
-		for _, room := range s.rooms {
-			roomInfos = append(roomInfos, room.BuildRoomStatus())
-		}
-		s.roomMu.RUnlock()
-	}
 
 	return StatusInfo{
 		Version:     s.version,

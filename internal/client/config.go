@@ -98,11 +98,16 @@ func ValidateServerAddr(addr string) error {
 	if port == "" {
 		return fmt.Errorf("server address has empty port")
 	}
-	// Validate port is numeric
+	// Validate port is numeric and in valid range (1-65535)
+	portNum := 0
 	for _, c := range port {
 		if c < '0' || c > '9' {
 			return fmt.Errorf("invalid port %q in server address", port)
 		}
+		portNum = portNum*10 + int(c-'0')
+	}
+	if portNum < 1 || portNum > 65535 {
+		return fmt.Errorf("port %d out of range (1-65535)", portNum)
 	}
 	return nil
 }

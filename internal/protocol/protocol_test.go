@@ -377,6 +377,8 @@ func TestMessageTypeConstants(t *testing.T) {
 		{"AuthResponse", TypeAuthResponse},
 		{"Kick", TypeKick},
 		{"Disconnect", TypeDisconnect},
+		{"Ping", TypePing},
+		{"Pong", TypePong},
 	}
 	seen := make(map[byte]string)
 	for _, tt := range types {

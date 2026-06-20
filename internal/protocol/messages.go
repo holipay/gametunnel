@@ -71,10 +71,16 @@ type AssignIPPayload struct {
 }
 
 func (a *AssignIPPayload) Marshal() []byte {
+	vip := a.VirtualIP.To4()
+	mask := net.IP(a.SubnetMask).To4()
+	srv := a.ServerIP.To4()
+	if vip == nil || mask == nil || srv == nil {
+		return nil
+	}
 	buf := make([]byte, 14)
-	copy(buf[0:4], a.VirtualIP.To4())
-	copy(buf[4:8], net.IP(a.SubnetMask).To4())
-	copy(buf[8:12], a.ServerIP.To4())
+	copy(buf[0:4], vip)
+	copy(buf[4:8], mask)
+	copy(buf[8:12], srv)
 	binary.LittleEndian.PutUint16(buf[12:14], a.Version)
 	return buf
 }

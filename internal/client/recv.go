@@ -170,7 +170,10 @@ func (t *Tunnel) handleDirectData(from *net.UDPAddr, msg *protocol.Message) {
 	peer.DirectReach.Store(true)
 
 	// Decrypt (P2P uses p2pCipher) and write to TUN
-	t.decryptWriteAndRelease(dp, t.p2pCipher)
+	t.mu.RLock()
+	cipher := t.p2pCipher
+	t.mu.RUnlock()
+	t.decryptWriteAndRelease(dp, cipher)
 }
 
 // handlePeerInfo updates the peer list from the server.
@@ -253,8 +256,14 @@ func (t *Tunnel) handleDataFromServer(payload []byte) {
 
 	srcKey := ipKey(dp.SrcIP)
 
+	// Snapshot fields under read lock to avoid races with reconnect
+	t.mu.RLock()
+	serverIPKey := t.serverIPKey
+	decCipher := t.decCipher
+	t.mu.RUnlock()
+
 	// Allow traffic from the server's virtual IP (relay path) or known peers.
-	if srcKey != t.serverIPKey {
+	if srcKey != serverIPKey {
 		t.mu.RLock()
 		_, known := t.peers[srcKey]
 		t.mu.RUnlock()
@@ -266,7 +275,7 @@ func (t *Tunnel) handleDataFromServer(payload []byte) {
 	}
 
 	// Decrypt (relay uses decCipher) and write to TUN
-	t.decryptWriteAndRelease(dp, t.decCipher)
+	t.decryptWriteAndRelease(dp, decCipher)
 }
 
 // receiveFromTUN reads IP packets from the TUN device and dispatches them
