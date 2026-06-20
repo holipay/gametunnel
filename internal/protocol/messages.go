@@ -256,7 +256,7 @@ func (d *DataPayload) MarshalSize() int {
 func (d *DataPayload) MarshalTo(dst []byte) int {
 	src := d.SrcIP.To4()
 	dstIP := d.DstIP.To4()
-	if src == nil || dstIP == nil {
+	if src == nil || dstIP == nil || len(dst) < 8 {
 		return 0
 	}
 	copy(dst[0:4], src)

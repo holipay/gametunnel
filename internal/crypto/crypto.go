@@ -71,7 +71,7 @@ func NewCipher(key []byte, dirTag []byte) (*Cipher, error) {
 	}
 	c := &Cipher{
 		aead:   aead,
-		dirTag: dirTag,
+		dirTag: append([]byte(nil), dirTag...),
 	}
 	c.initCounter()
 	return c, nil

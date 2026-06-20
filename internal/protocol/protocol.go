@@ -127,12 +127,13 @@ func EncodeChecked(typ byte, payload []byte) []byte {
 // AppendEncodeChecked encodes a packet into dst (appending), avoiding allocation.
 // Returns the extended slice. Caller must ensure dst has enough capacity.
 func AppendEncodeChecked(dst []byte, typ byte, payload []byte) []byte {
+	start := len(dst)
 	// Header
 	dst = append(dst, ProtocolVersion, typ)
 	// Payload
 	dst = append(dst, payload...)
-	// CRC32 over header+payload
-	crc := crc32.ChecksumIEEE(dst)
+	// CRC32 over header+payload only (not pre-existing dst content)
+	crc := crc32.ChecksumIEEE(dst[start:])
 	dst = append(dst,
 		byte(crc),
 		byte(crc>>8),

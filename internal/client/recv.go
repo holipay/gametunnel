@@ -328,8 +328,10 @@ func (t *Tunnel) receiveFromTUN(ctx context.Context) {
 			continue
 		}
 
-		srcIP := net.IP(buf[12:16])
-		dstIP := net.IP(buf[16:20])
+		srcIP := make(net.IP, 4)
+		copy(srcIP, buf[12:16])
+		dstIP := make(net.IP, 4)
+		copy(dstIP, buf[16:20])
 
 		// Copy packet data — buf is reused on the next Read, but workers
 		// process packets asynchronously. For game packets (60-1500 bytes)
