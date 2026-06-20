@@ -24,7 +24,7 @@ func (r *Room) handleRegister(payload []byte, from *net.UDPAddr) {
 	// Version compatibility check
 	if !protocol.IsCompatible(reg.Version, protocol.AppVersion) {
 		r.sendKick(from, fmt.Sprintf(t.KickVersionMismatch,
-			protocol.VersionMajor(reg.Version)<<8|protocol.VersionMinor(reg.Version),
+			reg.Version,
 			protocol.AppVersion))
 		return
 	}
@@ -48,9 +48,13 @@ func (r *Room) handleRegister(payload []byte, from *net.UDPAddr) {
 	fromKey := addrToRateKey(from)
 
 	if existing := r.addrMap[fromKey]; existing != nil && existing.auth == authChallengeSent {
-		r.mu.Unlock()
-		r.sendKick(from, t.KickAuthPending)
-		return
+		// Clean up stale auth entry so the client can retry immediately
+		// instead of being blocked for 30s until keepaliveLoop cleans it up.
+		delete(r.addrMap, fromKey)
+		if r.pendingAuth > 0 {
+			r.pendingAuth--
+		}
+		// Fall through to allow new registration
 	}
 
 	if existing := r.addrMap[fromKey]; existing != nil {

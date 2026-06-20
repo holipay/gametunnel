@@ -4,6 +4,7 @@ package singleinstance
 
 import (
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -57,10 +58,18 @@ func Acquire(name string) (*Lock, error) {
 }
 
 func writePIDFile(f *os.File) {
-	f.Truncate(0)
-	f.Seek(0, 0)
-	f.Write([]byte(strconv.Itoa(os.Getpid())))
-	f.Sync()
+	if err := f.Truncate(0); err != nil {
+		log.Printf("PID file truncate: %v", err)
+	}
+	if _, err := f.Seek(0, 0); err != nil {
+		log.Printf("PID file seek: %v", err)
+	}
+	if _, err := f.Write([]byte(strconv.Itoa(os.Getpid()))); err != nil {
+		log.Printf("PID file write: %v", err)
+	}
+	if err := f.Sync(); err != nil {
+		log.Printf("PID file sync: %v", err)
+	}
 }
 
 func readPIDFile(path string) int {
