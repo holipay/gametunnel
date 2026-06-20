@@ -99,6 +99,8 @@ func (r *Room) peerInfoLoop(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			return
+		case <-r.done:
+			return
 		case <-ticker.C:
 		}
 
@@ -117,6 +119,8 @@ func (r *Room) pingLoop(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
+			return
+		case <-r.done:
 			return
 		case <-ticker.C:
 		}

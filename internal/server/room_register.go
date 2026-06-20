@@ -82,7 +82,7 @@ func (r *Room) handleRegister(payload []byte, from *net.UDPAddr) {
 	}
 
 	for _, c := range r.clients {
-		if c.auth == authNone || c.auth == authChallengeSent {
+		if c.auth == authChallengeSent {
 			continue
 		}
 		if c.authRoomID == reg.RoomID && c.Username == reg.Username {
@@ -241,7 +241,7 @@ func (r *Room) handleAuthResponse(payload []byte, from *net.UDPAddr) {
 	}
 
 	for _, existing := range r.clients {
-		if existing.auth == authNone || existing.auth == authChallengeSent {
+		if existing.auth == authChallengeSent {
 			continue
 		}
 		if existing.authRoomID == resp.RoomID && existing.Username == resp.Username {
@@ -281,13 +281,15 @@ func (r *Room) handleDisconnect(from *net.UDPAddr) {
 	} else {
 		r.markIPFree(c.VirtualIP)
 		delete(r.clients, ipKey(c.VirtualIP))
-		ip := addrToConnIPKey(c.PublicAddr)
-		r.ipConnMu.Lock()
-		r.ipConnCount[ip]--
-		if r.ipConnCount[ip] <= 0 {
-			delete(r.ipConnCount, ip)
+		if c.PublicAddr != nil {
+			ip := addrToConnIPKey(c.PublicAddr)
+			r.ipConnMu.Lock()
+			r.ipConnCount[ip]--
+			if r.ipConnCount[ip] <= 0 {
+				delete(r.ipConnCount, ip)
+			}
+			r.ipConnMu.Unlock()
 		}
-		r.ipConnMu.Unlock()
 	}
 	delete(r.addrMap, fromKey)
 	r.mu.Unlock()
@@ -358,14 +360,16 @@ func (r *Room) CleanupStale() bool {
 			log.Printf("%s", i18n.Format(i18n.T().ServerPeerLeave, sc.c.Username, sc.c.VirtualIP))
 			r.markIPFree(sc.c.VirtualIP)
 			delete(r.clients, sc.key)
-			delete(r.addrMap, addrToRateKey(sc.c.PublicAddr))
-			ip := addrToConnIPKey(sc.c.PublicAddr)
-			r.ipConnMu.Lock()
-			r.ipConnCount[ip]--
-			if r.ipConnCount[ip] <= 0 {
-				delete(r.ipConnCount, ip)
+			if sc.c.PublicAddr != nil {
+				delete(r.addrMap, addrToRateKey(sc.c.PublicAddr))
+				ip := addrToConnIPKey(sc.c.PublicAddr)
+				r.ipConnMu.Lock()
+				r.ipConnCount[ip]--
+				if r.ipConnCount[ip] <= 0 {
+					delete(r.ipConnCount, ip)
+				}
+				r.ipConnMu.Unlock()
 			}
-			r.ipConnMu.Unlock()
 			changed = true
 		}
 	}

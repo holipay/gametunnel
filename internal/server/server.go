@@ -313,7 +313,7 @@ func (s *Server) Run(ctx context.Context) {
 				return // connection error (e.g. closed) — exit loop to avoid busy-spin
 			}
 		}
-		if n < 1 {
+		if n < protocol.HeaderLen+protocol.ChecksumLen {
 			continue
 		}
 
