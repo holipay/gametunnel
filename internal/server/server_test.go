@@ -10,11 +10,15 @@ import (
 
 func newTestRoom(subnetStr string, serverIP net.IP) *Room {
 	_, subnet, _ := net.ParseCIDR(subnetStr)
+	// Create a dummy conn for the send queue (tests don't actually send)
+	conn, _ := net.ListenUDP("udp", &net.UDPAddr{})
+	sq := newRateLimitedQueue(conn, nil)
 	r := &Room{
 		clients:     make(map[[16]byte]*Client),
 		addrMap:     make(map[rateKey]*Client),
 		subnet:      subnet,
 		serverIP:    serverIP,
+		sendQueue:   sq,
 		ipBitmap:    make([]uint64, 4),
 		maxPlayers:  10,
 		ipConnCount: make(map[connIPKey]int),

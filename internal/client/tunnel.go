@@ -104,6 +104,9 @@ type Tunnel struct {
 	disconnectOnce atomic.Pointer[sync.Once]
 	sendErrors     atomic.Int64 // send failure counter
 
+	// Client-side send rate limiter (token bucket, per-server)
+	sendLimiter *clientSendLimiter
+
 	// Server liveness tracking — updated by handleServerData
 	lastServerResponse atomic.Pointer[time.Time]
 
@@ -143,6 +146,8 @@ func New(cfg *Config) *Tunnel {
 		sendCh:   make(chan sendJob, sendChanSize),
 		ctrlCh:   make(chan sendJob, ctrlChanSize),
 		tunCh:    make(chan tunJob, tunChanSize),
+		// Default: 10 Mbps client send limit, 128 KB burst
+		sendLimiter: newClientSendLimiter(10*1024*1024/8, 128*1024),
 	}
 	t.disconnectOnce.Store(&sync.Once{})
 	return t
@@ -439,6 +444,12 @@ func (t *Tunnel) writeUDP(data []byte, addr *net.UDPAddr) {
 // Replaces the previous mutex-based approach to eliminate lock contention
 // between the TUN reader, server reader, and keepalive goroutines.
 func (t *Tunnel) sendUDP(data []byte, addr *net.UDPAddr) {
+	// Check client-side rate limit
+	if !t.sendLimiter.allow(len(data)) {
+		t.sendErrors.Add(1)
+		return
+	}
+
 	select {
 	case t.sendCh <- sendJob{data: data, addr: addr}:
 	default:

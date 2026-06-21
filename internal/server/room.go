@@ -38,6 +38,7 @@ type Room struct {
 
 	// Network
 	conn       *net.UDPConn      // UDP connection for sending packets
+	sendQueue  *rateLimitedQueue // priority send queue (shared with Server)
 	bwLimiter  *BandwidthLimiter // per-client outbound bandwidth limiter
 
 	// Per-room client state
@@ -99,8 +100,9 @@ type RoomConfig struct {
 	Subnet     *net.IPNet
 	MaxPlayers int
 	MaxPerIP   int
-	Conn       *net.UDPConn      // UDP connection for sending packets
-	BWLimiter  *BandwidthLimiter // per-client outbound bandwidth limiter (optional)
+	Conn       *net.UDPConn         // UDP connection for sending packets
+	SendQueue  *rateLimitedQueue    // priority send queue (shared with Server)
+	BWLimiter  *BandwidthLimiter    // per-client outbound bandwidth limiter (optional)
 }
 
 // NewRoom creates a new room. The subnet must be /24.
@@ -126,6 +128,7 @@ func NewRoom(cfg RoomConfig) (*Room, error) {
 		serverIP:    serverIP,
 		maxPlayers:  cfg.MaxPlayers,
 		conn:        cfg.Conn,
+		sendQueue:   cfg.SendQueue,
 		bwLimiter:   cfg.BWLimiter,
 		clients:     make(map[[16]byte]*Client),
 		addrMap:     make(map[rateKey]*Client),
@@ -261,23 +264,24 @@ const sendErrorLogInterval = 1 * time.Minute
 
 func (r *Room) sendChecked(typ byte, payload []byte, to *net.UDPAddr) {
 	data := protocol.EncodeChecked(typ, payload)
-	if _, err := r.conn.WriteToUDP(data, to); err != nil {
+	if !r.sendQueue.send(data, to, priorityHigh) {
 		r.sendErrors.Add(1)
-		r.logSendError(err)
+		r.logSendError("queue full")
 	}
 }
 
 func (r *Room) sendCheckedRaw(data []byte, to *net.UDPAddr) {
-	if _, err := r.conn.WriteToUDP(data, to); err != nil {
+	// Relay data is low priority; control packets use sendChecked.
+	if !r.sendQueue.send(data, to, priorityLow) {
 		r.sendErrors.Add(1)
-		r.logSendError(err)
+		r.logSendError("queue full")
 	}
 }
 
 // logSendError logs send errors with rate limiting.
 // Instead of logging every error (or only powers of 2), it logs
 // a summary every sendErrorLogInterval when errors are occurring.
-func (r *Room) logSendError(err error) {
+func (r *Room) logSendError(errMsg string) {
 	r.sendErrorCountSinceLog.Add(1)
 
 	r.sendErrorMu.Lock()
@@ -292,7 +296,7 @@ func (r *Room) logSendError(err error) {
 	if count > 0 {
 		r.lastSendErrorLog = now
 		log.Printf(i18n.T().ServerSendFail, r.sendErrors.Load(),
-			fmt.Sprintf("(%d errors in last minute, last: %v)", count, err))
+			fmt.Sprintf("(%d errors in last minute, last: %s)", count, errMsg))
 	}
 }
 
