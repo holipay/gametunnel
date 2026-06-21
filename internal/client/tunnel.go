@@ -174,6 +174,11 @@ func (t *Tunnel) Connect(ctx context.Context, serverAddr string, mtu int, newTUN
 	// Reset disconnectOnce so Disconnect() can send leave packet on each attempt.
 	t.disconnectOnce.Store(&sync.Once{})
 
+	// Close old conn to release the file descriptor and unblock
+	// the old receiveFromServer goroutine before creating a new one.
+	if t.conn != nil {
+		t.conn.Close()
+	}
 	conn, err := net.ListenUDP("udp", &net.UDPAddr{})
 	if err != nil {
 		return fmt.Errorf("%s", i18n.Format(i18n.T().ErrBindUDP, err))

@@ -226,8 +226,13 @@ func (tr *Tray) statusLoop() {
 			tr.updateTray(false, "", 0, nil)
 		}
 
+		// Snapshot ctx under lock to avoid race with App.Disconnect()
+		tr.app.mu.RLock()
+		ctx := tr.app.ctx
+		tr.app.mu.RUnlock()
+
 		select {
-		case <-tr.app.ctx.Done():
+		case <-ctx.Done():
 			return
 		default:
 		}

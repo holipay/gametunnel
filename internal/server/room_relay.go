@@ -43,12 +43,12 @@ func (r *Room) handleRelay(payload []byte, from *net.UDPAddr) {
 
 	if isBroadcast {
 		for _, c := range r.clients {
-			if c != sender {
+			if c != sender && c.PublicAddr != nil {
 				targets = append(targets, c.PublicAddr)
 			}
 		}
 	} else {
-		if dst, ok := r.clients[ipKey(dstIP)]; ok {
+		if dst, ok := r.clients[ipKey(dstIP)]; ok && dst.PublicAddr != nil {
 			targets = append(targets, dst.PublicAddr)
 		}
 	}
@@ -123,7 +123,9 @@ func (r *Room) sendPeerInfoBroadcast() {
 	var stackTargets [maxInlineTargets]*net.UDPAddr
 	targets := stackTargets[:0]
 	for _, c := range r.clients {
-		targets = append(targets, c.PublicAddr)
+		if c.PublicAddr != nil {
+			targets = append(targets, c.PublicAddr)
+		}
 	}
 	r.mu.RUnlock()
 
