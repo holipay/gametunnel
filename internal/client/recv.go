@@ -103,6 +103,16 @@ func (t *Tunnel) handleServerData(ctx context.Context, msg *protocol.Message) {
 		t.sendCtrl(protocol.EncodeChecked(protocol.TypePong, msg.Payload), t.serverAddr)
 	case protocol.TypeHolePunch:
 		t.handleHolePunchReceived(ctx, msg.Payload)
+	case protocol.TypeKick:
+		kick, err := protocol.UnmarshalKick(msg.Payload)
+		if err == nil {
+			log.Printf("kicked by server: %s", kick.Reason)
+		}
+		// Close connection to trigger receiveFromServer to exit and
+		// Connect() to return, allowing the reconnect loop to retry.
+		if t.conn != nil {
+			t.conn.Close()
+		}
 	}
 }
 

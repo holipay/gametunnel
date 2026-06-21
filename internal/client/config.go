@@ -105,8 +105,11 @@ func ValidateServerAddr(addr string) error {
 			return fmt.Errorf("invalid port %q in server address", port)
 		}
 		portNum = portNum*10 + int(c-'0')
+		if portNum > 65535 {
+			return fmt.Errorf("port out of range (1-65535)")
+		}
 	}
-	if portNum < 1 || portNum > 65535 {
+	if portNum < 1 {
 		return fmt.Errorf("port %d out of range (1-65535)", portNum)
 	}
 	return nil

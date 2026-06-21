@@ -297,7 +297,9 @@ func (t *Tunnel) Disconnect() {
 		once.Do(func() {
 			if t.serverAddr != nil {
 				packet := protocol.EncodeChecked(protocol.TypeDisconnect, nil)
-				t.sendUDP(packet, t.serverAddr)
+				// Use high-priority control channel to ensure the disconnect
+				// packet is sent even under heavy load
+				t.sendCtrl(packet, t.serverAddr)
 				time.Sleep(50 * time.Millisecond)
 			}
 			if t.conn != nil {

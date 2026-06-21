@@ -80,7 +80,7 @@ func (r *Room) handleHolePunch(payload []byte, from *net.UDPAddr) {
 	dst, ok2 := r.clients[ipKey(dstIP)]
 	r.mu.RUnlock()
 
-	if !ok1 || !ok2 {
+	if !ok1 || !ok2 || dst.PublicAddr == nil {
 		return
 	}
 
