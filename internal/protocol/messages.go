@@ -2,6 +2,7 @@ package protocol
 
 import (
 	"encoding/binary"
+	"log"
 	"net"
 	"strconv"
 	"sync"
@@ -194,8 +195,14 @@ func UnmarshalPeerInfo(data []byte) (*PeerInfoPayload, error) {
 				if port, err := strconv.Atoi(portStr); err == nil {
 					if ip := net.ParseIP(host); ip != nil {
 						pubAddr = &net.UDPAddr{IP: ip, Port: port}
+					} else {
+						log.Printf("[protocol] malformed peer IP: %q", host)
 					}
+				} else {
+					log.Printf("[protocol] malformed peer port: %q", portStr)
 				}
+			} else {
+				log.Printf("[protocol] malformed peer address: %q", addrStr)
 			}
 		}
 		userLen := int(binary.LittleEndian.Uint16(data[off:]))

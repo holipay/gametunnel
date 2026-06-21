@@ -51,11 +51,13 @@ func (tr *Tray) setup() {
 	mQuit := systray.AddMenuItem(s.TrayQuit, s.TrayQuitDesc)
 
 	// Wire up connection failure callback: show error dialog after fast retries
+	tr.app.mu.Lock()
 	tr.app.onConnFailed = func(errMsg string) bool {
 		tr.app.dialogMu.Lock()
 		defer tr.app.dialogMu.Unlock()
 		return showConnErrorDialog(errMsg)
 	}
+	tr.app.mu.Unlock()
 
 	// First run: auto-open settings dialog to guide user
 	isFirstRun := tr.app.cfg.ServerAddr == ""
@@ -129,7 +131,12 @@ func (tr *Tray) setup() {
 }
 
 func (tr *Tray) doConnect() {
-	if tr.app.cfg.ServerAddr == "" {
+	// Snapshot cfg under lock to avoid data race with settings dialog
+	tr.app.mu.RLock()
+	cfg := tr.app.cfg
+	tr.app.mu.RUnlock()
+
+	if cfg.ServerAddr == "" {
 		tr.app.dialogMu.Lock()
 		defer tr.app.dialogMu.Unlock()
 		statusText := i18n.T().TrayNoServer
@@ -147,7 +154,7 @@ func (tr *Tray) doConnect() {
 		}
 		return
 	}
-	tr.app.Connect(tr.app.cfg)
+	tr.app.Connect(cfg)
 	tr.updateTrayConnecting()
 }
 

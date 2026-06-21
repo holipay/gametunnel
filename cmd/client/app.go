@@ -22,6 +22,7 @@ type App struct {
 	mu         sync.RWMutex
 	dialogMu   sync.Mutex // serializes Win32 modal dialogs (settings + error)
 	connecting bool
+	connectGen int64 // generation counter to prevent stale defer from resetting connecting
 	lastErr    string
 
 	// Status (updated by statusLoop polling tunnel.Status())
@@ -156,6 +157,7 @@ func (a *App) Connect(cfg *client.Config) {
 		return
 	}
 	a.connecting = true
+	a.connectGen++
 	a.lastErr = ""
 	a.mu.Unlock()
 
@@ -240,11 +242,12 @@ func (a *App) statusLoop(ctx context.Context) {
 // After fastRetries (3) rapid attempts, it pauses and calls onConnFailed
 // to let the user decide: retry, edit settings, or stop.
 func (a *App) connectLoop() {
-	// Capture config under lock to avoid data race with Connect()
+	// Capture config and generation under lock to avoid data race with Connect()
 	a.mu.RLock()
 	cfg := a.cfg
 	tun := a.tunnel
 	ctx := a.ctx
+	gen := a.connectGen
 	a.mu.RUnlock()
 
 	// Validate server address format before attempting connection
@@ -260,7 +263,11 @@ func (a *App) connectLoop() {
 
 	defer func() {
 		a.mu.Lock()
-		a.connecting = false
+		// Only reset connecting if this is still the current generation.
+		// A newer Connect() call would have incremented gen.
+		if a.connectGen == gen {
+			a.connecting = false
+		}
 		a.mu.Unlock()
 	}()
 
@@ -304,8 +311,11 @@ func (a *App) connectLoop() {
 			// After exhausting fast retries, prompt user instead of silent backoff
 			if attempt+1 >= fastRetries {
 				// Reset attempt counter so next round also gets fast retries
-				if a.onConnFailed != nil {
-					shouldRetry := a.onConnFailed(errMsg)
+				a.mu.RLock()
+				cb := a.onConnFailed
+				a.mu.RUnlock()
+				if cb != nil {
+					shouldRetry := cb(errMsg)
 					if !shouldRetry {
 						return
 					}
