@@ -40,15 +40,17 @@ jobs:
             VERSION=${GITHUB_REF_NAME}
           fi
           echo "VERSION=${VERSION}" >> $GITHUB_ENV
+          echo "COMMIT=$(git rev-parse --short HEAD)" >> $GITHUB_ENV
+          echo "BUILD_TIME=$(date -u '+%Y-%m-%dT%H:%M:%SZ')" >> $GITHUB_ENV
 
       - name: Build server (linux/amd64)
-        run: CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags "-s -w -X main.Version=${VERSION}" -o gtunnel-server-linux-amd64 ./cmd/server
+        run: CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags "-s -w -X main.Version=${VERSION} -X main.Commit=${COMMIT} -X main.BuildTime=${BUILD_TIME}" -o gtunnel-server-linux-amd64 ./cmd/server
 
       - name: Build server (openwrt/armv7)
-        run: CGO_ENABLED=0 GOOS=linux GOARCH=arm GOARM=7 go build -ldflags "-s -w -X main.Version=${VERSION}" -o gtunnel-server-openwrt-armv7 ./cmd/server
+        run: CGO_ENABLED=0 GOOS=linux GOARCH=arm GOARM=7 go build -ldflags "-s -w -X main.Version=${VERSION} -X main.Commit=${COMMIT} -X main.BuildTime=${BUILD_TIME}" -o gtunnel-server-openwrt-armv7 ./cmd/server
 
       - name: Build server (openwrt/arm64)
-        run: CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -ldflags "-s -w -X main.Version=${VERSION}" -o gtunnel-server-openwrt-arm64 ./cmd/server
+        run: CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -ldflags "-s -w -X main.Version=${VERSION} -X main.Commit=${COMMIT} -X main.BuildTime=${BUILD_TIME}" -o gtunnel-server-openwrt-arm64 ./cmd/server
 
       - uses: actions/upload-artifact@v4
         with:
@@ -76,9 +78,11 @@ jobs:
             VERSION=${GITHUB_REF_NAME}
           fi
           echo "VERSION=${VERSION}" >> $GITHUB_ENV
+          echo "COMMIT=$(git rev-parse --short HEAD)" >> $GITHUB_ENV
+          echo "BUILD_TIME=$(date -u '+%Y-%m-%dT%H:%M:%SZ')" >> $GITHUB_ENV
 
       - name: Build client (amd64)
-        run: CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -ldflags "-s -w -X main.Version=${VERSION}" -o gtunnel-client.exe ./cmd/client
+        run: CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -ldflags "-s -w -H windowsgui -X main.Version=${VERSION} -X main.Commit=${COMMIT} -X main.BuildTime=${BUILD_TIME}" -o gtunnel-client.exe ./cmd/client
 
       - name: Download wintun.dll
         run: |
