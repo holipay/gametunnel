@@ -574,3 +574,195 @@ func TestAssignIPBackwardCompatible(t *testing.T) {
 		t.Errorf("Version: got %d, want 0 (old server)", a.Version)
 	}
 }
+
+// ── Pool Functions ─────────────────────────────────────────────
+
+func TestGetPutPeerInfoPayload(t *testing.T) {
+	p := GetPeerInfoPayload()
+	if p == nil {
+		t.Fatal("GetPeerInfoPayload returned nil")
+	}
+	p.Peers = []PeerInfoEntry{
+		{VirtualIP: net.IPv4(10, 0, 0, 2), Username: "test"},
+	}
+	PutPeerInfoPayload(p)
+	// After put, p should be reset
+	if p.Peers != nil {
+		t.Error("expected Peers to be nil after Put")
+	}
+}
+
+func TestPutDataPayload(t *testing.T) {
+	dp := &DataPayload{
+		SrcIP: net.IPv4(10, 0, 0, 2),
+		DstIP: net.IPv4(10, 0, 0, 3),
+		Data:  []byte("test"),
+	}
+	PutDataPayload(dp)
+	if dp.SrcIP != nil || dp.DstIP != nil || dp.Data != nil {
+		t.Error("expected all fields to be nil after Put")
+	}
+}
+
+// ── DataPayload MarshalSize / MarshalTo ────────────────────────
+
+func TestMarshalSize(t *testing.T) {
+	dp := &DataPayload{
+		SrcIP: net.IPv4(10, 0, 0, 2),
+		DstIP: net.IPv4(10, 0, 0, 3),
+		Data:  []byte("hello"),
+	}
+	if dp.MarshalSize() != 13 {
+		t.Errorf("MarshalSize: got %d, want 13", dp.MarshalSize())
+	}
+}
+
+func TestMarshalTo(t *testing.T) {
+	dp := &DataPayload{
+		SrcIP: net.IPv4(10, 0, 0, 2),
+		DstIP: net.IPv4(10, 0, 0, 3),
+		Data:  []byte("hello"),
+	}
+	dst := make([]byte, dp.MarshalSize())
+	n := dp.MarshalTo(dst)
+	if n != 13 {
+		t.Errorf("MarshalTo: wrote %d bytes, want 13", n)
+	}
+	// Verify it matches Marshal()
+	if !bytes.Equal(dst, dp.Marshal()) {
+		t.Error("MarshalTo output differs from Marshal")
+	}
+}
+
+func TestMarshalTo_SmallBuffer(t *testing.T) {
+	dp := &DataPayload{
+		SrcIP: net.IPv4(10, 0, 0, 2),
+		DstIP: net.IPv4(10, 0, 0, 3),
+		Data:  []byte("hello"),
+	}
+	dst := make([]byte, 4) // too small
+	n := dp.MarshalTo(dst)
+	if n != 0 {
+		t.Errorf("MarshalTo: expected 0 for small buffer, got %d", n)
+	}
+}
+
+func TestMarshalTo_NilIP(t *testing.T) {
+	dp := &DataPayload{
+		SrcIP: nil,
+		DstIP: net.IPv4(10, 0, 0, 3),
+		Data:  []byte("hello"),
+	}
+	dst := make([]byte, 20)
+	n := dp.MarshalTo(dst)
+	if n != 0 {
+		t.Errorf("MarshalTo: expected 0 for nil SrcIP, got %d", n)
+	}
+}
+
+// ── UnmarshalDataPooled ───────────────────────────────────────
+
+func TestUnmarshalDataPooled(t *testing.T) {
+	original := &DataPayload{
+		SrcIP: net.IPv4(10, 0, 0, 2),
+		DstIP: net.IPv4(10, 0, 0, 3),
+		Data:  []byte("test data"),
+	}
+	data := original.Marshal()
+
+	dp, err := UnmarshalDataPooled(data)
+	if err != nil {
+		t.Fatalf("UnmarshalDataPooled failed: %v", err)
+	}
+	defer PutDataPayload(dp)
+
+	if !dp.SrcIP.Equal(original.SrcIP) {
+		t.Errorf("SrcIP: got %v, want %v", dp.SrcIP, original.SrcIP)
+	}
+	if !dp.DstIP.Equal(original.DstIP) {
+		t.Errorf("DstIP: got %v, want %v", dp.DstIP, original.DstIP)
+	}
+	if !bytes.Equal(dp.Data, original.Data) {
+		t.Errorf("Data: got %v, want %v", dp.Data, original.Data)
+	}
+}
+
+func TestUnmarshalDataPooled_TooShort(t *testing.T) {
+	_, err := UnmarshalDataPooled([]byte{0x01, 0x02})
+	if err != ErrPacketTooShort {
+		t.Errorf("expected ErrPacketTooShort, got %v", err)
+	}
+}
+
+// ── PingPayload ───────────────────────────────────────────────
+
+func TestPingPayloadRoundTrip(t *testing.T) {
+	p := &PingPayload{Timestamp: 1234567890}
+	data := p.Marshal()
+	if len(data) != 8 {
+		t.Fatalf("Marshal: got %d bytes, want 8", len(data))
+	}
+
+	p2, err := UnmarshalPing(data)
+	if err != nil {
+		t.Fatalf("UnmarshalPing failed: %v", err)
+	}
+	if p2.Timestamp != p.Timestamp {
+		t.Errorf("Timestamp: got %d, want %d", p2.Timestamp, p.Timestamp)
+	}
+}
+
+func TestUnmarshalPing_TooShort(t *testing.T) {
+	_, err := UnmarshalPing([]byte{0x01, 0x02, 0x03})
+	if err != ErrPacketTooShort {
+		t.Errorf("expected ErrPacketTooShort, got %v", err)
+	}
+}
+
+// ── AppendEncodeChecked ───────────────────────────────────────
+
+func TestAppendEncodeChecked(t *testing.T) {
+	dst := make([]byte, 0, 100)
+	payload := []byte("hello")
+
+	result := AppendEncodeChecked(dst, TypeData, payload)
+
+	// Should have: existing(0) + version(1) + type(1) + payload(5) + crc(4) = 11 bytes
+	if len(result) != 11 {
+		t.Fatalf("AppendEncodeChecked: got %d bytes, want 11", len(result))
+	}
+
+	// Verify version
+	if result[0] != ProtocolVersion {
+		t.Errorf("version: got %d, want %d", result[0], ProtocolVersion)
+	}
+
+	// Verify type
+	if result[1] != TypeData {
+		t.Errorf("type: got %d, want %d", result[1], TypeData)
+	}
+
+	// Verify CRC can be decoded
+	body, err := VerifyChecksum(result)
+	if err != nil {
+		t.Fatalf("VerifyChecksum failed: %v", err)
+	}
+	if !bytes.Equal(body[2:], payload) {
+		t.Errorf("payload mismatch")
+	}
+}
+
+func TestAppendEncodeChecked_AppendsToExisting(t *testing.T) {
+	dst := []byte("prefix")
+	result := AppendEncodeChecked(dst, TypePing, []byte("ping"))
+
+	// Should preserve prefix
+	if !bytes.HasPrefix(result, []byte("prefix")) {
+		t.Error("prefix not preserved")
+	}
+
+	// CRC should be over the appended portion only
+	if len(result) != 6+2+4+4 { // prefix(6) + header(2) + payload(4) + crc(4)
+		t.Errorf("unexpected length: %d", len(result))
+	}
+}

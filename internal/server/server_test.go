@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"net"
 	"testing"
 	"time"
@@ -1202,5 +1203,99 @@ func TestMetricsTimeSeries_Wraparound(t *testing.T) {
 	// Should contain the most recent 60 samples
 	if samples[0].Timestamp != 10 { // 70 - 60 = 10
 		t.Errorf("first sample Timestamp: got %d, want 10", samples[0].Timestamp)
+	}
+}
+
+// ── Bandwidth Limiter Wait / Cleanup ───────────────────────────
+
+func TestBandwidthLimiter_Wait(t *testing.T) {
+	bl := NewBandwidthLimiter(1000) // 1000 bytes/sec
+	addr := &net.UDPAddr{IP: net.IPv4(1, 2, 3, 4), Port: 100}
+
+	// First wait should succeed immediately (full bucket)
+	ctx := context.Background()
+	if !bl.Wait(ctx, addr, 100) {
+		t.Error("expected Wait to succeed")
+	}
+
+	// Second wait should also succeed (enough tokens)
+	if !bl.Wait(ctx, addr, 100) {
+		t.Error("expected Wait to succeed")
+	}
+}
+
+func TestBandwidthLimiter_WaitTimeout(t *testing.T) {
+	bl := NewBandwidthLimiter(10) // very slow: 10 bytes/sec
+	addr := &net.UDPAddr{IP: net.IPv4(1, 2, 3, 4), Port: 100}
+
+	ctx := context.Background()
+	// Exhaust tokens (burst is 128KB, so take that much)
+	bl.Allow(addr, 128*1024)
+
+	// Wait should timeout (can't get 1000 bytes in 50ms at 10 bytes/sec)
+	if bl.Wait(ctx, addr, 1000) {
+		t.Error("expected Wait to timeout")
+	}
+}
+
+func TestBandwidthLimiter_WaitContextCancel(t *testing.T) {
+	bl := NewBandwidthLimiter(10)
+	addr := &net.UDPAddr{IP: net.IPv4(1, 2, 3, 4), Port: 100}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	// Exhaust tokens
+	bl.Allow(addr, 128*1024)
+
+	// Cancel immediately
+	cancel()
+
+	if bl.Wait(ctx, addr, 1000) {
+		t.Error("expected Wait to fail after context cancel")
+	}
+}
+
+func TestBandwidthLimiter_Cleanup(t *testing.T) {
+	bl := NewBandwidthLimiter(1000)
+	addr1 := &net.UDPAddr{IP: net.IPv4(1, 2, 3, 4), Port: 100}
+	addr2 := &net.UDPAddr{IP: net.IPv4(5, 6, 7, 8), Port: 200}
+
+	// Create two buckets
+	bl.Allow(addr1, 10)
+	bl.Allow(addr2, 10)
+
+	// Both should exist
+	if !bl.Enabled() {
+		t.Error("expected limiter to be enabled")
+	}
+
+	// Cleanup with 0 duration should remove all
+	bl.Cleanup(0)
+
+	// After cleanup, new Allow calls create fresh buckets
+	bl.Allow(addr1, 10)
+}
+
+func TestBandwidthLimiter_CleanupDisabled(t *testing.T) {
+	bl := NewBandwidthLimiter(0) // disabled
+	// Cleanup should not panic
+	bl.Cleanup(time.Minute)
+}
+
+func TestSubUint64(t *testing.T) {
+	tests := []struct {
+		a, b uint64
+		want uint64
+	}{
+		{10, 5, 5},
+		{5, 10, 0}, // clamp to 0
+		{0, 0, 0},
+		{^uint64(0), 1, ^uint64(0) - 1},
+	}
+
+	for _, tt := range tests {
+		got := subUint64(tt.a, tt.b)
+		if got != tt.want {
+			t.Errorf("subUint64(%d, %d) = %d, want %d", tt.a, tt.b, got, tt.want)
+		}
 	}
 }
