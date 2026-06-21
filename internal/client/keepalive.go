@@ -48,10 +48,13 @@ const p2pKeepaliveInterval = 15 * time.Second
 func (t *Tunnel) startHolePunch(ctx context.Context, peerIP net.IP) {
 	t.mu.RLock()
 	peer, ok := t.peers[ipKey(peerIP)]
-	t.mu.RUnlock()
 	if !ok || peer.PublicAddr == nil {
+		t.mu.RUnlock()
 		return
 	}
+	// Snapshot PublicAddr under lock to avoid data race with handlePeerInfo
+	peerAddr := peer.PublicAddr
+	t.mu.RUnlock()
 
 	// Use cached hole punch packet (built once in handleAssignIP)
 	t.mu.RLock()
@@ -65,7 +68,7 @@ func (t *Tunnel) startHolePunch(ctx context.Context, peerIP net.IP) {
 				return
 			default:
 			}
-			t.sendCtrl(packet, peer.PublicAddr)
+			t.sendCtrl(packet, peerAddr)
 			time.Sleep(interval)
 		}
 
@@ -94,10 +97,13 @@ func (t *Tunnel) handleHolePunchReceived(ctx context.Context, payload []byte) {
 
 	t.mu.RLock()
 	peer, ok := t.peers[ipKey(peerIP)]
-	t.mu.RUnlock()
 	if !ok || peer.PublicAddr == nil {
+		t.mu.RUnlock()
 		return
 	}
+	// Snapshot PublicAddr under lock to avoid data race with handlePeerInfo
+	peerAddr := peer.PublicAddr
+	t.mu.RUnlock()
 
 	// Rate limit: check if we recently punched back to this peer
 	now := time.Now()
@@ -118,7 +124,7 @@ func (t *Tunnel) handleHolePunchReceived(ctx context.Context, payload []byte) {
 				return
 			default:
 			}
-			t.sendCtrl(packet, peer.PublicAddr)
+			t.sendCtrl(packet, peerAddr)
 			time.Sleep(50 * time.Millisecond)
 		}
 	}()
@@ -300,15 +306,18 @@ func (t *Tunnel) p2pKeepaliveLoop(ctx context.Context) {
 // sendP2PKeepalives sends a keepalive to each peer with DirectReach=true.
 func (t *Tunnel) sendP2PKeepalives() {
 	t.mu.RLock()
-	var directPeers []*Peer
+	type peerAddr struct {
+		addr *net.UDPAddr
+	}
+	var addrs []peerAddr
 	for _, peer := range t.peers {
 		if peer.DirectReach.Load() && peer.PublicAddr != nil {
-			directPeers = append(directPeers, peer)
+			addrs = append(addrs, peerAddr{addr: peer.PublicAddr})
 		}
 	}
 	t.mu.RUnlock()
 
-	if len(directPeers) == 0 {
+	if len(addrs) == 0 {
 		return
 	}
 
@@ -317,7 +326,7 @@ func (t *Tunnel) sendP2PKeepalives() {
 	packet := t.cachedPunchPacket
 	t.mu.RUnlock()
 
-	for _, peer := range directPeers {
-		t.sendCtrl(packet, peer.PublicAddr)
+	for _, pa := range addrs {
+		t.sendCtrl(packet, pa.addr)
 	}
 }

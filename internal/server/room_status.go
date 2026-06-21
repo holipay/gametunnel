@@ -146,6 +146,9 @@ func (r *Room) pingLoop(ctx context.Context) {
 		ping := &protocol.PingPayload{Timestamp: ts}
 		encoded := protocol.EncodeChecked(protocol.TypePing, ping.Marshal())
 		for _, c := range r.clients {
+			if c.PublicAddr == nil {
+				continue // restored from persistence, not yet reconnected
+			}
 			c.pingSeq++
 			c.lastPingSent = now
 			c.lastPingSeq = c.pingSeq
