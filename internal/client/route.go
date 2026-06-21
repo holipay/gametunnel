@@ -55,15 +55,21 @@ func (t *Tunnel) routePacket(pkt []byte, srcIP, dstIP net.IP) {
 	// Peer lookup
 	t.mu.RLock()
 	peer, ok := t.peers[dstKey]
+	// Snapshot PublicAddr under lock to avoid race with handlePeerInfo
+	var peerAddr *net.UDPAddr
+	if ok {
+		peerAddr = peer.PublicAddr
+	}
+	peerDirect := ok && peerAddr != nil && peer.DirectReach.Load()
 	t.mu.RUnlock()
 
-	if ok && peer.PublicAddr != nil && peer.DirectReach.Load() {
+	if peerDirect {
 		// P2P direct path confirmed — send directly for low latency.
 		data := pkt
 		if p2pCipher != nil {
 			data = p2pCipher.Encrypt(pkt)
 		}
-		t.sendUDP(buildDataPacket(srcIP, dstIP, data), peer.PublicAddr)
+		t.sendUDP(buildDataPacket(srcIP, dstIP, data), peerAddr)
 	} else {
 		// Fallback: relay through server.
 		t.sendToServer(pkt, srcIP, dstIP, encCipher)

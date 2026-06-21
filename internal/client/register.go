@@ -171,6 +171,9 @@ func (t *Tunnel) handleAssignIP(payload []byte) error {
 	t.encCipher = encCipher
 	t.decCipher = decCipher
 	t.p2pCipher = p2pCipher
+	// Clear stale peers from previous session — they will be repopulated
+	// by the next PeerInfo message from the server.
+	t.peers = make(map[[16]byte]*Peer)
 	t.mu.Unlock()
 
 	return nil
