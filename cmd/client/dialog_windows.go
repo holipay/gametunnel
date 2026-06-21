@@ -122,7 +122,7 @@ func showConfigDialog(statusText string) bool {
 		400, // FW_NORMAL
 		0, 0, 0,
 		1, 0, 0, 0, 0,
-		uintptr(unsafe.Pointer(syscall.StringToUTF16Ptr("Segoe UI"))),
+		uintptr(unsafe.Pointer(windows.StringToUTF16Ptr("Segoe UI"))),
 	)
 
 	// Measure the font to compute dialog base units (1 DLU = 1/4 avgCharWidth × 1/8 height).
@@ -427,7 +427,7 @@ func showConnErrorDialog(errMsg string) bool {
 		uintptr(15), 0, 0, 0,
 		400, 0, 0, 0,
 		1, 0, 0, 0, 0,
-		uintptr(unsafe.Pointer(syscall.StringToUTF16Ptr("Segoe UI"))),
+		uintptr(unsafe.Pointer(windows.StringToUTF16Ptr("Segoe UI"))),
 	)
 
 	// Dialog dimensions

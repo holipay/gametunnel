@@ -180,7 +180,7 @@ func (r *Room) SnapshotState() RoomState {
 		Version:   stateVersion,
 		Subnet:    r.subnet.String(),
 		UpdatedAt: time.Now(),
-		IPBitmap:  r.ipBitmap,
+		IPBitmap:  append([]uint64(nil), r.ipBitmap...),
 		Clients:   clients,
 	}
 }

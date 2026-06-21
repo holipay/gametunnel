@@ -80,12 +80,18 @@ type StatusResponse struct {
 // NewApp creates a new App.
 func NewApp(cfg *client.Config) *App {
 	ctx, cancel := context.WithCancel(context.Background())
-	return &App{
+	app := &App{
 		cfg:    cfg,
 		tunnel: client.New(cfg),
 		ctx:    ctx,
 		cancel: cancel,
 	}
+	// Set default callback to prevent nil dereference if tray setup is slow
+	app.onConnFailed = func(errMsg string) bool {
+		log.Printf("connection failed: %s (retrying)", errMsg)
+		return true
+	}
+	return app
 }
 
 // SetTUNFactory sets the platform-specific TUN device factory.

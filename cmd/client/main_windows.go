@@ -167,7 +167,10 @@ func requestAdmin() {
 	exePath, _ := windows.UTF16PtrFromString(exe)
 
 	if err := windows.ShellExecute(0, verb, exePath, nil, nil, windows.SW_HIDE); err != nil {
-		fmt.Fprintf(os.Stderr, i18n.T().ErrElevateFailed, err)
+		windows.MessageBox(0,
+			windows.StringToUTF16Ptr(fmt.Sprintf(i18n.T().ErrElevateFailed, err)),
+			windows.StringToUTF16Ptr("GameTunnel"),
+			windows.MB_OK|windows.MB_ICONERROR)
 		os.Exit(1)
 	}
 

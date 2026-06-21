@@ -21,9 +21,16 @@ var (
 // and starts the system tray.
 func run(cfg *client.Config, tunFactory func(client.TunConfig) (client.TunDevice, error)) {
 	logFile := setupLog()
-	defer logFile.Close()
+	defer func() {
+		if logFile != os.Stderr {
+			logFile.Close()
+		}
+	}()
 
-	cleanup, _ := setupFirewallPlatform()
+	cleanup, err := setupFirewallPlatform()
+	if err != nil {
+		log.Printf("firewall setup failed: %v (non-fatal)", err)
+	}
 	defer cleanup()
 
 	app := NewApp(cfg)

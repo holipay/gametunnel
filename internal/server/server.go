@@ -149,6 +149,9 @@ type Server struct {
 	// Default room (single-room mode)
 	defaultRoom *Room
 
+	// Base subnet for multi-room mode (stored separately since defaultRoom is nil)
+	baseSubnet *net.IPNet
+
 	// Bandwidth limiting
 	bwLimiter    *BandwidthLimiter // per-client outbound bandwidth limiter
 
@@ -270,6 +273,9 @@ func New(cfg Config) (*Server, error) {
 		}
 		s.defaultRoom = defaultRoom
 		s.rooms["default"] = defaultRoom
+	} else {
+		// Multi-room mode: store the base subnet for allocateSubnet()
+		s.baseSubnet = cfg.Subnet
 	}
 
 	// Load persisted state (if any)
@@ -472,18 +478,20 @@ func (s *Server) handleRegisterMultiRoom(payload []byte, from *net.UDPAddr) {
 // allocateSubnet finds an unused /24 subnet for a new room.
 // Uses 10.10.{room_index}.0/24 starting from 10.10.2.0.
 func (s *Server) allocateSubnet() *net.IPNet {
-	// Derive room subnets from the default room's subnet prefix.
+	// Derive room subnets from the base subnet prefix.
 	// e.g. server -subnet 192.168.1.0/24 → rooms get 192.168.2.0/24, 192.168.3.0/24, ...
-	if s.defaultRoom == nil {
-		return nil
+	var baseIP net.IP
+	if s.defaultRoom != nil {
+		baseIP = s.defaultRoom.subnet.IP.To4()
+	} else if s.baseSubnet != nil {
+		baseIP = s.baseSubnet.IP.To4()
 	}
-	base := s.defaultRoom.subnet.IP.To4()
-	if base == nil {
+	if baseIP == nil {
 		return nil
 	}
 
 	// Find the highest used 3rd octet
-	maxIdx := int(base[2])
+	maxIdx := int(baseIP[2])
 	if maxIdx < 1 {
 		maxIdx = 1
 	}
@@ -497,7 +505,7 @@ func (s *Server) allocateSubnet() *net.IPNet {
 	if nextIdx > 254 {
 		return nil // no more subnets
 	}
-	ip := net.IPv4(base[0], base[1], byte(nextIdx), 0)
+	ip := net.IPv4(baseIP[0], baseIP[1], byte(nextIdx), 0)
 	mask := net.CIDRMask(24, 32)
 	return &net.IPNet{IP: ip, Mask: mask}
 }
@@ -534,16 +542,39 @@ func (s *Server) keepaliveLoop(ctx context.Context) {
 		// When clients disconnect, the room removes from addrMap but
 		// addrToRoom is only cleaned here to avoid cross-package coupling.
 		if s.multiRoom {
-			s.roomMu.Lock()
+			// Collect stale keys under s.roomMu.RLock to minimize lock time,
+			// then clean up under s.roomMu.Lock without holding room.mu.
+			// This avoids ABBA deadlock with handleRegisterMultiRoom which
+			// acquires room.mu.RLock before s.roomMu.Lock.
+			s.roomMu.RLock()
+			type staleEntry struct {
+				addrKey rateKey
+				room    *Room
+			}
+			var stale []staleEntry
 			for addrKey, room := range s.addrToRoom {
 				room.mu.RLock()
 				c := room.addrMap[addrKey]
 				room.mu.RUnlock()
 				if c == nil {
-					delete(s.addrToRoom, addrKey)
+					stale = append(stale, staleEntry{addrKey: addrKey, room: room})
 				}
 			}
-			s.roomMu.Unlock()
+			s.roomMu.RUnlock()
+
+			if len(stale) > 0 {
+				s.roomMu.Lock()
+				for _, e := range stale {
+					// Re-check under write lock: room may have been re-populated
+					e.room.mu.RLock()
+					c := e.room.addrMap[e.addrKey]
+					e.room.mu.RUnlock()
+					if c == nil {
+						delete(s.addrToRoom, e.addrKey)
+					}
+				}
+				s.roomMu.Unlock()
+			}
 		}
 	}
 }
