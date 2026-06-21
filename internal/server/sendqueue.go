@@ -48,10 +48,12 @@ func (sq *sendQueue) send(data []byte, addr *net.UDPAddr, priority sendPriority)
 
 	if priority == priorityHigh {
 		// High priority: wait briefly for space
+		timer := time.NewTimer(50 * time.Millisecond)
+		defer timer.Stop()
 		select {
 		case sq.ch <- e:
 			return true
-		case <-time.After(50 * time.Millisecond):
+		case <-timer.C:
 			return false
 		}
 	}

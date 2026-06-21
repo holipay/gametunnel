@@ -76,6 +76,18 @@ func (r *Room) handleRegister(payload []byte, from *net.UDPAddr) {
 		return
 	}
 
+	// Try to restore a previously persisted client (state persistence).
+	// If a placeholder exists with matching username, attach the real address.
+	if restored := r.resolveRestoredClient(reg.Username, reg.RoomID, from); restored != nil {
+		selfIP := restored.VirtualIP
+		r.mu.Unlock()
+		r.sendAssignIP(selfIP, from)
+		r.sendPeerInfoToClient(from)
+		r.peerInfoDirty.Store(true)
+		r.markDirty()
+		return
+	}
+
 	r.ipConnMu.Lock()
 	ipCount := r.ipConnCount[clientIP]
 	if ipCount >= r.maxPerIP {

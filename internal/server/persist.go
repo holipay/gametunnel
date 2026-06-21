@@ -126,10 +126,11 @@ func (s *Server) loadState() error {
 		// Create a placeholder client entry. The client will get a fresh
 		// PublicAddr when it reconnects; until then it shows as "offline".
 		c := &Client{
-			Username:  entry.Username,
-			VirtualIP: ip,
-			LastSeen:  entry.LastSeen,
-			auth:      authNone,
+			Username:   entry.Username,
+			VirtualIP:  ip,
+			LastSeen:   entry.LastSeen,
+			auth:       authNone,
+			authRoomID: "default", // single-room mode uses "default" roomID
 		}
 		room.clients[ipKey(ip)] = c
 		// NOTE: do NOT add to addrMap yet — no PublicAddr until reconnect
