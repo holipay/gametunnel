@@ -121,6 +121,7 @@ func ipKey(ip net.IP) [16]byte {
 // Server is the GameTunnel relay server.
 type Server struct {
 	conn       *net.UDPConn
+	sendQueue  *rateLimitedQueue // priority send queue with bandwidth limiting
 	statusAddr  string   // HTTP status address, empty = disabled
 	statusToken string   // status page access token, empty = no auth
 	version     string
@@ -237,6 +238,7 @@ func New(cfg Config) (*Server, error) {
 
 	s := &Server{
 		conn:        conn,
+		sendQueue:   newRateLimitedQueue(conn, bwLimiter),
 		statusAddr:  cfg.StatusAddr,
 		statusToken: cfg.StatusToken,
 		version:     cfg.Version,
@@ -262,6 +264,7 @@ func New(cfg Config) (*Server, error) {
 			MaxPlayers: cfg.MaxPlayers,
 			MaxPerIP:   maxPerIP,
 			Conn:       conn,
+			SendQueue:  s.sendQueue,
 			BWLimiter:  bwLimiter,
 		})
 		if err != nil {
@@ -295,6 +298,7 @@ func (s *Server) Run(ctx context.Context) {
 	go s.persistLoop(ctx)
 	go s.metricsLoop(ctx)
 	go s.bwCleanupLoop(ctx)
+	go s.sendQueue.run(ctx) // priority send queue
 
 	// Start room-specific loops
 	s.roomMu.RLock()
@@ -445,6 +449,7 @@ func (s *Server) handleRegisterMultiRoom(payload []byte, from *net.UDPAddr) {
 			MaxPlayers: 254, // default max for multi-room
 			MaxPerIP:   3,
 			Conn:       s.conn,
+			SendQueue:  s.sendQueue,
 			BWLimiter:  s.bwLimiter,
 		})
 		if err != nil {
@@ -583,10 +588,10 @@ func (s *Server) keepaliveLoop(ctx context.Context) {
 
 func (s *Server) sendChecked(typ byte, payload []byte, to *net.UDPAddr) {
 	data := protocol.EncodeChecked(typ, payload)
-	if _, err := s.conn.WriteToUDP(data, to); err != nil {
+	if !s.sendQueue.send(data, to, priorityHigh) {
 		n := s.sendErrors.Add(1)
 		if n&(n-1) == 0 {
-			log.Printf("%s", i18n.Format(i18n.T().ServerSendFail, n, err))
+			log.Printf("%s", i18n.Format(i18n.T().ServerSendFail, n, "queue full"))
 		}
 	}
 }
