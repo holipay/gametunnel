@@ -126,7 +126,7 @@ The status page auto-refreshes every 5 seconds. API response example:
 
 ```json
 {
-  "version": "1.0.0",
+  "version": "1.3",
   "uptime": "2h30m",
   "players": 3,
   "max_players": 10,

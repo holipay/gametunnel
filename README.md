@@ -126,7 +126,7 @@ curl -H "Authorization: Bearer mysecret" http://1.2.3.4:4701/api/status
 
 ```json
 {
-  "version": "1.0.0",
+  "version": "1.3",
   "uptime": "2h30m",
   "players": 3,
   "max_players": 10,
