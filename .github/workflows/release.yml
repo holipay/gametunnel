@@ -16,7 +16,7 @@ jobs:
       - uses: actions/checkout@v5
       - uses: actions/setup-go@v5
         with:
-          go-version: "1.25"
+          go-version: "1.26"
       - run: go test -race ./internal/...
 
   # ── Server (Linux / OpenWrt) ──────────────────────────────────
@@ -30,7 +30,7 @@ jobs:
           fetch-depth: 0
       - uses: actions/setup-go@v5
         with:
-          go-version: "1.25"
+          go-version: "1.26"
 
       - name: Set version
         run: |
@@ -68,7 +68,7 @@ jobs:
           fetch-depth: 0
       - uses: actions/setup-go@v5
         with:
-          go-version: "1.25"
+          go-version: "1.26"
 
       - name: Set version
         run: |
@@ -86,10 +86,13 @@ jobs:
 
       - name: Download wintun.dll
         run: |
+          set -e
           curl -sL -o wintun.zip "https://www.wintun.net/builds/wintun-0.14.1.zip"
           unzip -q wintun.zip "wintun/bin/amd64/wintun.dll"
           mv wintun/bin/amd64/wintun.dll wintun.dll
           rm -rf wintun wintun.zip
+          test -s wintun.dll || { echo "ERROR: wintun.dll is empty or missing"; exit 1; }
+          echo "wintun.dll downloaded: $(wc -c < wintun.dll) bytes"
 
       - name: Package client
         run: |

@@ -7,6 +7,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"strings"
 	"syscall"
 	"unsafe"
@@ -44,6 +45,8 @@ type processEntry32 struct {
 }
 
 func main() {
+	defer writeCrashLog()
+
 	windows.SetConsoleOutputCP(65001)
 
 	// Hide the console window (we only use the tray icon)
@@ -186,4 +189,26 @@ func parseHostIP(addr string) net.IP {
 		return net.ParseIP(addr)
 	}
 	return net.ParseIP(host)
+}
+
+// writeCrashLog writes a panic log to %APPDATA%/GameTunnel/crash.log
+// if the process panics. This is a no-op for normal exits.
+func writeCrashLog() {
+	r := recover()
+	if r == nil {
+		return
+	}
+
+	logDir := filepath.Join(appDataPath(), "GameTunnel")
+	os.MkdirAll(logDir, 0755)
+	f, err := os.OpenFile(filepath.Join(logDir, "crash.log"),
+		os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+
+	fmt.Fprintf(f, "=== Crash %s ===\n", "GameTunnel Client")
+	fmt.Fprintf(f, "Panic: %v\n\n", r)
+	fmt.Fprintf(f, "Stack:\n%s\n", debug.Stack())
 }

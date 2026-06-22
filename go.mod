@@ -1,6 +1,6 @@
 module github.com/holipay/gametunnel
 
-go 1.25.0
+go 1.26.0
 
 require (
 	github.com/getlantern/systray v1.2.2
