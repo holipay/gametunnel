@@ -2,11 +2,31 @@ package server
 
 import (
 	"net"
+	"strconv"
 	"sync"
 	"time"
 
 	"github.com/holipay/gametunnel/internal/protocol"
 )
+
+// appendAddr appends "ip:port" to buf without allocating an intermediate string.
+func appendAddr(buf []byte, addr *net.UDPAddr) []byte {
+	ip4 := addr.IP.To4()
+	if ip4 == nil {
+		// IPv6 fallback
+		return append(buf, addr.String()...)
+	}
+	buf = strconv.AppendInt(buf, int64(ip4[0]), 10)
+	buf = append(buf, '.')
+	buf = strconv.AppendInt(buf, int64(ip4[1]), 10)
+	buf = append(buf, '.')
+	buf = strconv.AppendInt(buf, int64(ip4[2]), 10)
+	buf = append(buf, '.')
+	buf = strconv.AppendInt(buf, int64(ip4[3]), 10)
+	buf = append(buf, ':')
+	buf = strconv.AppendInt(buf, int64(addr.Port), 10)
+	return buf
+}
 
 // ── Relay ──────────────────────────────────────────────────────
 
@@ -88,10 +108,11 @@ func (r *Room) handleHolePunch(payload []byte, from *net.UDPAddr) {
 		return
 	}
 
-	addrStr := from.String()
-	punchData := make([]byte, 4+len(addrStr))
-	copy(punchData[:4], src.VirtualIP.To4())
-	copy(punchData[4:], []byte(addrStr))
+	// Build punch data: 4 bytes virtual IP + "ip:port" address
+	// Pre-allocate typical size to avoid re-allocation
+	punchData := make([]byte, 0, 4+21) // 4 + typical "1.2.3.4:12345"
+	punchData = append(punchData, src.VirtualIP.To4()...)
+	punchData = appendAddr(punchData, from)
 	r.sendChecked(protocol.TypeHolePunch, punchData, dst.PublicAddr)
 }
 

@@ -373,19 +373,12 @@ func (t *Tunnel) Status() TunnelStatus {
 		return st
 	}
 
-	var totalRTT time.Duration
-	rttCount := 0
 	for _, p := range t.peers {
 		if p.DirectReach.Load() {
 			st.P2PPeers++
 		} else {
 			st.RelayPeers++
 		}
-		// RTT is not directly available per-peer in the current client code,
-		// but we track DirectReach for P2P vs relay status.
-	}
-	if rttCount > 0 {
-		st.AvgRTT = float64(totalRTT.Milliseconds()) / float64(rttCount)
 	}
 
 	return st

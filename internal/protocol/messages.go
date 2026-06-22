@@ -133,6 +133,45 @@ func PutPeerInfoPayload(p *PeerInfoPayload) {
 	peerInfoPayloadPool.Put(p)
 }
 
+// addrStrLen returns the byte length of "ip:port" without allocating a string.
+func addrStrLen(addr *net.UDPAddr) int {
+	if addr.IP.To4() != nil {
+		// IPv4: "1.2.3.4:12345" = 4+3+1+1 = up to 21 bytes
+		n := 4 + 1 + 1 // ip dots + ":" + min port
+		p := addr.Port
+		if p >= 10 { n++ }
+		if p >= 100 { n++ }
+		if p >= 1000 { n++ }
+		if p >= 10000 { n++ }
+		return n
+	}
+	// IPv6: "[::1]:12345" — use addr.String() length as upper bound
+	// We'll write it directly in appendAddrStr
+	return len(addr.String())
+}
+
+// appendAddrStr appends "ip:port" to buf without allocating an intermediate string.
+func appendAddrStr(buf []byte, addr *net.UDPAddr) []byte {
+	if ip4 := addr.IP.To4(); ip4 != nil {
+		buf = strconv.AppendInt(buf, int64(ip4[0]), 10)
+		buf = append(buf, '.')
+		buf = strconv.AppendInt(buf, int64(ip4[1]), 10)
+		buf = append(buf, '.')
+		buf = strconv.AppendInt(buf, int64(ip4[2]), 10)
+		buf = append(buf, '.')
+		buf = strconv.AppendInt(buf, int64(ip4[3]), 10)
+		buf = append(buf, ':')
+		buf = strconv.AppendInt(buf, int64(addr.Port), 10)
+		return buf
+	}
+	// IPv6: write "[ip]:port" directly
+	buf = append(buf, '[')
+	buf = append(buf, addr.IP.String()...)
+	buf = append(buf, ']', ':')
+	buf = strconv.AppendInt(buf, int64(addr.Port), 10)
+	return buf
+}
+
 func (p *PeerInfoPayload) Marshal() []byte {
 	// Pre-calculate total size to avoid multiple allocations
 	total := 2 // peer count (2 bytes)
@@ -140,7 +179,7 @@ func (p *PeerInfoPayload) Marshal() []byte {
 		total += 4 // VirtualIP (4 bytes IPv4)
 		total += 2 // addr length prefix
 		if peer.PublicAddr != nil {
-			total += len(peer.PublicAddr.String())
+			total += addrStrLen(peer.PublicAddr)
 		}
 		total += 2 // username length prefix
 		total += len(peer.Username)
@@ -155,16 +194,20 @@ func (p *PeerInfoPayload) Marshal() []byte {
 		} else {
 			buf = append(buf, 0, 0, 0, 0) // fallback
 		}
-		addrStr := ""
+		addrStart := len(buf)
+		buf = append(buf, 0, 0) // placeholder for addr length
 		if peer.PublicAddr != nil {
-			addrStr = peer.PublicAddr.String()
+			buf = appendAddrStr(buf, peer.PublicAddr)
 		}
-		addrBytes := []byte(addrStr)
-		buf = append(buf, byte(len(addrBytes)), byte(len(addrBytes)>>8))
-		buf = append(buf, addrBytes...)
-		userBytes := []byte(peer.Username)
-		buf = append(buf, byte(len(userBytes)), byte(len(userBytes)>>8))
-		buf = append(buf, userBytes...)
+		addrLen := len(buf) - addrStart - 2
+		buf[addrStart] = byte(addrLen)
+		buf[addrStart+1] = byte(addrLen >> 8)
+		userStart := len(buf)
+		buf = append(buf, 0, 0) // placeholder for username length
+		buf = append(buf, []byte(peer.Username)...)
+		userLen := len(buf) - userStart - 2
+		buf[userStart] = byte(userLen)
+		buf[userStart+1] = byte(userLen >> 8)
 	}
 	return buf
 }

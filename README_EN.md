@@ -417,6 +417,9 @@ A: Yes. Different `-room` values are isolated from each other. With `-rooms` mod
 **Q: What if P2P hole punching fails?**
 A: Automatically falls back to server relay with slightly higher latency. GameTunnel periodically retries hole punching.
 
+**Q: The client doesn't respond when I double-click it / won't run?**
+A: Windows may silently block executables downloaded from the internet (Mark of the Web / Zone Identifier). Right-click `gtunnel-client.exe` → **Properties** → check **"Unblock"** at the bottom → OK, then double-click again.
+
 **Q: How do I check server status?**
 A: Use `-status-addr :4701` to enable the status page, then access via browser or curl. See the "Status Page" section above.
 
