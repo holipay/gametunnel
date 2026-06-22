@@ -39,7 +39,7 @@ func (r *Room) handleRegister(payload []byte, from *net.UDPAddr) {
 	}
 
 	clientIP := addrToConnIPKey(from)
-	if !r.checkRegRate(from.IP.String()) {
+	if !r.checkRegRate(from) {
 		r.sendKick(from, t.KickRateLimit)
 		return
 	}

@@ -77,9 +77,7 @@ func Encode(typ byte, payload []byte) []byte {
 // AppendChecksum appends a CRC32 checksum to a packet.
 func AppendChecksum(packet []byte) []byte {
 	crc := crc32.ChecksumIEEE(packet)
-	b := make([]byte, 4)
-	binary.LittleEndian.PutUint32(b, crc)
-	return append(packet, b...)
+	return binary.LittleEndian.AppendUint32(packet, crc)
 }
 
 // VerifyChecksum validates the CRC32 at the end of a packet.
@@ -123,8 +121,13 @@ func DecodeChecked(data []byte) (*Message, error) {
 }
 
 // EncodeChecked is a convenience: Encode + AppendChecksum.
+// Combines into a single allocation to reduce GC pressure on the hot path.
 func EncodeChecked(typ byte, payload []byte) []byte {
-	return AppendChecksum(Encode(typ, payload))
+	buf := make([]byte, 0, HeaderLen+len(payload)+ChecksumLen)
+	buf = append(buf, ProtocolVersion, typ)
+	buf = append(buf, payload...)
+	crc := crc32.ChecksumIEEE(buf)
+	return binary.LittleEndian.AppendUint32(buf, crc)
 }
 
 // AppendEncodeChecked encodes a packet into dst (appending), avoiding allocation.

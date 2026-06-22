@@ -23,7 +23,7 @@ func newTestRoom(subnetStr string, serverIP net.IP) *Room {
 		ipBitmap:    make([]uint64, 4),
 		maxPlayers:  10,
 		ipConnCount: make(map[connIPKey]int),
-		regBuf:      [2]map[string]int{make(map[string]int), make(map[string]int)},
+		regBuf:      [2]map[connIPKey]int{make(map[connIPKey]int), make(map[connIPKey]int)},
 		done:        make(chan struct{}),
 	}
 	r.markIPUsed(net.IPv4(serverIP[0], serverIP[1], serverIP[2], 0))   // network address
@@ -597,17 +597,17 @@ func TestCheckRegRate(t *testing.T) {
 	r := newTestRoom("10.10.0.0/24", net.IPv4(10, 10, 0, 1))
 	r.maxRegPerIP = 3
 
-	ip := "1.2.3.4"
+	addr := &net.UDPAddr{IP: net.IPv4(1, 2, 3, 4), Port: 12345}
 
 	// Should allow up to maxRegPerIP
 	for i := 0; i < 3; i++ {
-		if !r.checkRegRate(ip) {
+		if !r.checkRegRate(addr) {
 			t.Errorf("request %d should be allowed", i)
 		}
 	}
 
 	// Next should be rejected
-	if r.checkRegRate(ip) {
+	if r.checkRegRate(addr) {
 		t.Error("request should be rejected after limit")
 	}
 }

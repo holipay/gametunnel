@@ -4,6 +4,7 @@ import (
 	"context"
 	"log"
 	"net"
+	"sync"
 	"time"
 )
 
@@ -41,6 +42,11 @@ func newSendQueue(conn *net.UDPConn, maxSize int) *sendQueue {
 	}
 }
 
+// sendTimerPool reuses timers for high-priority sends to avoid per-call allocation.
+var sendTimerPool = sync.Pool{
+	New: func() interface{} { return time.NewTimer(50 * time.Millisecond) },
+}
+
 // send enqueues a packet. Returns false if dropped due to queue full.
 // For high-priority packets, blocks up to 50ms waiting for space.
 func (sq *sendQueue) send(data []byte, addr *net.UDPAddr, priority sendPriority) bool {
@@ -48,12 +54,20 @@ func (sq *sendQueue) send(data []byte, addr *net.UDPAddr, priority sendPriority)
 
 	if priority == priorityHigh {
 		// High priority: wait briefly for space
-		timer := time.NewTimer(50 * time.Millisecond)
-		defer timer.Stop()
+		timer := sendTimerPool.Get().(*time.Timer)
+		timer.Reset(50 * time.Millisecond)
 		select {
 		case sq.ch <- e:
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
+			sendTimerPool.Put(timer)
 			return true
 		case <-timer.C:
+			sendTimerPool.Put(timer)
 			return false
 		}
 	}
@@ -98,40 +112,6 @@ func (sq *sendQueue) drain() {
 // pending returns the number of queued packets.
 func (sq *sendQueue) pending() int {
 	return len(sq.ch)
-}
-
-// serverSendQueue wraps sendQueue for the Server struct.
-type serverSendQueue struct {
-	sq *sendQueue
-}
-
-func newServerSendQueue(conn *net.UDPConn) *serverSendQueue {
-	return &serverSendQueue{sq: newSendQueue(conn, 4096)}
-}
-
-func (ssq *serverSendQueue) sendHigh(data []byte, addr *net.UDPAddr) bool {
-	return ssq.sq.send(data, addr, priorityHigh)
-}
-
-func (ssq *serverSendQueue) sendLow(data []byte, addr *net.UDPAddr) bool {
-	return ssq.sq.send(data, addr, priorityLow)
-}
-
-// roomSendQueue wraps sendQueue for Room-level sends.
-type roomSendQueue struct {
-	sq *sendQueue
-}
-
-func newRoomSendQueue(conn *net.UDPConn) *roomSendQueue {
-	return &roomSendQueue{sq: newSendQueue(conn, 4096)}
-}
-
-func (rsq *roomSendQueue) sendHigh(data []byte, addr *net.UDPAddr) bool {
-	return rsq.sq.send(data, addr, priorityHigh)
-}
-
-func (rsq *roomSendQueue) sendLow(data []byte, addr *net.UDPAddr) bool {
-	return rsq.sq.send(data, addr, priorityLow)
 }
 
 // ── Rate Limiter Integration ────────────────────────────────

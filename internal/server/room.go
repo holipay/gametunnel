@@ -56,7 +56,7 @@ type Room struct {
 
 	// Registration rate limiting (per-room)
 	regMu       sync.Mutex
-	regBuf      [2]map[string]int
+	regBuf      [2]map[connIPKey]int
 	regTick     *time.Ticker
 	done        chan struct{}
 	maxRegPerIP int
@@ -134,7 +134,7 @@ func NewRoom(cfg RoomConfig) (*Room, error) {
 		addrMap:     make(map[rateKey]*Client),
 		ipBitmap:    make([]uint64, 4),
 		maxPending:  cfg.MaxPlayers * 3,
-		regBuf:      [2]map[string]int{make(map[string]int), make(map[string]int)},
+		regBuf:      [2]map[connIPKey]int{make(map[connIPKey]int), make(map[connIPKey]int)},
 		maxRegPerIP: 5,
 		ipConnCount: make(map[connIPKey]int),
 		maxPerIP:    maxPerIP,
@@ -187,10 +187,11 @@ func (r *Room) nextAvailableIP() net.IP {
 
 // ── Registration Rate Limiting ─────────────────────────────────
 
-func (r *Room) checkRegRate(ip string) bool {
+func (r *Room) checkRegRate(addr *net.UDPAddr) bool {
+	key := addrToConnIPKey(addr)
 	r.regMu.Lock()
-	r.regBuf[0][ip]++
-	ok := r.regBuf[0][ip] <= r.maxRegPerIP
+	r.regBuf[0][key]++
+	ok := r.regBuf[0][key] <= r.maxRegPerIP
 	r.regMu.Unlock()
 	return ok
 }
