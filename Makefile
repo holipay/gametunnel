@@ -25,34 +25,34 @@ all: server client server-openwrt
 
 server:
 	@mkdir -p $(BINARY_DIR)
-	CGO_ENABLED=0 go build $(LDFLAGS) -o $(SERVER) ./cmd/server
+	CGO_ENABLED=0 go build -mod=vendor $(LDFLAGS) -o $(SERVER) ./cmd/server
 
 server-linux-amd64:
 	@mkdir -p $(BINARY_DIR)
-	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build $(LDFLAGS) -o $(BINARY_DIR)/gtunnel-server-linux-amd64 ./cmd/server
+	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -mod=vendor $(LDFLAGS) -o $(BINARY_DIR)/gtunnel-server-linux-amd64 ./cmd/server
 
 server-linux-armv7:
 	@mkdir -p $(BINARY_DIR)
-	CGO_ENABLED=0 GOOS=linux GOARCH=arm GOARM=7 go build $(LDFLAGS) -o $(BINARY_DIR)/gtunnel-server-linux-armv7 ./cmd/server
+	CGO_ENABLED=0 GOOS=linux GOARCH=arm GOARM=7 go build -mod=vendor $(LDFLAGS) -o $(BINARY_DIR)/gtunnel-server-linux-armv7 ./cmd/server
 
 server-windows-amd64:
 	@mkdir -p $(BINARY_DIR)
-	CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build $(LDFLAGS) -o $(BINARY_DIR)/gtunnel-server-windows-amd64.exe ./cmd/server
+	CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -mod=vendor $(LDFLAGS) -o $(BINARY_DIR)/gtunnel-server-windows-amd64.exe ./cmd/server
 
 server-windows-x86:
 	@mkdir -p $(BINARY_DIR)
-	CGO_ENABLED=0 GOOS=windows GOARCH=386 go build $(LDFLAGS) -o $(BINARY_DIR)/gtunnel-server-windows-x86.exe ./cmd/server
+	CGO_ENABLED=0 GOOS=windows GOARCH=386 go build -mod=vendor $(LDFLAGS) -o $(BINARY_DIR)/gtunnel-server-windows-x86.exe ./cmd/server
 
 # ── Server (OpenWrt) ──────────────────────────────────────────
 # 中高端 OpenWrt 设备：NanoPi R2S/R4S/R5S, 树莓派 4/5, GL.iNet 等
 
 server-openwrt-arm64:
 	@mkdir -p $(BINARY_DIR)
-	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build $(LDFLAGS) -o $(BINARY_DIR)/gtunnel-server-openwrt-arm64 ./cmd/server
+	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -mod=vendor $(LDFLAGS) -o $(BINARY_DIR)/gtunnel-server-openwrt-arm64 ./cmd/server
 
 server-openwrt-armv7:
 	@mkdir -p $(BINARY_DIR)
-	CGO_ENABLED=0 GOOS=linux GOARCH=arm GOARM=7 go build $(LDFLAGS) -o $(BINARY_DIR)/gtunnel-server-openwrt-armv7 ./cmd/server
+	CGO_ENABLED=0 GOOS=linux GOARCH=arm GOARM=7 go build -mod=vendor $(LDFLAGS) -o $(BINARY_DIR)/gtunnel-server-openwrt-armv7 ./cmd/server
 
 # 所有 OpenWrt 架构
 server-openwrt: server-openwrt-arm64 server-openwrt-armv7
@@ -64,11 +64,11 @@ install-server: server
 
 client:
 	@mkdir -p $(BINARY_DIR)
-	GOOS=windows GOARCH=amd64 go build $(CLIENT_LDFLAGS) -o $(BINARY_DIR)/gtunnel-client.exe ./cmd/client
+	CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -mod=vendor $(CLIENT_LDFLAGS) -o $(BINARY_DIR)/gtunnel-client.exe ./cmd/client
 
 client-windows-x86:
 	@mkdir -p $(BINARY_DIR)
-	GOOS=windows GOARCH=386 go build $(CLIENT_LDFLAGS) -o $(BINARY_DIR)/gtunnel-client-windows-x86.exe ./cmd/client
+	CGO_ENABLED=0 GOOS=windows GOARCH=386 go build -mod=vendor $(CLIENT_LDFLAGS) -o $(BINARY_DIR)/gtunnel-client-windows-x86.exe ./cmd/client
 
 # 所有平台客户端
 client-all: client client-windows-x86
