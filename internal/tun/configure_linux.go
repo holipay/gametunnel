@@ -1,0 +1,68 @@
+//go:build !windows
+
+package tun
+
+import (
+	"fmt"
+	"log"
+	"net"
+)
+
+func (d *Device) configure() error {
+	d.CleanupRoutes()
+
+	ip := d.virtualIP.String()
+	maskBits, _ := d.subnetMask.Size()
+	subnet := d.virtualIP.Mask(d.subnetMask)
+
+	// Assign IP
+	if err := runCmd("ip", "addr", "replace", fmt.Sprintf("%s/%d", ip, maskBits), "dev", d.name); err != nil {
+		return fmt.Errorf("assign IP: %w", err)
+	}
+
+	// Bring up
+	if err := runCmd("ip", "link", "set", d.name, "up"); err != nil {
+		return fmt.Errorf("link up: %w", err)
+	}
+
+	// Subnet route
+	if err := runCmd("ip", "route", "replace", fmt.Sprintf("%s/%d", subnet, maskBits), "dev", d.name, "metric", "1"); err != nil {
+		log.Printf("[tun] subnet route warning: %v", err)
+	}
+
+	// Broadcast route
+	broadcast := make(net.IP, 4)
+	for i := range broadcast {
+		broadcast[i] = subnet[i] | ^d.subnetMask[i]
+	}
+	if err := runCmd("ip", "route", "replace", broadcast.String(), "dev", d.name, "metric", "1"); err != nil {
+		log.Printf("[tun] broadcast route warning: %v", err)
+	}
+
+	// mDNS multicast
+	if err := runCmd("ip", "route", "replace", "224.0.0.251", "dev", d.name, "metric", "1"); err != nil {
+		log.Printf("[tun] mDNS route warning: %v", err)
+	}
+
+	log.Printf("[tun] configured: IP=%s/%d", ip, maskBits)
+	return nil
+}
+
+func (d *Device) ReconfigureRoutes() {
+	d.CleanupRoutes()
+	d.configure()
+}
+
+func (d *Device) CleanupRoutes() {
+	maskBits, _ := d.subnetMask.Size()
+	subnet := d.virtualIP.Mask(d.subnetMask)
+
+	runCmd("ip", "route", "del", fmt.Sprintf("%s/%d", subnet, maskBits), "dev", d.name)
+
+	broadcast := make(net.IP, 4)
+	for i := range broadcast {
+		broadcast[i] = subnet[i] | ^d.subnetMask[i]
+	}
+	runCmd("ip", "route", "del", broadcast.String(), "dev", d.name)
+	runCmd("ip", "route", "del", "224.0.0.251", "dev", d.name)
+}
