@@ -63,14 +63,16 @@ func buildEncryptedDataPacket(srcIP, dstIP net.IP, pkt []byte, cipher *crypto.Ci
 // pkt is a slice of the TUN read buffer; it must not be retained beyond
 // this call — Marshal copies the data for the UDP send.
 func (t *Tunnel) routePacket(pkt []byte, srcIP, dstIP net.IP) {
+	// Compute dstKey once — ipKey calls To16() which allocates for IPv4.
+	dstKey := ipKey(dstIP)
+
 	// Single read lock snapshot for all fields needed in this call.
-	// Avoids two separate RLock/RUnlock cycles on the hot path.
 	t.mu.RLock()
 	serverIPKey := t.serverIPKey
 	cachedSubnet := t.cachedSubnet
 	encCipher := t.encCipher
 	p2pCipher := t.p2pCipher
-	peer, ok := t.peers[ipKey(dstIP)]
+	peer, ok := t.peers[dstKey]
 	var peerAddr *net.UDPAddr
 	var peerDirect bool
 	if ok {
@@ -80,7 +82,7 @@ func (t *Tunnel) routePacket(pkt []byte, srcIP, dstIP net.IP) {
 	t.mu.RUnlock()
 
 	// Fast path: check server destination first (most common for relay)
-	if ipKey(dstIP) == serverIPKey {
+	if dstKey == serverIPKey {
 		t.sendToServer(pkt, srcIP, dstIP, encCipher)
 		return
 	}

@@ -199,7 +199,17 @@ func (t *Tunnel) handlePeerInfo(ctx context.Context, payload []byte) {
 
 	t.mu.Lock()
 
-	newPeers := make(map[[16]byte]*Peer, len(info.Peers))
+	// Reuse existing map if possible to avoid per-PeerInfo allocation.
+	// Clear it instead of creating a new one — the old map's bucket memory
+	// is reused, saving ~1 allocation per PeerInfo message (every 50ms).
+	newPeers := t.peers
+	if newPeers == nil {
+		newPeers = make(map[[16]byte]*Peer, len(info.Peers))
+	} else {
+		for k := range newPeers {
+			delete(newPeers, k)
+		}
+	}
 	for _, entry := range info.Peers {
 		// Skip self — server sends full list including this client
 		if entry.VirtualIP.Equal(t.virtualIP) {
