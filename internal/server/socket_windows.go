@@ -8,11 +8,11 @@ import (
 )
 
 const (
-	// rcvBufSize is the UDP receive buffer size (4MB).
-	rcvBufSize = 4 * 1024 * 1024
+	// rcvBufSize is the UDP receive buffer size (8MB).
+	rcvBufSize = 8 * 1024 * 1024
 
-	// sndBufSize is the UDP send buffer size (2MB).
-	sndBufSize = 2 * 1024 * 1024
+	// sndBufSize is the UDP send buffer size (4MB).
+	sndBufSize = 4 * 1024 * 1024
 )
 
 func setSocketBuffers(conn *net.UDPConn) error {
