@@ -489,7 +489,7 @@ func TestAddrToConnIPKey(t *testing.T) {
 	addr := &net.UDPAddr{IP: net.IPv4(192, 168, 1, 100), Port: 12345}
 	k := addrToConnIPKey(addr)
 
-	expected := connIPKey{192, 168, 1, 100}
+	expected := connIPKey{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff, 192, 168, 1, 100}
 	if k != expected {
 		t.Errorf("got %v, want %v", k, expected)
 	}
@@ -499,8 +499,8 @@ func TestAddrToConnIPKey_IPv6(t *testing.T) {
 	addr := &net.UDPAddr{IP: net.ParseIP("2408::1"), Port: 12345}
 	k := addrToConnIPKey(addr)
 
-	// IPv6 should return zero key
-	expected := connIPKey{}
+	// IPv6 should return the full 16-byte key
+	expected := connIPKey{0x24, 0x08, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1}
 	if k != expected {
 		t.Errorf("got %v, want %v for IPv6", k, expected)
 	}
