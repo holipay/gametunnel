@@ -223,10 +223,14 @@ func (t *Tunnel) cleanStalePeers() {
 		return
 	}
 
-	// Delete under write lock — fast since we already have the keys.
+	// Delete under write lock. Re-check that the peer pointer still matches
+	// to avoid deleting a freshly-added peer with the same key (handlePeerInfo
+	// may have replaced the map between our read and write locks).
 	t.mu.Lock()
-	for _, key := range staleKeys {
-		delete(t.peers, key)
+	for i, key := range staleKeys {
+		if cur, ok := t.peers[key]; ok && cur == stalePeers[i] {
+			delete(t.peers, key)
+		}
 	}
 	t.mu.Unlock()
 

@@ -180,9 +180,9 @@ func (bl *BandwidthLimiter) Cleanup(stale time.Duration) {
 	bl.buckets.Range(func(key, value interface{}) bool {
 		b := value.(*clientBucket)
 		b.mu.Lock()
-		stale := b.lastTime.Before(cutoff)
+		isStale := b.lastTime.Before(cutoff)
 		b.mu.Unlock()
-		if stale {
+		if isStale {
 			bl.buckets.Delete(key)
 		}
 		return true

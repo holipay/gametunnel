@@ -398,14 +398,26 @@ func (t *Tunnel) sendLoop(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
-			// Drain remaining sends with a short timeout to ensure
-			// disconnect packets and final control messages are sent.
+			// Drain control packets first (disconnect, keepalive),
+			// then data packets. Use a short timeout to avoid blocking.
 			drainTimer := time.NewTimer(200 * time.Millisecond)
 			for {
 				select {
 				case job := <-t.ctrlCh:
 					t.writeUDP(job.data, job.addr)
+				case <-drainTimer.C:
+					drainTimer.Stop()
+					return
+				default:
+					goto drainDataOnly
+				}
+			}
+		drainDataOnly:
+			for {
+				select {
 				case job := <-t.sendCh:
+					t.writeUDP(job.data, job.addr)
+				case job := <-t.ctrlCh:
 					t.writeUDP(job.data, job.addr)
 				case <-drainTimer.C:
 					drainTimer.Stop()
