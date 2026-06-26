@@ -51,16 +51,16 @@ func (tr *Tray) setup() {
 	mQuit := systray.AddMenuItem(s.TrayQuit, s.TrayQuitDesc)
 
 	// Wire up connection failure callback: show error dialog after fast retries
-	tr.app.mu.Lock()
-	tr.app.onConnFailed = func(errMsg string) bool {
-		tr.app.dialogMu.Lock()
-		defer tr.app.dialogMu.Unlock()
+	tr.app.Mu.Lock()
+	tr.app.OnConnFailed = func(errMsg string) bool {
+		tr.app.DialogMu.Lock()
+		defer tr.app.DialogMu.Unlock()
 		return showConnErrorDialog(errMsg)
 	}
-	tr.app.mu.Unlock()
+	tr.app.Mu.Unlock()
 
 	// First run: auto-open settings dialog to guide user
-	isFirstRun := tr.app.cfg.ServerAddr == ""
+	isFirstRun := tr.app.Cfg.ServerAddr == ""
 	if isFirstRun {
 		go func() {
 			time.Sleep(500 * time.Millisecond)
@@ -69,9 +69,9 @@ func (tr *Tray) setup() {
 			statusText := s.TrayNoServer
 			if showSettingsDialog(statusText) {
 				cfg := client.LoadConfig()
-				tr.app.mu.Lock()
-				tr.app.cfg = cfg
-				tr.app.mu.Unlock()
+				tr.app.Mu.Lock()
+				tr.app.Cfg = cfg
+				tr.app.Mu.Unlock()
 				if cfg.Lang != "" {
 					i18n.Set(i18n.ParseLang(cfg.Lang))
 				}
@@ -85,20 +85,20 @@ func (tr *Tray) setup() {
 	go func() {
 		for {
 			select {
-			case <-mSettings.ClickedCh:
-				go func() {
-					tr.app.dialogMu.Lock()
-					defer tr.app.dialogMu.Unlock()
-					status := tr.app.GetStatus()
-					statusText := i18n.T().DlgStatusIdle
-					if status.Connected {
-						statusText = fmt.Sprintf(i18n.T().DlgStatusConn, status.VirtualIP, status.PeerCount)
-					}
-				if showSettingsDialog(statusText) {
-						cfg := client.LoadConfig()
-						tr.app.mu.Lock()
-						tr.app.cfg = cfg
-						tr.app.mu.Unlock()
+		case <-mSettings.ClickedCh:
+			go func() {
+				tr.app.DialogMu.Lock()
+				defer tr.app.DialogMu.Unlock()
+				status := tr.app.GetStatus()
+				statusText := i18n.T().DlgStatusIdle
+				if status.Connected {
+					statusText = fmt.Sprintf(i18n.T().DlgStatusConn, status.VirtualIP, status.PeerCount)
+				}
+			if showSettingsDialog(statusText) {
+					cfg := client.LoadConfig()
+					tr.app.Mu.Lock()
+					tr.app.Cfg = cfg
+					tr.app.Mu.Unlock()
 						if cfg.Lang != "" {
 							i18n.Set(i18n.ParseLang(cfg.Lang))
 						}
@@ -132,19 +132,19 @@ func (tr *Tray) setup() {
 
 func (tr *Tray) doConnect() {
 	// Snapshot cfg under lock to avoid data race with settings dialog
-	tr.app.mu.RLock()
-	cfg := tr.app.cfg
-	tr.app.mu.RUnlock()
+	tr.app.Mu.RLock()
+	cfg := tr.app.Cfg
+	tr.app.Mu.RUnlock()
 
 	if cfg.ServerAddr == "" {
-		tr.app.dialogMu.Lock()
-		defer tr.app.dialogMu.Unlock()
+		tr.app.DialogMu.Lock()
+		defer tr.app.DialogMu.Unlock()
 		statusText := i18n.T().TrayNoServer
 		if showSettingsDialog(statusText) {
 			cfg := client.LoadConfig()
-			tr.app.mu.Lock()
-			tr.app.cfg = cfg
-			tr.app.mu.Unlock()
+			tr.app.Mu.Lock()
+			tr.app.Cfg = cfg
+			tr.app.Mu.Unlock()
 			if cfg.Lang != "" {
 				i18n.Set(i18n.ParseLang(cfg.Lang))
 			}
@@ -234,9 +234,9 @@ func (tr *Tray) statusLoop() {
 		}
 
 		// Snapshot ctx under lock to avoid race with App.Disconnect()
-		tr.app.mu.RLock()
-		ctx := tr.app.ctx
-		tr.app.mu.RUnlock()
+		tr.app.Mu.RLock()
+		ctx := tr.app.Ctx
+		tr.app.Mu.RUnlock()
 
 		select {
 		case <-ctx.Done():
