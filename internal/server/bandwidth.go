@@ -87,6 +87,7 @@ func (b *clientBucket) waitTake(ctx context.Context, n int) bool {
 			timer.Stop()
 			return false
 		case <-timer.C:
+			timer.Stop()
 		}
 	}
 }

@@ -320,6 +320,7 @@ func (s *Server) Run(ctx context.Context) {
 			case <-ctx.Done():
 				return
 			default:
+				log.Printf("[server] read error: %v", err)
 				return // connection error (e.g. closed) — exit loop to avoid busy-spin
 			}
 		}

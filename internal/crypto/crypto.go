@@ -51,7 +51,7 @@ var (
 // Cipher performs ChaCha20-Poly1305 encryption/decryption.
 type Cipher struct {
 	aead     cipher.AEAD
-	counter  atomic.Uint64
+	counter  atomic.Uint64 // 64-bit counter; nonce uses all 8 bytes. Collision risk: 2^64 packets ≈ impossible.
 	dirTag   []byte
 }
 
