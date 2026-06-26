@@ -1229,8 +1229,8 @@ func TestBandwidthLimiter_WaitTimeout(t *testing.T) {
 	addr := &net.UDPAddr{IP: net.IPv4(1, 2, 3, 4), Port: 100}
 
 	ctx := context.Background()
-	// Exhaust tokens (burst is 128KB, so take that much)
-	bl.Allow(addr, 128*1024)
+	// Exhaust tokens (burst is 512KB, so take that much)
+	bl.Allow(addr, 512*1024)
 
 	// Wait should timeout (can't get 1000 bytes in 50ms at 10 bytes/sec)
 	if bl.Wait(ctx, addr, 1000) {
@@ -1244,7 +1244,7 @@ func TestBandwidthLimiter_WaitContextCancel(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	// Exhaust tokens
-	bl.Allow(addr, 128*1024)
+	bl.Allow(addr, 512*1024)
 
 	// Cancel immediately
 	cancel()

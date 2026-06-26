@@ -24,9 +24,14 @@ type sendEntry struct {
 	priority sendPriority
 }
 
+// batchBufSize is the maximum number of packets drained per batch.
+// Reduces syscall overhead by coalescing multiple channel reads.
+const batchBufSize = 64
+
 // sendQueue is a bounded, priority-aware send queue backed by a single UDP socket.
 // High-priority packets are always sent before low-priority ones.
 // When the queue is full, low-priority packets are dropped first.
+// Uses batch draining to reduce syscall overhead under high packet rates.
 type sendQueue struct {
 	conn    *net.UDPConn
 	ch      chan sendEntry
@@ -82,18 +87,67 @@ func (sq *sendQueue) send(data []byte, addr *net.UDPAddr, priority sendPriority)
 }
 
 // run drains the queue and sends packets. Blocks until ctx is cancelled.
+// Uses batch draining: drains up to batchBufSize high-priority packets first,
+// then up to batchBufSize low-priority packets, reducing channel select overhead.
 func (sq *sendQueue) run(ctx context.Context) {
+	var batch [batchBufSize]sendEntry
+
 	for {
 		select {
 		case <-ctx.Done():
-			// Drain remaining packets
 			sq.drain()
 			return
 		case e := <-sq.ch:
-			if _, err := sq.conn.WriteToUDP(e.data, e.addr); err != nil {
-				log.Printf("[server] send error: %v", err)
+			if e.priority == priorityHigh {
+				// Send this high-priority packet immediately
+				sq.writeUDP(e.data, e.addr)
+				// Drain any additional high-priority packets queued
+				n := 0
+			DrainHigh:
+				for n < batchBufSize {
+					select {
+					case batch[n] = <-sq.ch:
+						if batch[n].priority != priorityHigh {
+							sq.writeUDP(batch[n].data, batch[n].addr)
+							continue DrainHigh
+						}
+						n++
+					default:
+						break DrainHigh
+					}
+				}
+				for i := 0; i < n; i++ {
+					sq.writeUDP(batch[i].data, batch[i].addr)
+				}
+			} else {
+				// Low priority: batch drain to reduce per-packet overhead
+				batch[0] = e
+				n := 1
+			DrainLow:
+				for n < batchBufSize {
+					select {
+					case batch[n] = <-sq.ch:
+						if batch[n].priority != priorityLow {
+							sq.writeUDP(batch[n].data, batch[n].addr)
+							continue DrainLow
+						}
+						n++
+					default:
+						break DrainLow
+					}
+				}
+				for i := 0; i < n; i++ {
+					sq.writeUDP(batch[i].data, batch[i].addr)
+				}
 			}
 		}
+	}
+}
+
+// writeUDP sends a single UDP packet.
+func (sq *sendQueue) writeUDP(data []byte, addr *net.UDPAddr) {
+	if _, err := sq.conn.WriteToUDP(data, addr); err != nil {
+		log.Printf("[server] send error: %v", err)
 	}
 }
 
@@ -102,7 +156,7 @@ func (sq *sendQueue) drain() {
 	for {
 		select {
 		case e := <-sq.ch:
-			sq.conn.WriteToUDP(e.data, e.addr) //nolint:errcheck
+			sq.writeUDP(e.data, e.addr)
 		default:
 			return
 		}
@@ -119,13 +173,13 @@ func (sq *sendQueue) pending() int {
 // rateLimitedQueue wraps a sendQueue with a bandwidth limiter check.
 // Packets are dropped if the bandwidth limiter rejects them.
 type rateLimitedQueue struct {
-	sq        *sendQueue
-	limiter   *BandwidthLimiter
+	sq      *sendQueue
+	limiter *BandwidthLimiter
 }
 
 func newRateLimitedQueue(conn *net.UDPConn, limiter *BandwidthLimiter) *rateLimitedQueue {
 	return &rateLimitedQueue{
-		sq:      newSendQueue(conn, 4096),
+		sq:      newSendQueue(conn, 8192),
 		limiter: limiter,
 	}
 }

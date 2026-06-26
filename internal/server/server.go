@@ -209,19 +209,19 @@ func New(cfg Config) (*Server, error) {
 		return nil, fmt.Errorf("%s", i18n.Format(i18n.T().ServerSubnetMust, ones))
 	}
 
-	// Worker pool: 1 worker per 4 players, clamped to [8, 32]
-	workers := cfg.MaxPlayers / 4
-	if workers < 8 {
-		workers = 8
+	// Worker pool: 1 worker per 2 players, clamped to [16, 64]
+	workers := cfg.MaxPlayers / 2
+	if workers < 16 {
+		workers = 16
 	}
-	if workers > 32 {
-		workers = 32
+	if workers > 64 {
+		workers = 64
 	}
 
 	// Channel buffer: scale with player count for burst absorption
-	chanBuf := cfg.MaxPlayers * 64
-	if chanBuf < 4096 {
-		chanBuf = 4096
+	chanBuf := cfg.MaxPlayers * 128
+	if chanBuf < 8192 {
+		chanBuf = 8192
 	}
 
 	// Tune UDP socket buffers (ignoring error on non-Linux platforms)
