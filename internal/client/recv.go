@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"log"
 	"net"
+	"strings"
 	"time"
 
 	"github.com/holipay/gametunnel/internal/crypto"
@@ -108,8 +109,15 @@ func (t *Tunnel) handleServerData(ctx context.Context, msg *protocol.Message) {
 		if err == nil {
 			log.Printf("kicked by server: %s", kick.Reason)
 		}
-		// Close connection to trigger receiveFromServer to exit and
-		// Connect() to return, allowing the reconnect loop to retry.
+		// For non-recoverable kicks (wrong password, version mismatch),
+		// cancel context to stop the reconnect loop.
+		reason := ""
+		if err == nil {
+			reason = kick.Reason
+		}
+		if isFatalKick(reason) {
+			t.cancelKicks.Store(true)
+		}
 		if t.conn != nil {
 			t.conn.Close()
 		}
@@ -380,3 +388,16 @@ func (t *Tunnel) receiveFromTUN(ctx context.Context) {
 		}
 	}
 }
+
+// isFatalKick returns true if the kick reason indicates a non-recoverable error
+// that should stop the reconnect loop (e.g. wrong password, version mismatch).
+func isFatalKick(reason string) bool {
+	return strings.Contains(reason, "密码错误") ||
+		strings.Contains(reason, "password") ||
+		strings.Contains(reason, "版本不兼容") ||
+		strings.Contains(versionMismatchTag, reason) ||
+		strings.Contains(reason, "incompatible")
+}
+
+// versionMismatchTag is used to avoid importing i18n in the comparison.
+const versionMismatchTag = "版本不兼容"
