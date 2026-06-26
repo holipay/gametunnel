@@ -158,6 +158,26 @@ func (r *Room) pingLoop(ctx context.Context) {
 	}
 }
 
+// ── Pong Handling ──────────────────────────────────────────────
+
+func (r *Room) handlePong(payload []byte, from *net.UDPAddr) {
+	ping, err := protocol.UnmarshalPing(payload)
+	if err != nil {
+		return
+	}
+	rtt := time.Since(time.Unix(0, ping.Timestamp))
+	if rtt < 0 || rtt > 10*time.Second {
+		return
+	}
+	r.mu.Lock()
+	if c := r.addrMap[addrToRateKey(from)]; c != nil {
+		c.RTT = rtt
+		c.pingHistory[c.pingIdx%pingHistorySize] = rtt
+		c.pingIdx++
+	}
+	r.mu.Unlock()
+}
+
 // ── State Persistence ────────────────────────────────────────
 
 // SnapshotState creates a RoomState from the current in-memory state.

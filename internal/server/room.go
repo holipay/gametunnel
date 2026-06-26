@@ -9,7 +9,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/holipay/gametunnel/internal/auth"
 	"github.com/holipay/gametunnel/internal/i18n"
 	"github.com/holipay/gametunnel/internal/protocol"
 )
@@ -234,20 +233,6 @@ func (r *Room) Stop() {
 }
 
 // ── Auth ───────────────────────────────────────────────────────
-
-func (r *Room) getAuthKey(roomID string) ([]byte, error) {
-	if v, ok := r.authKeys.Load(roomID); ok {
-		return v.([]byte), nil
-	}
-	key, err := auth.DeriveKey(r.roomPass, roomID)
-	if err != nil {
-		return nil, err
-	}
-	if key != nil {
-		r.authKeys.Store(roomID, key)
-	}
-	return key, nil
-}
 
 // ── Packet Handling ────────────────────────────────────────────
 
