@@ -766,3 +766,55 @@ func TestAppendEncodeChecked_AppendsToExisting(t *testing.T) {
 		t.Errorf("unexpected length: %d", len(result))
 	}
 }
+
+// ── EncodeCheckedPooled / PutEncodeBuf ────────────────────────────
+
+func TestEncodeCheckedPooled_RoundTrip(t *testing.T) {
+	payloads := [][]byte{
+		nil,
+		[]byte{},
+		[]byte("hello"),
+		bytes.Repeat([]byte("x"), 1000),
+	}
+	for _, payload := range payloads {
+		encoded := EncodeCheckedPooled(TypeData, payload)
+		if encoded == nil {
+			t.Fatal("EncodeCheckedPooled returned nil")
+		}
+		msg, err := DecodeChecked(encoded)
+		if err != nil {
+			t.Fatalf("DecodeChecked failed for payload len=%d: %v", len(payload), err)
+		}
+		if msg.Type != TypeData {
+			t.Errorf("type: got %d, want %d", msg.Type, TypeData)
+		}
+		if !bytes.Equal(msg.Payload, payload) {
+			t.Errorf("payload mismatch for len=%d", len(payload))
+		}
+		PutEncodeBuf(encoded)
+	}
+}
+
+func TestEncodeCheckedPooled_MatchesEncodeChecked(t *testing.T) {
+	payload := []byte("test payload")
+	pooled := EncodeCheckedPooled(TypeKeepAlive, payload)
+	regular := EncodeChecked(TypeKeepAlive, payload)
+
+	if !bytes.Equal(pooled, regular) {
+		t.Errorf("pooled and regular output differ: pooled=%x regular=%x", pooled, regular)
+	}
+	PutEncodeBuf(pooled)
+}
+
+func TestPutEncodeBuf_NilSafe(t *testing.T) {
+	// Should not panic
+	PutEncodeBuf(nil)
+}
+
+func TestPutEncodeBuf_VariousSizes(t *testing.T) {
+	sizes := []int{10, 300, 1500, 5000, 20000}
+	for _, size := range sizes {
+		buf := make([]byte, size)
+		PutEncodeBuf(buf) // should not panic
+	}
+}
