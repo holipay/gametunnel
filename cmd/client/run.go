@@ -1,10 +1,13 @@
 package main
 
 import (
+	"fmt"
 	"io"
 	"log"
 	"os"
+	"os/signal"
 	"path/filepath"
+	"syscall"
 
 	"github.com/holipay/gametunnel/internal/client"
 	"github.com/holipay/gametunnel/internal/i18n"
@@ -17,8 +20,8 @@ var (
 	BuildTime = "unknown"
 )
 
-// run is the cross-platform entry point. It sets up logging, firewall,
-// and starts the system tray.
+// run is the cross-platform entry point. It loads config, connects to the
+// server, and blocks until SIGINT/SIGTERM.
 func run(cfg *client.Config, tunFactory func(client.TunConfig) (client.TunDevice, error)) {
 	logFile := setupLog()
 	defer func() {
@@ -33,29 +36,31 @@ func run(cfg *client.Config, tunFactory func(client.TunConfig) (client.TunDevice
 	}
 	defer cleanup()
 
+	fmt.Printf("GameTunnel Client %s (commit: %s)\n", Version, Commit)
+
+	if cfg.ServerAddr == "" {
+		fmt.Println("No server configured. Edit config.ini and set server=address:port")
+		return
+	}
+
 	app := NewApp(cfg)
 	app.SetTUNFactory(tunFactory)
 
-	// Start embedded web UI for settings
-	webui := client.NewWebUI(app)
-	webui.Start("127.0.0.1:4702")
-	defer webui.Stop()
+	log.Printf("%s", i18n.Format(i18n.T().AppAutoConnect, cfg.ServerAddr))
+	app.Connect(cfg)
 
-	// Auto-connect if server is configured
-	if cfg.ServerAddr != "" {
-		log.Printf("%s", i18n.Format(i18n.T().AppAutoConnect, cfg.ServerAddr))
-		app.Connect(cfg)
-	}
+	// Wait for SIGINT/SIGTERM
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+	sig := <-sigCh
 
-	// Run tray (blocks until quit)
-	RunTray(app)
+	fmt.Printf("\nReceived %v, disconnecting...\n", sig)
+	app.Disconnect()
+	fmt.Println("Disconnected.")
 }
 
 // maxLogSize is the maximum log file size before rotation (1 MB).
 const maxLogSize = 1 * 1024 * 1024
-
-// maxLogBackups is the number of old log files to keep.
-const maxLogBackups = 1
 
 func setupLog() *os.File {
 	logDir := filepath.Join(appDataPath(), "GameTunnel")
@@ -67,7 +72,6 @@ func setupLog() *os.File {
 	logPath := filepath.Join(logDir, "gametunnel.log")
 	logBackup := filepath.Join(logDir, "gametunnel.log.1")
 
-	// Rotate: if log exceeds maxLogSize, rename to backup
 	if info, err := os.Stat(logPath); err == nil && info.Size() > maxLogSize {
 		os.Remove(logBackup)
 		if err := os.Rename(logPath, logBackup); err != nil {
@@ -81,7 +85,6 @@ func setupLog() *os.File {
 		return os.Stderr
 	}
 	log.SetOutput(io.MultiWriter(f, os.Stderr))
-	log.Printf("GameTunnel Client %s (commit: %s, built: %s)", Version, Commit, BuildTime)
 	return f
 }
 

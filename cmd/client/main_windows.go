@@ -20,17 +20,13 @@ import (
 )
 
 var (
-	kernel32                = syscall.NewLazyDLL("kernel32.dll")
-	procGetConsoleWindow    = kernel32.NewProc("GetConsoleWindow")
-	procCloseHandle         = kernel32.NewProc("CloseHandle")
-	procCreateToolhelp32    = kernel32.NewProc("CreateToolhelp32Snapshot")
-	procProcess32First      = kernel32.NewProc("Process32FirstW")
-	procProcess32Next       = kernel32.NewProc("Process32NextW")
-	user32                  = syscall.NewLazyDLL("user32.dll")
-	procShowWindow          = user32.NewProc("ShowWindow")
+	kernel32             = syscall.NewLazyDLL("kernel32.dll")
+	procCloseHandle      = kernel32.NewProc("CloseHandle")
+	procCreateToolhelp32 = kernel32.NewProc("CreateToolhelp32Snapshot")
+	procProcess32First   = kernel32.NewProc("Process32FirstW")
+	procProcess32Next    = kernel32.NewProc("Process32NextW")
 )
 
-// processEntry32 matches the Win32 PROCESSENTRY32W structure.
 type processEntry32 struct {
 	Size            uint32
 	Usage           uint32
@@ -49,14 +45,10 @@ func main() {
 
 	windows.SetConsoleOutputCP(65001)
 
-	// Hide the console window (we only use the tray icon)
-	hideConsole()
-
-	// Request admin rights if not elevated
+	// Request admin rights if not elevated (needed for TUN device)
 	requestAdmin()
 
-	// Prevent multiple instances (must be after requestAdmin, since the
-	// non-elevated copy exits before reaching here)
+	// Prevent multiple instances
 	checkSingleInstance()
 
 	// Load config
@@ -84,29 +76,18 @@ func main() {
 	run(cfg, tunFactory)
 }
 
-// checkSingleInstance enumerates running processes to detect another
-// gtunnel-client instance. This replaces the previous Global\ mutex approach
-// which failed when the elevated (runas) process ran in a different security
-// context than the original mutex holder.
 func checkSingleInstance() {
 	if !isAnotherInstanceRunning() {
 		return
 	}
-	windows.MessageBox(0,
-		windows.StringToUTF16Ptr("GameTunnel 已经在运行中，请检查右下角系统托盘图标。\nGameTunnel is already running. Check the system tray icon."),
-		windows.StringToUTF16Ptr("GameTunnel"),
-		windows.MB_OK|windows.MB_ICONWARNING)
+	fmt.Println("GameTunnel is already running.")
 	os.Exit(0)
 }
 
-// isAnotherInstanceRunning checks if another gtunnel-client process is already
-// running by enumerating processes via CreateToolhelp32Snapshot. It compares
-// each process's executable name case-insensitively against our own.
 func isAnotherInstanceRunning() bool {
-	// Determine our own executable name for comparison.
 	selfExe, err := os.Executable()
 	if err != nil {
-		return false // can't determine; allow startup
+		return false
 	}
 	selfName := strings.ToLower(filepath.Base(selfExe))
 
@@ -115,7 +96,7 @@ func isAnotherInstanceRunning() bool {
 		0,
 	)
 	if snapshot == 0 || snapshot == uintptr(syscall.InvalidHandle) {
-		return false // snapshot failed; allow startup
+		return false
 	}
 	defer procCloseHandle.Call(snapshot)
 
@@ -145,16 +126,6 @@ func isAnotherInstanceRunning() bool {
 	return false
 }
 
-// hideConsole hides the console window.
-func hideConsole() {
-	hwnd, _, _ := procGetConsoleWindow.Call()
-	if hwnd != 0 {
-		procShowWindow.Call(hwnd, 0) // SW_HIDE = 0
-	}
-}
-
-// requestAdmin checks if the process is running with admin rights.
-// If not, re-launches with "runas" verb (UAC prompt).
 func requestAdmin() {
 	token := windows.GetCurrentProcessToken()
 	if token.IsElevated() {
@@ -169,30 +140,22 @@ func requestAdmin() {
 	verb, _ := windows.UTF16PtrFromString("runas")
 	exePath, _ := windows.UTF16PtrFromString(exe)
 
-	if err := windows.ShellExecute(0, verb, exePath, nil, nil, windows.SW_HIDE); err != nil {
-		windows.MessageBox(0,
-			windows.StringToUTF16Ptr(fmt.Sprintf(i18n.T().ErrElevateFailed, err)),
-			windows.StringToUTF16Ptr("GameTunnel"),
-			windows.MB_OK|windows.MB_ICONERROR)
+	if err := windows.ShellExecute(0, verb, exePath, nil, nil, windows.SW_SHOWNORMAL); err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to elevate: %v\n", err)
 		os.Exit(1)
 	}
 
 	os.Exit(0)
 }
 
-// parseHostIP extracts the IP from a "host:port" address string.
-// Returns nil if parsing fails.
 func parseHostIP(addr string) net.IP {
 	host, _, err := net.SplitHostPort(addr)
 	if err != nil {
-		// Try as bare IP
 		return net.ParseIP(addr)
 	}
 	return net.ParseIP(host)
 }
 
-// writeCrashLog writes a panic log to %APPDATA%/GameTunnel/crash.log
-// if the process panics. This is a no-op for normal exits.
 func writeCrashLog() {
 	r := recover()
 	if r == nil {
