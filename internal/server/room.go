@@ -333,22 +333,20 @@ func (r *Room) ClientCount() int {
 // immediately instead of waiting for the keepalive timeout (30s).
 func (r *Room) notifyShutdown() {
 	r.mu.RLock()
-	var targets [maxInlineTargets]*net.UDPAddr
-	n := 0
+	targets := make([]*net.UDPAddr, 0, len(r.clients))
 	for _, c := range r.clients {
 		if c.PublicAddr != nil && c.auth == authNone {
-			targets[n] = c.PublicAddr
-			n++
+			targets = append(targets, c.PublicAddr)
 		}
 	}
 	r.mu.RUnlock()
 
-	if n == 0 {
+	if len(targets) == 0 {
 		return
 	}
 	kick := &protocol.KickPayload{Reason: "server shutdown"}
-	data := protocol.EncodeChecked(protocol.TypeKick, kick.Marshal())
-	for i := 0; i < n; i++ {
-		r.sendCheckedRaw(data, targets[i])
+	payload := kick.Marshal()
+	for _, addr := range targets {
+		r.sendChecked(protocol.TypeKick, payload, addr)
 	}
 }
