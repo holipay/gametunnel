@@ -36,6 +36,11 @@ func run(cfg *client.Config, tunFactory func(client.TunConfig) (client.TunDevice
 	app := NewApp(cfg)
 	app.SetTUNFactory(tunFactory)
 
+	// Start embedded web UI for settings
+	webui := client.NewWebUI(app)
+	webui.Start("127.0.0.1:4702")
+	defer webui.Stop()
+
 	// Auto-connect if server is configured
 	if cfg.ServerAddr != "" {
 		log.Printf("%s", i18n.Format(i18n.T().AppAutoConnect, cfg.ServerAddr))

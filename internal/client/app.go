@@ -18,12 +18,11 @@ import (
 )
 
 // App wraps the tunnel with connection management, status tracking, and auto-reconnect.
-// Platform-specific code (tray, dialogs) accesses App through exported fields/methods.
+// Platform-specific code (tray, web UI) accesses App through exported fields/methods.
 type App struct {
 	Cfg        *Config
 	Tunnel     *Tunnel
 	Mu         sync.RWMutex
-	DialogMu   sync.Mutex // serializes platform modal dialogs (settings + error)
 	Connecting bool
 	ConnectGen int64 // generation counter to prevent stale defer from resetting Connecting
 	LastErr    string
