@@ -357,7 +357,9 @@ func (t *Tunnel) receiveFromTUN(ctx context.Context) {
 			continue
 		}
 
-		// Use stack-allocated arrays for IP addresses to avoid heap allocation.
+		// Extract src/dst IPs. The [4]byte arrays avoid heap allocation for
+		// the copy itself, but net.IP() conversion causes escape. This is
+		// still cheaper than make(net.IP, 4) which always allocates.
 		var srcIPBuf, dstIPBuf [4]byte
 		copy(srcIPBuf[:], buf[12:16])
 		copy(dstIPBuf[:], buf[16:20])
