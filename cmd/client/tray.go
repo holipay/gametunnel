@@ -7,7 +7,6 @@ import (
 
 	"github.com/getlantern/systray"
 
-	"github.com/holipay/gametunnel/internal/client"
 	"github.com/holipay/gametunnel/internal/i18n"
 )
 
@@ -50,35 +49,22 @@ func (tr *Tray) setup() {
 	mLog := systray.AddMenuItem(s.TrayViewLog, s.TrayOpenLogFile)
 	mQuit := systray.AddMenuItem(s.TrayQuit, s.TrayQuitDesc)
 
-	// Wire up connection failure callback: show error dialog after fast retries
+	// Wire up connection failure callback: open web UI for settings
 	tr.app.Mu.Lock()
 	tr.app.OnConnFailed = func(errMsg string) bool {
-		tr.app.DialogMu.Lock()
-		defer tr.app.DialogMu.Unlock()
-		return showConnErrorDialog(errMsg)
+		log.Printf("connection failed: %s", errMsg)
+		openBrowser("http://127.0.0.1:4702")
+		return false // user will fix via web UI
 	}
 	tr.app.Mu.Unlock()
 
-	// First run: auto-open settings dialog to guide user
+	// First run: open web UI to guide user
 	isFirstRun := tr.app.Cfg.ServerAddr == ""
 	if isFirstRun {
 		go func() {
 			time.Sleep(500 * time.Millisecond)
-			// Show notification so user can find the tray icon
 			showFirstRunNotify()
-			statusText := s.TrayNoServer
-			if showSettingsDialog(statusText) {
-				cfg := client.LoadConfig()
-				tr.app.Mu.Lock()
-				tr.app.Cfg = cfg
-				tr.app.Mu.Unlock()
-				if cfg.Lang != "" {
-					i18n.Set(i18n.ParseLang(cfg.Lang))
-				}
-				if cfg.ServerAddr != "" {
-					tr.app.Connect(cfg)
-				}
-			}
+			openBrowser("http://127.0.0.1:4702")
 		}()
 	}
 
@@ -86,25 +72,7 @@ func (tr *Tray) setup() {
 		for {
 			select {
 		case <-mSettings.ClickedCh:
-			go func() {
-				tr.app.DialogMu.Lock()
-				defer tr.app.DialogMu.Unlock()
-				status := tr.app.GetStatus()
-				statusText := i18n.T().DlgStatusIdle
-				if status.Connected {
-					statusText = fmt.Sprintf(i18n.T().DlgStatusConn, status.VirtualIP, status.PeerCount)
-				}
-			if showSettingsDialog(statusText) {
-					cfg := client.LoadConfig()
-					tr.app.Mu.Lock()
-					tr.app.Cfg = cfg
-					tr.app.Mu.Unlock()
-						if cfg.Lang != "" {
-							i18n.Set(i18n.ParseLang(cfg.Lang))
-						}
-						log.Printf("%s", i18n.T().TrayCfgUpdated)
-					}
-				}()
+			openBrowser("http://127.0.0.1:4702")
 
 			case <-mEditConfig.ClickedCh:
 				openConfigFile()
@@ -137,21 +105,7 @@ func (tr *Tray) doConnect() {
 	tr.app.Mu.RUnlock()
 
 	if cfg.ServerAddr == "" {
-		tr.app.DialogMu.Lock()
-		defer tr.app.DialogMu.Unlock()
-		statusText := i18n.T().TrayNoServer
-		if showSettingsDialog(statusText) {
-			cfg := client.LoadConfig()
-			tr.app.Mu.Lock()
-			tr.app.Cfg = cfg
-			tr.app.Mu.Unlock()
-			if cfg.Lang != "" {
-				i18n.Set(i18n.ParseLang(cfg.Lang))
-			}
-			if cfg.ServerAddr != "" {
-				tr.app.Connect(cfg)
-			}
-		}
+		openBrowser("http://127.0.0.1:4702")
 		return
 	}
 	tr.app.Connect(cfg)

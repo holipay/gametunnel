@@ -102,6 +102,22 @@ type Strings struct {
 	DlgShowPass    string // "显示密码"
 	DlgInvalidAddr string // "服务器地址格式不正确，应为 IP:端口"
 
+	// ── Client Web UI ──
+	WebUITitle        string // "GameTunnel"
+	WebUISettings     string // "设置"
+	WebUIStatus       string // "状态"
+	WebUIServerAddr   string // "服务器地址"
+	WebUIPlayerName   string // "玩家名称"
+	WebUIRoomID       string // "房间 ID"
+	WebUIPassword     string // "密码"
+	WebUIPasswordHint string // "无密码留空"
+	WebUILanguage     string // "语言"
+	WebUIMTU          string // "MTU"
+	WebUIShowPass     string // "显示密码"
+	WebUISave         string // "保存并应用"
+	WebUIInvalidAddr  string // "服务器地址格式不正确"
+	WebUINameEmpty    string // "玩家名称不能为空"
+
 	// ── Client App ──
 	AppAutoConnect string // "[app] 自动连接到 %s"
 	AppSaveFail    string // "[app] 保存配置失败: %v"
@@ -268,6 +284,21 @@ var zhStrings = &Strings{
 	DlgShowPass:   "显示密码",
 	DlgInvalidAddr: "服务器地址格式不正确，应为 IP:端口",
 
+	WebUITitle:        "GameTunnel",
+	WebUISettings:     "设置",
+	WebUIStatus:       "状态",
+	WebUIServerAddr:   "服务器地址",
+	WebUIPlayerName:   "玩家名称",
+	WebUIRoomID:       "房间 ID",
+	WebUIPassword:     "密码",
+	WebUIPasswordHint: "无密码留空",
+	WebUILanguage:     "语言",
+	WebUIMTU:          "MTU",
+	WebUIShowPass:     "显示密码",
+	WebUISave:         "保存并应用",
+	WebUIInvalidAddr:  "服务器地址格式不正确",
+	WebUINameEmpty:    "玩家名称不能为空",
+
 	AppAutoConnect:   "[app] 自动连接到 %s",
 	AppSaveFail:      "[app] 保存配置失败: %v",
 	AppDisconnected:  "[app] 连接断开",
@@ -427,6 +458,21 @@ var enStrings = &Strings{
 	DlgConnect:    "Connect",
 	DlgShowPass:   "Show password",
 	DlgInvalidAddr: "Invalid server address, should be IP:port",
+
+	WebUITitle:        "GameTunnel",
+	WebUISettings:     "Settings",
+	WebUIStatus:       "Status",
+	WebUIServerAddr:   "Server Address",
+	WebUIPlayerName:   "Player Name",
+	WebUIRoomID:       "Room ID",
+	WebUIPassword:     "Password",
+	WebUIPasswordHint: "Leave empty if no password",
+	WebUILanguage:     "Language",
+	WebUIMTU:          "MTU",
+	WebUIShowPass:     "Show",
+	WebUISave:         "Save & Apply",
+	WebUIInvalidAddr:  "Invalid server address format",
+	WebUINameEmpty:    "Player name cannot be empty",
 
 	AppAutoConnect:   "[app] Auto-connecting to %s",
 	AppSaveFail:      "[app] Failed to save config: %v",

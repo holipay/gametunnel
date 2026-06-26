@@ -1,0 +1,211 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GameTunnel</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, "Segoe UI", sans-serif; max-width: 520px; margin: 30px auto; padding: 0 20px; background: #1a1a2e; color: #e0e0e0; }
+  h1 { color: #00d4ff; margin-bottom: 20px; font-size: 1.4em; }
+  .card { background: #16213e; border-radius: 8px; padding: 16px; margin-bottom: 16px; }
+  .card h2 { color: #00d4ff; font-size: 1em; margin-bottom: 12px; }
+  .stats { display: flex; gap: 8px; flex-wrap: wrap; }
+  .stat { background: #0f1729; border-radius: 6px; padding: 10px 14px; min-width: 100px; text-align: center; }
+  .stat .num { font-size: 1.4em; font-weight: bold; color: #00d4ff; }
+  .stat .label { font-size: 0.75em; color: #888; margin-top: 2px; }
+  .quality { color: #888; font-size: 0.85em; margin-top: 8px; }
+  .quality span { margin-right: 12px; }
+  .quality .good { color: #6bcb77; }
+  .quality .warn { color: #ffd93d; }
+  .quality .bad { color: #ff6b6b; }
+  label { display: block; color: #aaa; font-size: 0.85em; margin-bottom: 4px; margin-top: 12px; }
+  input[type="text"], input[type="password"], select { width: 100%; padding: 8px 10px; border: 1px solid #333; border-radius: 4px; background: #0f1729; color: #e0e0e0; font-size: 0.95em; }
+  input:focus, select:focus { outline: none; border-color: #00d4ff; }
+  .pass-row { display: flex; gap: 8px; }
+  .pass-row input { flex: 1; }
+  .pass-row button { padding: 8px 12px; border: 1px solid #333; border-radius: 4px; background: #0f1729; color: #aaa; cursor: pointer; font-size: 0.85em; }
+  .pass-row button:hover { border-color: #00d4ff; color: #e0e0e0; }
+  .row2 { display: flex; gap: 12px; }
+  .row2 > div { flex: 1; }
+  .btn { display: block; width: 100%; padding: 10px; margin-top: 16px; border: none; border-radius: 6px; background: #00d4ff; color: #1a1a2e; font-size: 1em; font-weight: bold; cursor: pointer; }
+  .btn:hover { background: #00b8d4; }
+  .btn:disabled { background: #333; color: #666; cursor: not-allowed; }
+  .msg { margin-top: 10px; font-size: 0.85em; min-height: 1.2em; }
+  .msg.ok { color: #6bcb77; }
+  .msg.err { color: #ff6b6b; }
+  .msg.info { color: #ffd93d; }
+</style>
+</head>
+<body>
+
+<h1>🎮 GameTunnel</h1>
+
+<!-- Status Dashboard -->
+<div class="card" id="status-card">
+  <h2>{{.T.WebUIStatus}}</h2>
+  <div class="stats">
+    <div class="stat"><div class="num" id="st-state">--</div><div class="label">Status</div></div>
+    <div class="stat"><div class="num" id="st-ip">--</div><div class="label">IP</div></div>
+    <div class="stat"><div class="num" id="st-peers">0</div><div class="label">Peers</div></div>
+    <div class="stat"><div class="num" id="st-uptime">--</div><div class="label">Uptime</div></div>
+  </div>
+  <div class="quality" id="st-quality" style="display:none">
+    <span id="st-rtt"></span>
+    <span id="st-loss"></span>
+    <span id="st-route"></span>
+  </div>
+</div>
+
+<!-- Settings Form -->
+<div class="card">
+  <h2>{{.T.WebUISettings}}</h2>
+  <form id="settings-form" onsubmit="return saveConfig(event)">
+    <label for="server">{{.T.WebUIServerAddr}}</label>
+    <input type="text" id="server" placeholder="1.2.3.4:4700" required>
+
+    <label for="name">{{.T.WebUIPlayerName}}</label>
+    <input type="text" id="name" placeholder="Player1" required>
+
+    <div class="row2">
+      <div>
+        <label for="room">{{.T.WebUIRoomID}}</label>
+        <input type="text" id="room" placeholder="default">
+      </div>
+      <div>
+        <label for="lang">{{.T.WebUILanguage}}</label>
+        <select id="lang">
+          <option value="zh">中文</option>
+          <option value="en">English</option>
+        </select>
+      </div>
+    </div>
+
+    <label for="password">{{.T.WebUIPassword}}</label>
+    <div class="pass-row">
+      <input type="password" id="password" placeholder="{{.T.WebUIPasswordHint}}">
+      <button type="button" onclick="togglePass()">{{.T.WebUIShowPass}}</button>
+    </div>
+
+    <label for="mtu">{{.T.WebUIMTU}}</label>
+    <select id="mtu">
+      <option value="1280">1280</option>
+      <option value="1400" selected>1400 (default)</option>
+      <option value="1500">1500</option>
+      <option value="9000">9000 (jumbo)</option>
+    </select>
+
+    <button type="submit" class="btn" id="save-btn">{{.T.WebUISave}}</button>
+    <div class="msg" id="save-msg"></div>
+  </form>
+</div>
+
+<script>
+var statusTimer = null;
+
+function togglePass() {
+  var p = document.getElementById('password');
+  p.type = p.type === 'password' ? 'text' : 'password';
+}
+
+function loadConfig() {
+  fetch('/api/config').then(function(r){return r.json()}).then(function(c) {
+    document.getElementById('server').value = c.server || '';
+    document.getElementById('name').value = c.name || '';
+    document.getElementById('room').value = c.room || 'default';
+    document.getElementById('password').value = c.password || '';
+    document.getElementById('lang').value = c.lang || 'zh';
+    document.getElementById('mtu').value = c.mtu || 1400;
+  });
+}
+
+function saveConfig(e) {
+  e.preventDefault();
+  var btn = document.getElementById('save-btn');
+  var msg = document.getElementById('save-msg');
+  btn.disabled = true;
+  msg.className = 'msg info';
+  msg.textContent = '...';
+
+  var cfg = {
+    server: document.getElementById('server').value.trim(),
+    name: document.getElementById('name').value.trim(),
+    room: document.getElementById('room').value.trim() || 'default',
+    password: document.getElementById('password').value,
+    lang: document.getElementById('lang').value,
+    mtu: parseInt(document.getElementById('mtu').value) || 1400
+  };
+
+  fetch('/api/config', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(cfg)
+  }).then(function(r){return r.json()}).then(function(res) {
+    btn.disabled = false;
+    if (res.error) {
+      msg.className = 'msg err';
+      msg.textContent = res.error;
+    } else if (res.reconnect) {
+      msg.className = 'msg info';
+      msg.textContent = '...';
+      fetch('/api/connect', {method:'POST'}).then(function() {
+        msg.className = 'msg ok';
+        msg.textContent = 'Saved, reconnecting...';
+      });
+    } else {
+      msg.className = 'msg ok';
+      msg.textContent = 'Saved';
+      setTimeout(function(){ msg.textContent = ''; }, 3000);
+    }
+  }).catch(function() {
+    btn.disabled = false;
+    msg.className = 'msg err';
+    msg.textContent = 'Network error';
+  });
+  return false;
+}
+
+function pollStatus() {
+  fetch('/api/status').then(function(r){return r.json()}).then(function(s) {
+    var stateEl = document.getElementById('st-state');
+    var qEl = document.getElementById('st-quality');
+
+    if (s.connecting) {
+      stateEl.textContent = '...';
+      stateEl.style.color = '#ffd93d';
+    } else if (s.connected) {
+      stateEl.textContent = 'ON';
+      stateEl.style.color = '#6bcb77';
+    } else {
+      stateEl.textContent = 'OFF';
+      stateEl.style.color = '#ff6b6b';
+    }
+
+    document.getElementById('st-ip').textContent = s.virtual_ip || '--';
+    document.getElementById('st-peers').textContent = s.peer_count || 0;
+    document.getElementById('st-uptime').textContent = s.uptime || '--';
+
+    if (s.connected && (s.p2p_peers > 0 || s.relay_peers > 0 || s.avg_rtt > 0)) {
+      qEl.style.display = 'block';
+      var rtt = document.getElementById('st-rtt');
+      rtt.textContent = s.avg_rtt > 0 ? 'RTT: ' + s.avg_rtt.toFixed(0) + 'ms' : '';
+      rtt.className = s.avg_rtt < 50 ? 'good' : s.avg_rtt < 100 ? 'warn' : 'bad';
+
+      var loss = document.getElementById('st-loss');
+      loss.textContent = s.loss_rate > 0 ? 'Loss: ' + (s.loss_rate*100).toFixed(0) + '%' : '';
+      loss.className = s.loss_rate < 0.01 ? 'good' : s.loss_rate < 0.05 ? 'warn' : 'bad';
+
+      var route = document.getElementById('st-route');
+      route.textContent = 'P2P:' + (s.p2p_peers||0) + ' Relay:' + (s.relay_peers||0);
+    } else {
+      qEl.style.display = 'none';
+    }
+  }).catch(function(){});
+}
+
+loadConfig();
+pollStatus();
+statusTimer = setInterval(pollStatus, 2000);
+</script>
+</body>
+</html>
