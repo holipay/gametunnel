@@ -91,6 +91,8 @@ func (sq *sendQueue) send(data []byte, addr *net.UDPAddr, priority sendPriority)
 // then up to batchBufSize low-priority packets, reducing channel select overhead.
 func (sq *sendQueue) run(ctx context.Context) {
 	var batch [batchBufSize]sendEntry
+	var deferredLow [batchBufSize]sendEntry // low-priority packets found during high-priority drain
+	deferredCount := 0
 
 	for {
 		select {
@@ -101,14 +103,18 @@ func (sq *sendQueue) run(ctx context.Context) {
 			if e.priority == priorityHigh {
 				// Send this high-priority packet immediately
 				sq.writeUDP(e.data, e.addr)
-				// Drain any additional high-priority packets queued
+				// Drain additional high-priority packets, saving any low-priority ones
 				n := 0
 			DrainHigh:
 				for n < batchBufSize {
 					select {
 					case batch[n] = <-sq.ch:
 						if batch[n].priority != priorityHigh {
-							sq.writeUDP(batch[n].data, batch[n].addr)
+							// Defer low-priority — don't send during high-priority drain
+							if deferredCount < batchBufSize {
+								deferredLow[deferredCount] = batch[n]
+								deferredCount++
+							}
 							continue DrainHigh
 						}
 						n++
@@ -119,6 +125,11 @@ func (sq *sendQueue) run(ctx context.Context) {
 				for i := 0; i < n; i++ {
 					sq.writeUDP(batch[i].data, batch[i].addr)
 				}
+				// Send deferred low-priority packets after all high-priority are done
+				for i := 0; i < deferredCount; i++ {
+					sq.writeUDP(deferredLow[i].data, deferredLow[i].addr)
+				}
+				deferredCount = 0
 			} else {
 				// Low priority: batch drain to reduce per-packet overhead
 				batch[0] = e

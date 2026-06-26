@@ -228,6 +228,7 @@ func (a *App) statusLoop(ctx context.Context) {
 			a.peerCount = ts.PeerCount
 			if !wasConnected {
 				a.uptime = time.Now()
+				a.lastErr = "" // clear stale error on successful connection
 			}
 		} else if a.connected {
 			// Was connected, now disconnected

@@ -35,7 +35,7 @@ func DeriveKey(password, roomID string) ([]byte, error) {
 		return nil, nil
 	}
 	// Argon2id params: 19 MiB memory, 2 iterations, 1 parallelism
-	// Suitable for interactive authentication (~200ms on modern hardware)
+	// On modern hardware ~200ms; may be slower on low-end ARM devices (OpenWrt routers).
 	salt := []byte("GameTunnel:" + roomID)
 	key := argon2.IDKey([]byte(password), salt, 2, 19*1024, 1, KeySize)
 	if len(key) != KeySize {
