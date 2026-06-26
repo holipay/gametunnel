@@ -39,7 +39,7 @@ func (r *Room) handleRegister(payload []byte, from *net.UDPAddr) {
 
 	// Version compatibility check
 	if !protocol.IsCompatible(reg.Version, protocol.AppVersion) {
-		r.sendKick(from, fmt.Sprintf(t.KickVersionMismatch,
+		r.sendKickCode(from, protocol.KickCodeVersionMismatch, fmt.Sprintf(t.KickVersionMismatch,
 			reg.Version,
 			protocol.AppVersion))
 		return
@@ -99,7 +99,7 @@ func (r *Room) handleRegister(payload []byte, from *net.UDPAddr) {
 		r.mu.Unlock()
 		r.sendAssignIP(selfIP, from)
 		r.sendPeerInfoToClient(from)
-		r.peerInfoDirty.Store(true)
+		r.invalidatePeerInfoCache()
 		r.markDirty()
 		return
 	}
@@ -140,7 +140,16 @@ func (r *Room) handleRegister(payload []byte, from *net.UDPAddr) {
 	}
 
 	if r.roomPass == "" {
-		r.registerClientLocked(reg, from)
+		vip, ok := r.doRegisterClient(reg, from)
+		r.mu.Unlock()
+		if !ok {
+			r.sendKick(from, t.KickIPExhausted)
+			return
+		}
+		r.sendAssignIP(vip, from)
+		r.sendPeerInfoToClient(from)
+		r.invalidatePeerInfoCache()
+		r.markDirty()
 		return
 	}
 
@@ -153,21 +162,29 @@ func (r *Room) handleRegister(payload []byte, from *net.UDPAddr) {
 		return
 	}
 
-	r.sendAuthChallengeLocked(reg, from)
-}
-
-func (r *Room) registerClientLocked(reg *protocol.RegisterPayload, from *net.UDPAddr) {
-	t := i18n.T()
-	vip := r.nextAvailableIP()
-	if vip == nil {
-		// Rollback the IP count increment done in handleRegister
-		clientIP := addrToConnIPKey(from)
+	challenge, ok := r.doSendAuthChallenge(reg, from)
+	if !ok {
 		r.ipConnMu.Lock()
 		r.ipConnCount[clientIP]--
 		r.ipConnMu.Unlock()
 		r.mu.Unlock()
-		r.sendKick(from, t.KickIPExhausted)
+		r.sendKick(from, t.KickInternalError)
 		return
+	}
+	r.mu.Unlock()
+
+	acp := &protocol.AuthChallengePayload{Challenge: challenge, ClientAddr: from.String()}
+	r.sendChecked(protocol.TypeAuthChallenge, acp.Marshal(), from)
+}
+
+// doRegisterClient creates a client entry under the held mu lock.
+// Returns the assigned virtual IP and true on success, or nil and false
+// on failure (e.g. IP exhaustion). The caller MUST release mu after return.
+func (r *Room) doRegisterClient(reg *protocol.RegisterPayload, from *net.UDPAddr) (net.IP, bool) {
+	t := i18n.T()
+	vip := r.nextAvailableIP()
+	if vip == nil {
+		return nil, false
 	}
 
 	r.markIPUsed(vip)
@@ -183,8 +200,6 @@ func (r *Room) registerClientLocked(reg *protocol.RegisterPayload, from *net.UDP
 	r.clients[ipKey(vip)] = c
 	r.addrMap[addrToRateKey(from)] = c
 
-	// IP count already incremented in handleRegister — no duplicate increment here
-
 	log.Printf(t.LogPlayerJoin, reg.Username, from, vip, len(r.clients))
 
 	r.totalRegistrations.Add(1)
@@ -192,28 +207,16 @@ func (r *Room) registerClientLocked(reg *protocol.RegisterPayload, from *net.UDP
 		r.peakPlayers.Store(cur)
 	}
 
-	selfIP := vip
-	r.mu.Unlock()
-
-	r.sendAssignIP(selfIP, from)
-	r.sendPeerInfoToClient(from)
-	r.peerInfoDirty.Store(true)
-	r.markDirty()
+	return vip, true
 }
 
-func (r *Room) sendAuthChallengeLocked(reg *protocol.RegisterPayload, from *net.UDPAddr) {
-	t := i18n.T()
+// doSendAuthChallenge generates and stores a challenge under the held mu lock.
+// Returns the challenge bytes and true on success. The caller MUST release mu.
+func (r *Room) doSendAuthChallenge(reg *protocol.RegisterPayload, from *net.UDPAddr) ([]byte, bool) {
 	challenge, err := auth.GenerateChallenge()
 	if err != nil {
-		// Rollback the IP count increment done in handleRegister
-		clientIP := addrToConnIPKey(from)
-		r.ipConnMu.Lock()
-		r.ipConnCount[clientIP]--
-		r.ipConnMu.Unlock()
-		r.mu.Unlock()
-		log.Printf(t.LogChallengeFail, err)
-		r.sendKick(from, t.KickInternalError)
-		return
+		log.Printf(i18n.T().LogChallengeFail, err)
+		return nil, false
 	}
 
 	c := &Client{
@@ -227,10 +230,7 @@ func (r *Room) sendAuthChallengeLocked(reg *protocol.RegisterPayload, from *net.
 	}
 	r.addrMap[addrToRateKey(from)] = c
 	r.pendingAuth++
-	r.mu.Unlock()
-
-	acp := &protocol.AuthChallengePayload{Challenge: challenge, ClientAddr: from.String()}
-	r.sendChecked(protocol.TypeAuthChallenge, acp.Marshal(), from)
+	return challenge, true
 }
 
 // ── Auth Response ──────────────────────────────────────────────
@@ -308,7 +308,7 @@ func (r *Room) handleAuthResponse(payload []byte, from *net.UDPAddr) {
 		r.mu.Unlock()
 		log.Printf(t.LogAuthFail, resp.Username, from)
 		r.authFailures.Add(1)
-		r.sendKick(from, t.KickWrongPassword)
+		r.sendKickCode(from, protocol.KickCodeWrongPassword, t.KickWrongPassword)
 		return
 	}
 
@@ -346,5 +346,14 @@ func (r *Room) handleAuthResponse(payload []byte, from *net.UDPAddr) {
 	}
 
 	reg := &protocol.RegisterPayload{RoomID: resp.RoomID, Username: resp.Username}
-	r.registerClientLocked(reg, from)
+	vip, ok := r.doRegisterClient(reg, from)
+	r.mu.Unlock()
+	if !ok {
+		r.sendKick(from, t.KickIPExhausted)
+		return
+	}
+	r.sendAssignIP(vip, from)
+	r.sendPeerInfoToClient(from)
+	r.invalidatePeerInfoCache()
+	r.markDirty()
 }

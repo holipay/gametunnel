@@ -59,7 +59,7 @@ func (r *Room) handleDisconnect(from *net.UDPAddr) {
 	if r.bwLimiter != nil {
 		r.bwLimiter.Remove(from)
 	}
-	r.peerInfoDirty.Store(true)
+	r.invalidatePeerInfoCache()
 	r.markDirty()
 }
 

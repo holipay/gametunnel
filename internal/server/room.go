@@ -147,7 +147,7 @@ func NewRoom(cfg RoomConfig) (*Room, error) {
 		clients:     make(map[[16]byte]*Client),
 		addrMap:     make(map[rateKey]*Client),
 		ipBitmap:    make([]uint64, 4),
-		maxPending:  cfg.MaxPlayers * 3,
+		maxPending:  min(cfg.MaxPlayers*3, 512),
 		regBuf:      [2]map[connIPKey]int{make(map[connIPKey]int), make(map[connIPKey]int)},
 		maxRegPerIP: 5,
 		ipConnCount: make(map[connIPKey]int),
@@ -299,7 +299,11 @@ func (r *Room) logSendError(errMsg string) {
 }
 
 func (r *Room) sendKick(to *net.UDPAddr, reason string) {
-	kick := &protocol.KickPayload{Reason: reason}
+	r.sendKickCode(to, protocol.KickCodeNone, reason)
+}
+
+func (r *Room) sendKickCode(to *net.UDPAddr, code protocol.KickCode, reason string) {
+	kick := &protocol.KickPayload{Reason: reason, Code: code}
 	r.sendChecked(protocol.TypeKick, kick.Marshal(), to)
 	r.totalKicks.Add(1)
 }
@@ -344,7 +348,7 @@ func (r *Room) notifyShutdown() {
 	if len(targets) == 0 {
 		return
 	}
-	kick := &protocol.KickPayload{Reason: "server shutdown"}
+	kick := &protocol.KickPayload{Reason: "server shutdown", Code: protocol.KickCodeShutdown}
 	payload := kick.Marshal()
 	for _, addr := range targets {
 		r.sendChecked(protocol.TypeKick, payload, addr)

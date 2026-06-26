@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"net"
 	"sync"
+	"time"
 
 	"golang.org/x/crypto/argon2"
 )
@@ -28,23 +29,50 @@ const ChallengeSize = 16
 // HMACSize is the length of the HMAC-SHA256 output.
 const HMACSize = 32
 
+// keyCacheTTL is how long derived keys are kept in cache.
+// Entries older than this are evicted on access or during periodic cleanup.
+const keyCacheTTL = 10 * time.Minute
+
+// cachedKey holds a derived key with its creation time for TTL-based eviction.
+type cachedKey struct {
+	key       []byte
+	createdAt time.Time
+}
+
 // keyCache caches derived Argon2 keys to avoid repeated ~200ms computation.
-// Key: "password:roomID", Value: 32-byte derived key.
-var keyCache sync.Map
+// Entries are evicted after keyCacheTTL to avoid retaining stale derived keys
+// indefinitely. Lazy eviction happens on Load; periodic cleanup via
+// CleanupKeyCache handles entries that are never accessed again.
+var keyCache struct {
+	sync.Mutex
+	entries map[string]cachedKey
+}
+
+func init() {
+	keyCache.entries = make(map[string]cachedKey)
+}
 
 // DeriveKey derives a 32-byte HMAC key from the room password using Argon2id.
 // Room ID is used as salt to bind the key to a specific room.
 // Returns nil if password is empty, or on internal error.
-// Results are cached — repeated calls with the same password+roomID are instant.
+// Results are cached with TTL — repeated calls within the TTL window are instant.
 func DeriveKey(password, roomID string) ([]byte, error) {
 	if password == "" {
 		return nil, nil
 	}
 
 	cacheKey := password + ":" + roomID
-	if v, ok := keyCache.Load(cacheKey); ok {
-		return v.([]byte), nil
+	now := time.Now()
+
+	keyCache.Lock()
+	if entry, ok := keyCache.entries[cacheKey]; ok {
+		if now.Sub(entry.createdAt) < keyCacheTTL {
+			keyCache.Unlock()
+			return entry.key, nil
+		}
+		delete(keyCache.entries, cacheKey)
 	}
+	keyCache.Unlock()
 
 	// Argon2id params: 19 MiB memory, 2 iterations, 1 parallelism
 	// On modern hardware ~200ms; may be slower on low-end ARM devices (OpenWrt routers).
@@ -57,8 +85,26 @@ func DeriveKey(password, roomID string) ([]byte, error) {
 	// Cache a copy so the caller can't mutate the cached value
 	cached := make([]byte, KeySize)
 	copy(cached, key)
-	keyCache.Store(cacheKey, cached)
+
+	keyCache.Lock()
+	keyCache.entries[cacheKey] = cachedKey{key: cached, createdAt: now}
+	keyCache.Unlock()
+
 	return cached, nil
+}
+
+// CleanupKeyCache removes expired entries from the key cache.
+// Should be called periodically (e.g. every 5 minutes) to prevent
+// unbounded memory growth from entries that are never accessed again.
+func CleanupKeyCache() {
+	now := time.Now()
+	keyCache.Lock()
+	for k, entry := range keyCache.entries {
+		if now.Sub(entry.createdAt) >= keyCacheTTL {
+			delete(keyCache.entries, k)
+		}
+	}
+	keyCache.Unlock()
 }
 
 // GenerateChallenge creates a random nonce for authentication.

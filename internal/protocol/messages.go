@@ -101,19 +101,41 @@ func UnmarshalAssignIP(data []byte) (*AssignIPPayload, error) {
 
 // ── Kick ───────────────────────────────────────────────────────
 
+// KickCode identifies the reason for a kick using a numeric code,
+// enabling reliable client-side matching independent of localized strings.
+type KickCode byte
+
+const (
+	KickCodeNone            KickCode = 0 // unknown / generic (recoverable)
+	KickCodeWrongPassword   KickCode = 1 // wrong password (fatal, stop reconnect)
+	KickCodeVersionMismatch KickCode = 2 // version incompatible (fatal, stop reconnect)
+	KickCodeShutdown        KickCode = 3 // server shutting down
+)
+
 // KickPayload is sent by the server to reject or disconnect a client.
 type KickPayload struct {
 	Reason string
+	Code   KickCode
 }
 
+// Marshal encodes the kick payload. Wire format:
+//
+//	[2 bytes: reasonLen][reasonBytes][1 byte: code]
+//
+// The trailing code byte is backward-compatible: old clients that only read
+// reasonLen+reasonBytes will ignore the extra byte. Old servers that don't
+// send the code byte will have clients default to KickCodeNone (0).
 func (k *KickPayload) Marshal() []byte {
 	reasonBytes := []byte(k.Reason)
-	buf := make([]byte, 2+len(reasonBytes))
+	buf := make([]byte, 2+len(reasonBytes)+1)
 	binary.LittleEndian.PutUint16(buf, uint16(len(reasonBytes)))
 	copy(buf[2:], reasonBytes)
+	buf[2+len(reasonBytes)] = byte(k.Code)
 	return buf
 }
 
+// UnmarshalKick decodes a kick payload. The code byte is optional for
+// backward compatibility with older servers that don't send it.
 func UnmarshalKick(data []byte) (*KickPayload, error) {
 	if len(data) < 2 {
 		return nil, ErrPacketTooShort
@@ -122,7 +144,11 @@ func UnmarshalKick(data []byte) (*KickPayload, error) {
 	if len(data) < 2+reasonLen {
 		return nil, ErrPacketTooShort
 	}
-	return &KickPayload{Reason: string(data[2 : 2+reasonLen])}, nil
+	k := &KickPayload{Reason: string(data[2 : 2+reasonLen])}
+	if len(data) >= 2+reasonLen+1 {
+		k.Code = KickCode(data[2+reasonLen])
+	}
+	return k, nil
 }
 
 // ── Ping/Pong ─────────────────────────────────────────────────

@@ -39,7 +39,7 @@ func (s *Server) checkRate(addr *net.UDPAddr) bool {
 
 // rateLimitLoop resets the per-client packet counter every second
 // using a double-buffer swap: swap pointers under lock (O(1)), then
-// replace the stale buffer with a fresh map to avoid O(n) clear.
+// clear the stale buffer to reuse its memory allocation.
 func (s *Server) rateLimitLoop(ctx context.Context) {
 	s.rateTick = time.NewTicker(rateInterval)
 	defer s.rateTick.Stop()
@@ -50,9 +50,10 @@ func (s *Server) rateLimitLoop(ctx context.Context) {
 		case <-s.rateTick.C:
 			s.rateMu.Lock()
 			s.rateBuf[0], s.rateBuf[1] = s.rateBuf[1], s.rateBuf[0]
-			// Replace stale buffer with fresh map — GC reclaims the old one.
-			// Faster than iterating and deleting, and avoids holding lock longer.
-			s.rateBuf[1] = make(map[rateKey]int)
+			// Clear the stale buffer instead of replacing it with a new map.
+			// This reuses the existing map memory, avoiding GC pressure from
+			// creating a new map every second under high connection counts.
+			clear(s.rateBuf[1])
 			s.rateMu.Unlock()
 		}
 	}

@@ -28,14 +28,12 @@ func buildDataPacket(srcIP, dstIP net.IP, data []byte) []byte {
 }
 
 // buildEncryptedDataPacket encrypts pkt and wraps it in a data packet in a
-// single allocation: header(2) + srcIP(4) + dstIP(4) + encrypted + CRC32(4).
-// Saves 1 heap allocation per packet vs separate Encrypt + buildDataPacket.
+// single allocation: header(2) + srcIP(4) + dstIP(4) + encrypted.
+// CRC32 is omitted because ChaCha20-Poly1305 AEAD already provides
+// integrity verification. Saves 4 bytes per encrypted packet.
 func buildEncryptedDataPacket(srcIP, dstIP net.IP, pkt []byte, cipher *crypto.Cipher) []byte {
-	// Pre-calculate final size to avoid growing the buffer.
-	// encrypted size = Overhead(29) + len(pkt) + TagSize(16) but Seal appends
-	// so we just allocate for header + IPs + max encrypted + CRC.
-	encMax := crypto.Overhead + len(pkt) + 16 // upper bound
-	size := protocol.HeaderLen + 8 + encMax + protocol.ChecksumLen
+	encMax := crypto.Overhead + len(pkt) + 16
+	size := protocol.HeaderLen + 8 + encMax
 	dst := make([]byte, size)
 
 	off := 0
@@ -46,17 +44,9 @@ func buildEncryptedDataPacket(srcIP, dstIP net.IP, pkt []byte, cipher *crypto.Ci
 	copy(dst[off+4:off+8], dstIP.To4())
 	off += 8
 
-	// Encrypt directly into dst — avoids separate Encrypt allocation
-	dst = dst[:off] // set length to off so EncryptTo appends
+	dst = dst[:off]
 	dst = cipher.EncryptTo(dst, pkt)
-	off = len(dst)
-
-	// Append CRC
-	crc := crc32.ChecksumIEEE(dst[:off])
-	dst = append(dst,
-		byte(crc), byte(crc>>8), byte(crc>>16), byte(crc>>24),
-	)
-	return dst
+	return dst[:len(dst)]
 }
 
 // routePacket determines how to route an outgoing IP packet.

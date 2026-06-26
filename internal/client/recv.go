@@ -63,7 +63,7 @@ func (t *Tunnel) receiveFromServer(ctx context.Context) {
 		// Successful read — reset error counter.
 		consecutiveErrors = 0
 
-		msg, err := protocol.DecodeChecked(buf[:n])
+		msg, err := protocol.DecodeLenient(buf[:n])
 		if err != nil {
 			continue
 		}
@@ -111,11 +111,7 @@ func (t *Tunnel) handleServerData(ctx context.Context, msg *protocol.Message) {
 		}
 		// For non-recoverable kicks (wrong password, version mismatch),
 		// cancel context to stop the reconnect loop.
-		reason := ""
-		if err == nil {
-			reason = kick.Reason
-		}
-		if isFatalKick(reason) {
+		if err == nil && isFatalKick(kick) {
 			t.cancelKicks.Store(true)
 		}
 		if t.conn != nil {
@@ -391,7 +387,16 @@ func (t *Tunnel) receiveFromTUN(ctx context.Context) {
 
 // isFatalKick returns true if the kick reason indicates a non-recoverable error
 // that should stop the reconnect loop (e.g. wrong password, version mismatch).
-func isFatalKick(reason string) bool {
+// Uses numeric codes when available (newer servers), falls back to string
+// matching for backward compatibility with older servers.
+func isFatalKick(kick *protocol.KickPayload) bool {
+	if kick.Code == protocol.KickCodeWrongPassword || kick.Code == protocol.KickCodeVersionMismatch {
+		return true
+	}
+	if kick.Code != protocol.KickCodeNone {
+		return false
+	}
+	reason := kick.Reason
 	return strings.Contains(reason, "密码错误") ||
 		strings.Contains(reason, "password") ||
 		strings.Contains(reason, "版本不兼容") ||
