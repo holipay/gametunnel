@@ -89,11 +89,6 @@ func NewApp(cfg *Config) *App {
 		Ctx:    ctx,
 		Cancel: cancel,
 	}
-	// Set default callback to prevent nil dereference if tray setup is slow
-	app.OnConnFailed = func(errMsg string) bool {
-		log.Printf("connection failed: %s (retrying)", errMsg)
-		return true
-	}
 	return app
 }
 
