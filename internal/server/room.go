@@ -14,6 +14,24 @@ import (
 	"github.com/holipay/gametunnel/internal/protocol"
 )
 
+// ── Room Constants ──────────────────────────────────────────────
+
+const (
+	maxUsernameLen = 32
+	maxRoomIDLen   = 32
+
+	// peerInfoInterval is how often the batch PeerInfo broadcast runs.
+	// 50ms coalesces up to ~20 join/leave events per broadcast.
+	peerInfoInterval  = 50 * time.Millisecond
+	peerInfoCacheTTL  = peerInfoInterval
+	pingInterval      = 5 * time.Second
+	sendErrorLogInterval = 1 * time.Minute
+
+	// maxInlineTargets is the number of peer addresses we can hold on the stack
+	// without heap allocation. For rooms ≤ 32 players this covers the common case.
+	maxInlineTargets = 32
+)
+
 // connIPKey is a fixed-size key for per-IP connection counting.
 // Uses 16-byte IP to support both IPv4 (as v4-in-v6 mapped) and IPv6 addresses.
 type connIPKey [16]byte
@@ -256,9 +274,6 @@ func (r *Room) HandlePacket(msgType byte, payload []byte, from *net.UDPAddr) {
 }
 
 // ── Send Helpers ───────────────────────────────────────────────
-
-// sendErrorLogInterval is how often to log send errors (rate limiting).
-const sendErrorLogInterval = 1 * time.Minute
 
 func (r *Room) sendChecked(typ byte, payload []byte, to *net.UDPAddr) {
 	data := protocol.EncodeChecked(typ, payload)

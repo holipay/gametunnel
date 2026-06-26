@@ -17,6 +17,7 @@ import (
 
 	"github.com/holipay/gametunnel/internal/protocol"
 	"github.com/holipay/gametunnel/internal/i18n"
+	"github.com/holipay/gametunnel/internal/netutil"
 )
 
 // pktPool reuses byte buffers for incoming packets to reduce GC pressure.
@@ -109,11 +110,9 @@ func (c *Client) PingStats() (lossRate float64, jitter time.Duration) {
 }
 
 // ipKey converts an IP address to a [16]byte map key.
-// IPv4 addresses are automatically mapped to v4-in-v6 format (::ffff:x.x.x.x).
+// Delegates to netutil.IPKey for shared implementation.
 func ipKey(ip net.IP) [16]byte {
-	var k [16]byte
-	copy(k[:], ip.To16())
-	return k
+	return netutil.IPKey(ip)
 }
 
 // ── Server ─────────────────────────────────────────────────────
