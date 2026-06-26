@@ -155,7 +155,7 @@ func (w *WebUI) handleConfig(rw http.ResponseWriter, r *http.Request) {
 	// Check if server address changed
 	w.app.Mu.RLock()
 	oldServer := w.app.Cfg.ServerAddr
-	w.app.Mu.Unlock()
+	w.app.Mu.RUnlock()
 
 	serverChanged := oldServer != cfg.ServerAddr
 
