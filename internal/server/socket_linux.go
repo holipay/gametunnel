@@ -8,12 +8,12 @@ import (
 )
 
 const (
-	// rcvBufSize is the UDP receive buffer size (4MB).
+	// rcvBufSize is the UDP receive buffer size (8MB).
 	// Default Linux value is ~212KB which can drop packets under burst traffic.
-	rcvBufSize = 4 * 1024 * 1024
+	rcvBufSize = 8 * 1024 * 1024
 
-	// sndBufSize is the UDP send buffer size (2MB).
-	sndBufSize = 2 * 1024 * 1024
+	// sndBufSize is the UDP send buffer size (4MB).
+	sndBufSize = 4 * 1024 * 1024
 )
 
 func setSocketBuffers(conn *net.UDPConn) error {

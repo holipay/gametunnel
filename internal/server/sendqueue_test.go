@@ -111,8 +111,8 @@ func TestRateLimitedQueue_ControlBypassesBandwidthLimit(t *testing.T) {
 
 	addr := &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 9999}
 
-	// Exhaust burst tokens
-	limiter.Allow(addr, 128*1024)
+	// Exhaust burst tokens (burst is 512KB)
+	limiter.Allow(addr, 512*1024)
 
 	// Control packet should bypass limiter
 	if !rlq.send([]byte("control"), addr, priorityHigh) {

@@ -30,11 +30,11 @@ type tunJob struct {
 
 // tunChanSize is the buffer size for the TUN worker channel.
 // Sized to absorb bursts from the TUN device without blocking the reader.
-const tunChanSize = 512
+const tunChanSize = 2048
 
 // tunWorkers is the number of goroutines processing TUN packets.
-// 2 workers allow encryption + marshal to overlap with TUN reads.
-const tunWorkers = 2
+// 4 workers allow encryption + marshal to overlap with TUN reads.
+const tunWorkers = 4
 
 // ctrlTimerPool reuses timers for sendCtrl to avoid per-call allocation.
 // Timers are Reset before use and drained after use to ensure clean state.
@@ -130,7 +130,7 @@ type Tunnel struct {
 
 // sendChanSize is the buffer size for the UDP send channel.
 // Sized to absorb bursts without blocking callers.
-const sendChanSize = 4096
+const sendChanSize = 8192
 
 // ctrlChanSize is the buffer size for the control packet channel.
 // Control packets (keepalive, pong, peer request) must never be dropped.
@@ -146,8 +146,8 @@ func New(cfg *Config) *Tunnel {
 		sendCh:   make(chan sendJob, sendChanSize),
 		ctrlCh:   make(chan sendJob, ctrlChanSize),
 		tunCh:    make(chan tunJob, tunChanSize),
-		// Default: 10 Mbps client send limit, 128 KB burst
-		sendLimiter: newClientSendLimiter(10*1024*1024/8, 128*1024),
+		// Default: 50 Mbps client send limit, 512 KB burst
+		sendLimiter: newClientSendLimiter(50*1024*1024/8, 512*1024),
 	}
 	t.disconnectOnce.Store(&sync.Once{})
 	return t
@@ -188,6 +188,9 @@ func (t *Tunnel) Connect(ctx context.Context, serverAddr string, mtu int, newTUN
 	if err != nil {
 		return fmt.Errorf("%s", i18n.Format(i18n.T().ErrBindUDP, err))
 	}
+	// Tune UDP socket buffers for high-throughput gaming.
+	// Ignoring errors — non-Linux platforms may not support this.
+	setClientSocketBuffers(conn)
 	t.conn = conn
 
 	if err := t.register(ctx); err != nil {
@@ -387,7 +390,11 @@ func (t *Tunnel) Status() TunnelStatus {
 // sendLoop is the dedicated UDP send goroutine. It consumes from sendCh and
 // writes to the UDP socket serially, eliminating mutex contention on the
 // send path. Callers use sendUDP() which is non-blocking (channel send).
+// Uses batch draining to reduce per-packet syscall overhead.
 func (t *Tunnel) sendLoop(ctx context.Context) {
+	const batchSize = 64
+	var batch [batchSize]sendJob
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -406,16 +413,57 @@ func (t *Tunnel) sendLoop(ctx context.Context) {
 				}
 			}
 		case job := <-t.ctrlCh:
-			// Control packets (keepalive, pong, peer request) — always drain first
-			t.writeUDP(job.data, job.addr)
+			batch[0] = job
+			n := 1
+			// Drain remaining control packets
+		DrainCtrl1:
+			for n < batchSize {
+				select {
+				case batch[n] = <-t.ctrlCh:
+					n++
+				default:
+					break DrainCtrl1
+				}
+			}
+			// Also drain data packets
+			DrainData1:
+			for n < batchSize {
+				select {
+				case batch[n] = <-t.sendCh:
+					n++
+				default:
+					break DrainData1
+				}
+			}
+			for i := 0; i < n; i++ {
+				t.writeUDP(batch[i].data, batch[i].addr)
+			}
+
 		case job := <-t.sendCh:
-			// Data packets — only process when no control packets pending
-			select {
-			case ctrlJob := <-t.ctrlCh:
-				t.writeUDP(ctrlJob.data, ctrlJob.addr)
-				t.writeUDP(job.data, job.addr) // process the data packet too
-			default:
-				t.writeUDP(job.data, job.addr)
+			batch[0] = job
+			n := 1
+			// Drain additional data packets
+			DrainData2:
+			for n < batchSize {
+				select {
+				case batch[n] = <-t.sendCh:
+					n++
+				default:
+					break DrainData2
+				}
+			}
+			// Drain control packets too
+			DrainCtrl2:
+			for n < batchSize {
+				select {
+				case batch[n] = <-t.ctrlCh:
+					n++
+				default:
+					break DrainCtrl2
+				}
+			}
+			for i := 0; i < n; i++ {
+				t.writeUDP(batch[i].data, batch[i].addr)
 			}
 		}
 	}

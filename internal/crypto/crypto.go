@@ -97,13 +97,12 @@ func (c *Cipher) initCounter() {
 }
 
 // makeNonce builds a 12-byte nonce: 8-byte counter + 4-byte direction tag.
-func (c *Cipher) makeNonce() []byte {
+// Uses a per-goroutine scratch buffer to avoid allocation on every encrypt call.
+func (c *Cipher) makeNonce(buf *[NonceSize]byte) {
 	ctr := c.counter.Add(1)
 
-	nonce := make([]byte, NonceSize)
-	binary.LittleEndian.PutUint64(nonce[0:8], ctr)
-	copy(nonce[8:12], c.dirTag)
-	return nonce
+	binary.LittleEndian.PutUint64(buf[0:8], ctr)
+	copy(buf[8:12], c.dirTag)
 }
 
 // Encrypt encrypts plaintext and returns: [encVersion(1)] [nonce(12)] [ciphertext+tag(N+16)].
@@ -112,14 +111,14 @@ func (c *Cipher) Encrypt(plaintext []byte) []byte {
 	if plaintext == nil {
 		return nil
 	}
-	nonce := c.makeNonce()
-	ciphertext := c.aead.Seal(nil, nonce, plaintext, nil)
+	var nonceBuf [NonceSize]byte
+	c.makeNonce(&nonceBuf)
 
-	// Build output: version + nonce + ciphertext (includes tag)
-	out := make([]byte, 0, Overhead+len(ciphertext))
+	// Seal directly into output buffer to avoid intermediate allocation.
+	out := make([]byte, 0, Overhead+len(plaintext)+TagSize)
 	out = append(out, EncVersion)
-	out = append(out, nonce...)
-	out = append(out, ciphertext...)
+	out = append(out, nonceBuf[:]...)
+	out = c.aead.Seal(out, nonceBuf[:], plaintext, nil)
 	return out
 }
 

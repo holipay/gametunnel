@@ -22,8 +22,8 @@ const maxConsecutiveErrors = 10
 const errorBackoff = 100 * time.Millisecond
 
 // readBufSize is the buffer size for UDP and TUN reads.
-// 4096 covers typical MTU (1400) + protocol overhead with headroom.
-const readBufSize = 4096
+// 65535 covers max UDP datagram size, reducing read truncation under load.
+const readBufSize = 65535
 
 // receiveFromServer handles packets from the server and direct P2P peers.
 // It distinguishes between server-relayed packets and direct peer packets
@@ -347,10 +347,12 @@ func (t *Tunnel) receiveFromTUN(ctx context.Context) {
 			continue
 		}
 
-		srcIP := make(net.IP, 4)
-		copy(srcIP, buf[12:16])
-		dstIP := make(net.IP, 4)
-		copy(dstIP, buf[16:20])
+		// Use stack-allocated arrays for IP addresses to avoid heap allocation.
+		var srcIPBuf, dstIPBuf [4]byte
+		copy(srcIPBuf[:], buf[12:16])
+		copy(dstIPBuf[:], buf[16:20])
+		srcIP := net.IP(srcIPBuf[:])
+		dstIP := net.IP(dstIPBuf[:])
 
 		// Copy packet data — buf is reused on the next Read, but workers
 		// process packets asynchronously. For game packets (60-1500 bytes)

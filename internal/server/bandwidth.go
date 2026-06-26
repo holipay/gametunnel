@@ -9,13 +9,13 @@ import (
 
 const (
 	// defaultBandwidthLimit is the default per-client outbound bandwidth
-	// limit in bytes per second (10 Mbps).
-	defaultBandwidthLimit = 10 * 1024 * 1024 / 8 // 1.25 MB/s = 10 Mbps
+	// limit in bytes per second (50 Mbps).
+	defaultBandwidthLimit = 50 * 1024 * 1024 / 8 // 6.25 MB/s = 50 Mbps
 
 	// bandwidthBurst is the max burst size in bytes. Allows short spikes
 	// without letting a client monopolize the link.
-	// 128 KB ≈ ~85 full-size UDP frames, enough for a game snapshot.
-	bandwidthBurst = 128 * 1024
+	// 512 KB ≈ ~340 full-size UDP frames, enough for burst game snapshots.
+	bandwidthBurst = 512 * 1024
 
 	// bandwidthTimeout is how long WaitN blocks before giving up.
 	// If a client can't get bandwidth within this window, the packet is dropped.
