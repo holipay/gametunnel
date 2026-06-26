@@ -303,6 +303,16 @@ func (a *App) connectLoop() {
 			return
 		}
 
+		// Check if server sent a fatal kick (wrong password, version mismatch)
+		if tun.cancelKicks.Load() {
+			a.Mu.Lock()
+			a.LastErr = "kicked by server (non-recoverable)"
+			a.Connected = false
+			a.Mu.Unlock()
+			log.Printf("server kick: stopping reconnect")
+			return
+		}
+
 		if err != nil {
 			errMsg := err.Error()
 			a.Mu.Lock()

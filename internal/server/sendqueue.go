@@ -72,7 +72,8 @@ func (sq *sendQueue) send(data []byte, addr *net.UDPAddr, priority sendPriority)
 			sendTimerPool.Put(timer)
 			return true
 		case <-timer.C:
-			sendTimerPool.Put(timer)
+			// Timer fired — do NOT return to pool. A fired timer's Reset
+			// behavior is undefined until Stop+drain. Safer to let GC reclaim.
 			return false
 		}
 	}

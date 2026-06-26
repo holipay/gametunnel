@@ -102,6 +102,7 @@ type Tunnel struct {
 	roomPass       string
 	disconnectOnce atomic.Pointer[sync.Once]
 	sendErrors     atomic.Int64 // send failure counter
+	cancelKicks    atomic.Bool  // true if server sent a fatal kick (wrong password, version mismatch)
 
 	// Client-side send rate limiter (token bucket, per-server)
 	sendLimiter *clientSendLimiter
