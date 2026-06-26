@@ -189,3 +189,14 @@ func (r *Room) getEncodedPeerInfo() []byte {
 	r.peerInfoMu.Unlock()
 	return encoded
 }
+
+// invalidatePeerInfoCache marks peer info as dirty AND clears the encoded
+// cache, so the next getEncodedPeerInfo() call rebuilds from current state.
+// This prevents serving stale peer lists within the 50ms cache TTL window
+// after a client disconnects or a new client joins.
+func (r *Room) invalidatePeerInfoCache() {
+	r.peerInfoDirty.Store(true)
+	r.peerInfoMu.Lock()
+	r.peerInfoEncoded = nil
+	r.peerInfoMu.Unlock()
+}

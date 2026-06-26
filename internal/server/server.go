@@ -15,6 +15,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/holipay/gametunnel/internal/auth"
 	"github.com/holipay/gametunnel/internal/protocol"
 	"github.com/holipay/gametunnel/internal/i18n"
 	"github.com/holipay/gametunnel/internal/netutil"
@@ -297,6 +298,7 @@ func (s *Server) Run(ctx context.Context) {
 	go s.persistLoop(ctx)
 	go s.metricsLoop(ctx)
 	go s.bwCleanupLoop(ctx)
+	go s.keyCacheCleanupLoop(ctx)
 	go s.sendQueue.run(ctx) // priority send queue
 
 	// Start room-specific loops
@@ -377,10 +379,10 @@ func (s *Server) worker(ctx context.Context) {
 // ── Packet Dispatch ────────────────────────────────────────────
 
 func (s *Server) handlePacket(data []byte, from *net.UDPAddr) {
-	msg, err := protocol.DecodeChecked(data)
+	msg, err := protocol.DecodeLenient(data)
 	if err != nil {
 		if errors.Is(err, protocol.ErrUnsupportedVersion) {
-			s.sendKick(from, fmt.Sprintf(
+			s.sendKickCode(from, protocol.KickCodeVersionMismatch, fmt.Sprintf(
 				"Protocol version mismatch: server=%d, please update your client",
 				protocol.ProtocolVersion))
 		}
@@ -485,6 +487,7 @@ func (s *Server) handleRegisterMultiRoom(payload []byte, from *net.UDPAddr) {
 
 // allocateSubnet finds an unused /24 subnet for a new room.
 // Uses 10.10.{room_index}.0/24 starting from 10.10.2.0.
+// Skips subnets that overlap with any local network interface.
 func (s *Server) allocateSubnet() *net.IPNet {
 	// Derive room subnets from the base subnet prefix.
 	// e.g. server -subnet 192.168.1.0/24 → rooms get 192.168.2.0/24, 192.168.3.0/24, ...
@@ -498,6 +501,9 @@ func (s *Server) allocateSubnet() *net.IPNet {
 		return nil
 	}
 
+	// Collect local interface subnets to avoid conflicts
+	localSubnets := s.getLocalSubnets()
+
 	// Find the highest used 3rd octet
 	maxIdx := int(baseIP[2])
 	if maxIdx < 1 {
@@ -509,13 +515,63 @@ func (s *Server) allocateSubnet() *net.IPNet {
 			maxIdx = octet
 		}
 	}
-	nextIdx := maxIdx + 1
-	if nextIdx > 254 {
-		return nil // no more subnets
+
+	// Scan for the next available subnet, skipping those that overlap
+	// with local interfaces or already-used room subnets.
+	for nextIdx := maxIdx + 1; nextIdx <= 254; nextIdx++ {
+		candidate := &net.IPNet{
+			IP:   net.IPv4(baseIP[0], baseIP[1], byte(nextIdx), 0),
+			Mask: net.CIDRMask(24, 32),
+		}
+		if s.subnetOverlapsAny(candidate, localSubnets) {
+			continue
+		}
+		return candidate
 	}
-	ip := net.IPv4(baseIP[0], baseIP[1], byte(nextIdx), 0)
-	mask := net.CIDRMask(24, 32)
-	return &net.IPNet{IP: ip, Mask: mask}
+	return nil // no more subnets
+}
+
+// getLocalSubnets returns all /24+ subnets assigned to local network interfaces.
+func (s *Server) getLocalSubnets() []*net.IPNet {
+	ifaces, err := net.Interfaces()
+	if err != nil {
+		return nil
+	}
+	var subnets []*net.IPNet
+	for _, iface := range ifaces {
+		if iface.Flags&net.FlagUp == 0 || iface.Flags&net.FlagLoopback != 0 {
+			continue
+		}
+		addrs, err := iface.Addrs()
+		if err != nil {
+			continue
+		}
+		for _, addr := range addrs {
+			ipNet, ok := addr.(*net.IPNet)
+			if !ok {
+				continue
+			}
+			ones, bits := ipNet.Mask.Size()
+			if bits == 32 && ones >= 24 {
+				subnets = append(subnets, ipNet)
+			}
+		}
+	}
+	return subnets
+}
+
+// subnetOverlapsAny checks if candidate overlaps with any subnet in the list.
+func (s *Server) subnetOverlapsAny(candidate *net.IPNet, others []*net.IPNet) bool {
+	for _, other := range others {
+		if candidate.IP.Equal(other.IP) {
+			return true
+		}
+		// Check if either network contains the other's IP
+		if candidate.Contains(other.IP) || other.Contains(candidate.IP) {
+			return true
+		}
+	}
+	return false
 }
 
 // ── Keepalive Loop ─────────────────────────────────────────────
@@ -542,7 +598,7 @@ func (s *Server) keepaliveLoop(ctx context.Context) {
 		for _, room := range rooms {
 			changed := room.CleanupStale()
 			if changed {
-				room.peerInfoDirty.Store(true)
+				room.invalidatePeerInfoCache()
 			}
 		}
 
@@ -600,7 +656,11 @@ func (s *Server) sendChecked(typ byte, payload []byte, to *net.UDPAddr) {
 }
 
 func (s *Server) sendKick(to *net.UDPAddr, reason string) {
-	kick := &protocol.KickPayload{Reason: reason}
+	s.sendKickCode(to, protocol.KickCodeNone, reason)
+}
+
+func (s *Server) sendKickCode(to *net.UDPAddr, code protocol.KickCode, reason string) {
+	kick := &protocol.KickPayload{Reason: reason, Code: code}
 	s.sendChecked(protocol.TypeKick, kick.Marshal(), to)
 }
 
@@ -614,6 +674,20 @@ func (s *Server) bwCleanupLoop(ctx context.Context) {
 			return
 		case <-ticker.C:
 			s.bwLimiter.Cleanup(10 * time.Minute)
+		}
+	}
+}
+
+// keyCacheCleanupLoop periodically evicts expired Argon2 derived key entries.
+func (s *Server) keyCacheCleanupLoop(ctx context.Context) {
+	ticker := time.NewTicker(5 * time.Minute)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			auth.CleanupKeyCache()
 		}
 	}
 }

@@ -121,6 +121,21 @@ func DecodeChecked(data []byte) (*Message, error) {
 	return Decode(body)
 }
 
+// DecodeLenient tries DecodeChecked first. If the CRC32 check fails,
+// it falls back to Decode (skipping checksum verification). This supports
+// encrypted packets that omit CRC32 since ChaCha20-Poly1305 AEAD already
+// provides integrity. Old packets with CRC32 still work transparently.
+func DecodeLenient(data []byte) (*Message, error) {
+	msg, err := DecodeChecked(data)
+	if err == nil {
+		return msg, nil
+	}
+	if errors.Is(err, ErrChecksumMismatch) {
+		return Decode(data)
+	}
+	return nil, err
+}
+
 // EncodeChecked is a convenience: Encode + AppendChecksum.
 // Combines into a single allocation to reduce GC pressure on the hot path.
 func EncodeChecked(typ byte, payload []byte) []byte {
