@@ -122,6 +122,23 @@ func (c *Cipher) Encrypt(plaintext []byte) []byte {
 	return out
 }
 
+// EncryptTo encrypts plaintext into dst, appending after existing content.
+// Returns the extended slice. Caller must ensure dst has enough capacity:
+// cap(dst) - len(dst) >= Overhead + len(plaintext) + TagSize.
+// This avoids allocation when the caller provides a pre-sized buffer.
+func (c *Cipher) EncryptTo(dst []byte, plaintext []byte) []byte {
+	if plaintext == nil {
+		return dst
+	}
+	var nonceBuf [NonceSize]byte
+	c.makeNonce(&nonceBuf)
+
+	dst = append(dst, EncVersion)
+	dst = append(dst, nonceBuf[:]...)
+	dst = c.aead.Seal(dst, nonceBuf[:], plaintext, nil)
+	return dst
+}
+
 // Decrypt decrypts data produced by Encrypt.
 // Input format: [encVersion(1)] [nonce(12)] [ciphertext+tag(N+16)].
 // Returns the original plaintext or an error.
