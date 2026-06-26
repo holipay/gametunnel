@@ -15,15 +15,12 @@ import (
 )
 
 // connIPKey is a fixed-size key for per-IP connection counting.
-// Uses the raw 4-byte IPv4 address to avoid string allocation per packet.
-type connIPKey [4]byte
+// Uses 16-byte IP to support both IPv4 (as v4-in-v6 mapped) and IPv6 addresses.
+type connIPKey [16]byte
 
 func addrToConnIPKey(addr *net.UDPAddr) connIPKey {
-	ip4 := addr.IP.To4()
 	var k connIPKey
-	if ip4 != nil {
-		copy(k[:], ip4)
-	}
+	copy(k[:], addr.IP.To16())
 	return k
 }
 
