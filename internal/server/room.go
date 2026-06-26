@@ -327,3 +327,28 @@ func (r *Room) ClientCount() int {
 	defer r.mu.RUnlock()
 	return len(r.clients)
 }
+
+// notifyShutdown sends a disconnect notification to all connected clients.
+// Called during server shutdown so clients can detect the disconnection
+// immediately instead of waiting for the keepalive timeout (30s).
+func (r *Room) notifyShutdown() {
+	r.mu.RLock()
+	var targets [maxInlineTargets]*net.UDPAddr
+	n := 0
+	for _, c := range r.clients {
+		if c.PublicAddr != nil && c.auth == authNone {
+			targets[n] = c.PublicAddr
+			n++
+		}
+	}
+	r.mu.RUnlock()
+
+	if n == 0 {
+		return
+	}
+	kick := &protocol.KickPayload{Reason: "server shutdown"}
+	data := protocol.EncodeChecked(protocol.TypeKick, kick.Marshal())
+	for i := 0; i < n; i++ {
+		r.sendCheckedRaw(data, targets[i])
+	}
+}

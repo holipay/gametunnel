@@ -347,9 +347,12 @@ func (s *Server) Run(ctx context.Context) {
 }
 
 // Close shuts down the server and all room background goroutines.
+// Sends disconnect notifications to all connected clients before closing.
 func (s *Server) Close() error {
+	// Notify all clients before shutting down
 	s.roomMu.RLock()
 	for _, room := range s.rooms {
+		room.notifyShutdown()
 		room.Stop()
 	}
 	s.roomMu.RUnlock()
