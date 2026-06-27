@@ -490,14 +490,18 @@ func (s *Server) handleRegisterMultiRoom(payload []byte, from *net.UDPAddr) {
 
 	room.HandlePacket(protocol.TypeRegister, payload, from)
 
-	// If client was registered (has a client entry), add to addrToRoom
+	// If client was registered (has a client entry), add to addrToRoom.
+	// Release room.mu before acquiring s.roomMu to avoid ABBA deadlock
+	// with keepaliveLoop's multi-room cleanup.
 	room.mu.RLock()
-	if c := room.addrMap[fromKey]; c != nil {
+	registered := room.addrMap[fromKey] != nil
+	room.mu.RUnlock()
+
+	if registered {
 		s.roomMu.Lock()
 		s.addrToRoom[fromKey] = room
 		s.roomMu.Unlock()
 	}
-	room.mu.RUnlock()
 }
 
 // allocateSubnet finds an unused /24 subnet for a new room.
@@ -620,37 +624,38 @@ func (s *Server) keepaliveLoop(ctx context.Context) {
 		// Clean up stale addrToRoom entries in multi-room mode.
 		// When clients disconnect, the room removes from addrMap but
 		// addrToRoom is only cleaned here to avoid cross-package coupling.
+		//
+		// Lock order: we NEVER hold s.roomMu while acquiring room.mu,
+		// and vice versa. Both are acquired/released sequentially per entry
+		// to avoid ABBA deadlock with handleRegisterMultiRoom.
 		if s.multiRoom {
-			// Collect stale keys under s.roomMu.RLock to minimize lock time,
-			// then clean up under s.roomMu.Lock without holding room.mu.
-			// This avoids ABBA deadlock with handleRegisterMultiRoom which
-			// acquires room.mu.RLock before s.roomMu.Lock.
 			s.roomMu.RLock()
-			type staleEntry struct {
-				addrKey rateKey
-				room    *Room
-			}
-			var stale []staleEntry
-			for addrKey, room := range s.addrToRoom {
-				room.mu.RLock()
-				c := room.addrMap[addrKey]
-				room.mu.RUnlock()
-				if c == nil {
-					stale = append(stale, staleEntry{addrKey: addrKey, room: room})
-				}
+			keys := make([]rateKey, 0, len(s.addrToRoom))
+			for k := range s.addrToRoom {
+				keys = append(keys, k)
 			}
 			s.roomMu.RUnlock()
 
+			var stale []rateKey
+			for _, k := range keys {
+				s.roomMu.RLock()
+				room := s.addrToRoom[k]
+				s.roomMu.RUnlock()
+				if room == nil {
+					continue
+				}
+				room.mu.RLock()
+				c := room.addrMap[k]
+				room.mu.RUnlock()
+				if c == nil {
+					stale = append(stale, k)
+				}
+			}
+
 			if len(stale) > 0 {
 				s.roomMu.Lock()
-				for _, e := range stale {
-					// Re-check under write lock: room may have been re-populated
-					e.room.mu.RLock()
-					c := e.room.addrMap[e.addrKey]
-					e.room.mu.RUnlock()
-					if c == nil {
-						delete(s.addrToRoom, e.addrKey)
-					}
+				for _, k := range stale {
+					delete(s.addrToRoom, k)
 				}
 				s.roomMu.Unlock()
 			}
