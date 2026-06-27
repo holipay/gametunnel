@@ -394,6 +394,17 @@ func (s *Server) worker(ctx context.Context) {
 // ── Packet Dispatch ────────────────────────────────────────────
 
 func (s *Server) handlePacket(data []byte, from *net.UDPAddr) {
+	// Fast path: encrypted data packets have no CRC32 — skip the wasted
+	// compute by decoding directly. The AEAD in HandlePacket provides
+	// integrity verification instead.
+	if s.defaultRoom != nil && s.defaultRoom.roomPass != "" && len(data) > 1 && data[1] == protocol.TypeData {
+		msg, _ := protocol.Decode(data)
+		if msg != nil {
+			s.defaultRoom.HandlePacket(msg.Type, msg.Payload, from)
+			return
+		}
+	}
+
 	msg, err := protocol.DecodeLenient(data)
 	if err != nil {
 		if errors.Is(err, protocol.ErrUnsupportedVersion) {

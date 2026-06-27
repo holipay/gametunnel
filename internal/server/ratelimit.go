@@ -22,7 +22,14 @@ type rateKey struct {
 
 func addrToRateKey(addr *net.UDPAddr) rateKey {
 	var k rateKey
-	copy(k.IP[:], addr.IP.To16())
+	if len(addr.IP) == net.IPv4len {
+		// v4-in-v6: 0:0:0:0:0:ffff:a.b.c.d
+		k.IP[10] = 0xff
+		k.IP[11] = 0xff
+		copy(k.IP[12:16], addr.IP)
+	} else {
+		copy(k.IP[:], addr.IP)
+	}
 	k.Port = uint16(addr.Port)
 	return k
 }

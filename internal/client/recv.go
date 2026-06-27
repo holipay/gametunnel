@@ -192,18 +192,14 @@ func (t *Tunnel) handlePeerInfo(ctx context.Context, payload []byte) {
 
 	t.mu.Lock()
 
-	// Save old peer map for lookups before clearing/replacing.
-	// We reuse the old map's memory to avoid per-PeerInfo allocation,
-	// but we MUST keep a reference to the old map for the lookup loop:
-	// clearing the map first then looking up in t.peers[key] always fails.
+	// Build a fresh map instead of clearing t.peers in-place.
+	// oldPeers and t.peers MUST be different maps so that looking
+	// up existing peers in oldPeers works correctly.
 	oldPeers := t.peers
 	if oldPeers == nil {
-		t.peers = make(map[[16]byte]*Peer, len(info.Peers))
-	} else {
-		for k := range oldPeers {
-			delete(oldPeers, k)
-		}
+		oldPeers = make(map[[16]byte]*Peer)
 	}
+	t.peers = make(map[[16]byte]*Peer, len(info.Peers))
 	for _, entry := range info.Peers {
 		// Skip self — server sends full list including this client
 		if entry.VirtualIP.Equal(t.virtualIP) {
