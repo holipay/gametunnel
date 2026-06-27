@@ -86,6 +86,10 @@ func ValidateServerAddr(addr string) error {
 		if strings.Count(addr, ":") >= 2 && !strings.Contains(addr, "[") {
 			return fmt.Errorf("IPv6 address needs brackets: [%s]:4700", addr)
 		}
+		// IPv6 with brackets but missing port
+		if strings.HasPrefix(addr, "[") && strings.Contains(addr, "]") && !strings.Contains(addr, "]:") {
+			return fmt.Errorf("IPv6 address missing port: use %s:4700", addr)
+		}
 		// Missing port — suggest adding :4700
 		if !strings.Contains(addr, ":") {
 			return fmt.Errorf("server address %q missing port (use %s:4700)", addr, addr)
@@ -122,7 +126,14 @@ func SaveConfig(cfg *Config) error {
 	var b strings.Builder
 	fmt.Fprintln(&b, t.CfgHeader)
 	fmt.Fprintln(&b, t.CfgServerHint)
-	fmt.Fprintf(&b, "server=%s\n", cfg.ServerAddr)
+	// Split host and port for cleaner IPv6 display
+	host, port, err := net.SplitHostPort(cfg.ServerAddr)
+	if err == nil {
+		fmt.Fprintf(&b, "server=%s\n", host)
+		fmt.Fprintf(&b, "port=%s\n", port)
+	} else {
+		fmt.Fprintf(&b, "server=%s\n", cfg.ServerAddr)
+	}
 	fmt.Fprintln(&b, t.CfgNameHint)
 	fmt.Fprintf(&b, "name=%s\n", cfg.PlayerName)
 	fmt.Fprintln(&b, t.CfgRoomHint)
@@ -153,6 +164,7 @@ func loadINI(path string, cfg *Config) bool {
 	if err != nil {
 		return false
 	}
+	var portOnly string
 	for _, line := range strings.Split(string(data), "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" || strings.HasPrefix(line, "#") {
@@ -167,6 +179,8 @@ func loadINI(path string, cfg *Config) bool {
 		switch key {
 		case "server":
 			cfg.ServerAddr = value
+		case "port":
+			portOnly = value
 		case "name":
 			if value != "" {
 				cfg.PlayerName = value
@@ -186,6 +200,17 @@ func loadINI(path string, cfg *Config) bool {
 			if _, err := fmt.Sscanf(value, "%d", &v); err == nil && v >= 576 && v <= 9000 {
 				cfg.MTU = v
 			}
+		}
+	}
+	// Combine server and port if both are specified separately
+	if cfg.ServerAddr != "" && portOnly != "" {
+		host, _, err := net.SplitHostPort(cfg.ServerAddr)
+		if err != nil {
+			// Server address has no port yet — append it
+			cfg.ServerAddr = net.JoinHostPort(cfg.ServerAddr, portOnly)
+		} else {
+			// Server address already has port — keep it
+			_ = host
 		}
 	}
 	return true

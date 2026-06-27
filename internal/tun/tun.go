@@ -26,6 +26,7 @@ type Device struct {
 	readPackets     [1][]byte
 	writePackets    [1][]byte
 	physicalGateway string
+	physicalIfIdx   int // physical NIC interface index for IPv6 route cleanup
 }
 
 func New(cfg Config) (*Device, error) {
