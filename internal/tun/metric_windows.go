@@ -143,18 +143,30 @@ func findAdapter(name string) (ifIndex uint32, luid uint64, err error) {
 	return 0, 0, fmt.Errorf("adapter %q not found", name)
 }
 
-// checkAutoMetricDisabled 检查网卡的 AutomaticMetric 是否已禁用。
-// 通过 PowerShell 检查，因为 IP Helper API 的 GetIpInterfaceEntry
-// 在 wintun 虚拟适配器上返回的 UseAutomaticMetric 字段不可靠。
+// checkAutoMetricDisabled 检查网卡的 AutomaticMetric 是否已禁用，
+// 或者 metric 是否已手动设为 1。两者满足其一即可保证广播路由优先走 TUN。
 func checkAutoMetricDisabled(name string) bool {
+	// 方法 1: 检查 AutomaticMetric 是否已禁用
 	out, err := runCmdOutput("powershell", "-NoProfile", "-Command",
 		fmt.Sprintf("(Get-NetIPInterface -InterfaceAlias '%s' -ErrorAction SilentlyContinue).AutomaticMetric", name))
-	if err != nil {
-		return false
+	if err == nil {
+		out = strings.TrimSpace(strings.ToLower(out))
+		if out == "" || out == "disabled" || out == "0" {
+			return true
+		}
 	}
-	// 输出为空或 "Disabled" 表示已禁用
-	out = strings.TrimSpace(strings.ToLower(out))
-	return out == "" || out == "disabled" || out == "0"
+
+	// 方法 2: 检查 InterfaceMetric 是否已设为 1（netsh 设置的值）
+	out2, err2 := runCmdOutput("powershell", "-NoProfile", "-Command",
+		fmt.Sprintf("(Get-NetIPInterface -InterfaceAlias '%s' -ErrorAction SilentlyContinue).InterfaceMetric", name))
+	if err2 == nil {
+		out2 = strings.TrimSpace(out2)
+		if out2 == "1" {
+			return true
+		}
+	}
+
+	return false
 }
 
 // disableAllPhysicalAutoMetric 枚举所有活跃物理网卡并禁用其 AutomaticMetric。
