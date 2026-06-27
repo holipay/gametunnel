@@ -55,24 +55,25 @@ type ipAdapterAddresses struct {
 	OperStatus      uint32 // 1 = IfOperStatusUp
 }
 
-// setMetricAPI 通过 netsh 禁用指定网卡的 AutomaticMetric 并设置 metric 值。
+// setMetricAPI 通过 PowerShell 禁用指定网卡的 AutomaticMetric 并设置 metric 值。
 //
-// 直接调用 SetIpInterfaceEntry 对 wintun 虚拟适配器返回 ret=87，
-// 因此改用 netsh 命令行方式，经测试可靠工作。
+// netsh interface ip set interface 对 wintun 虚拟适配器无效，
+// 必须用 PowerShell Set-NetIPInterface 才能真正生效。
 func setMetricAPI(ifIndex uint32, luid uint64) error {
-	// 通过 ifIndex 找到接口名称
 	name, err := findAdapterNameByIndex(ifIndex)
 	if err != nil {
 		return fmt.Errorf("find adapter name: %w", err)
 	}
 
-	// netsh interface ip set interface "name" metric=1
-	if err := RunCmd("netsh", "interface", "ip", "set", "interface",
-		fmt.Sprintf("name=%s", name), "metric=1"); err != nil {
-		return fmt.Errorf("netsh set metric: %w", err)
+	// PowerShell: 禁用 AutomaticMetric + 设置 metric=1
+	ps := fmt.Sprintf(
+		"Set-NetIPInterface -InterfaceAlias '%s' -AutomaticMetric Disabled -InterfaceMetric 1 -ErrorAction Stop",
+		name)
+	if err := RunCmd("powershell", "-NoProfile", "-Command", ps); err != nil {
+		return fmt.Errorf("Set-NetIPInterface: %w", err)
 	}
 
-	log.Printf("[tun] AutomaticMetric disabled via netsh: %s (idx=%d)", name, ifIndex)
+	log.Printf("[tun] metric=1 set via PowerShell: %s (idx=%d)", name, ifIndex)
 	return nil
 }
 
@@ -143,17 +144,23 @@ func findAdapter(name string) (ifIndex uint32, luid uint64, err error) {
 	return 0, 0, fmt.Errorf("adapter %q not found", name)
 }
 
-// checkAutoMetricDisabled 检查网卡的 metric 是否已设为 1。
-// 使用 netsh 查询（与设置命令一致），比 PowerShell 更可靠。
+// checkAutoMetricDisabled 检查网卡的 AutomaticMetric 是否已禁用且 metric=1。
 func checkAutoMetricDisabled(name string) bool {
-	// 通过 netsh 查看接口配置，检查 metric 是否为 1
-	out, err := runCmdOutput("netsh", "interface", "ip", "show", "interface", name)
-	if err != nil {
-		return false
+	// 检查 AutomaticMetric 是否已禁用
+	out1, err1 := runCmdOutput("powershell", "-NoProfile", "-Command",
+		fmt.Sprintf("(Get-NetIPInterface -InterfaceAlias '%s' -ErrorAction SilentlyContinue).AutomaticMetric", name))
+	if err1 == nil {
+		out1 = strings.TrimSpace(strings.ToLower(out1))
+		if out1 == "disabled" || out1 == "0" {
+			// 同时检查 metric 是否为 1
+			out2, err2 := runCmdOutput("powershell", "-NoProfile", "-Command",
+				fmt.Sprintf("(Get-NetIPInterface -InterfaceAlias '%s' -ErrorAction SilentlyContinue).InterfaceMetric", name))
+			if err2 == nil && strings.TrimSpace(out2) == "1" {
+				return true
+			}
+		}
 	}
-	// netsh 输出中查找 "metric=1" 或 "Met=1"
-	lower := strings.ToLower(out)
-	return strings.Contains(lower, "metric=1") || strings.Contains(lower, "met=1") || strings.Contains(lower, " 1 ")
+	return false
 }
 
 // disableAllPhysicalAutoMetric 枚举所有活跃物理网卡并禁用其 AutomaticMetric。
