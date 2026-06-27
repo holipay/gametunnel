@@ -63,30 +63,6 @@ type Strings struct {
 	StatusDroppedPkts string // "丢弃包"
 	StatusSendErrors  string // "发送错误"
 
-	// ── Client Tray ──
-	TrayTitle         string // "GameTunnel"
-	TrayTooltip       string // "GameTunnel - 未连接"
-	TrayStatusOffline string // "🔴 未连接"
-	TrayConnect       string // "⚡ 连接"
-	TrayConnectDesc   string // "连接到服务器"
-	TrayDisconnect    string // "🔌 断开"
-	TrayDisconnectDesc string // "断开当前连接"
-	TraySettings      string // "⚙ 设置..."
-	TraySettingsDesc  string // "配置服务器和玩家信息"
-	TrayViewLog       string // "📄 查看日志"
-	TrayOpenLogFile   string // "打开日志文件"
-	TrayQuit          string // "❌ 退出"
-	TrayQuitDesc      string // "退出 GameTunnel"
-	TrayConnecting    string // "🟡 连接中..."
-	TrayTooltipConn   string // "GameTunnel - 连接中..."
-	TrayStatusOnline  string // "🟢 %s · %d人"
-	TrayTooltipOnline string // "GameTunnel - %s · %d人在线"
-	TrayCfgUpdated    string // "[tray] 配置已更新"
-	TrayNoServer      string // "请先配置服务器地址"
-	TrayStatusError   string // "🔴 连接失败"
-	TrayEditConfig    string // "📝 编辑配置文件"
-	TrayEditConfigDesc string // "用记事本打开配置文件"
-
 	// ── Client Dialog ──
 	DlgTitle       string // "GameTunnel 设置"
 	DlgServerAddr  string // "服务器地址:"
@@ -101,6 +77,7 @@ type Strings struct {
 	DlgConnect     string // "连接"
 	DlgShowPass    string // "显示密码"
 	DlgInvalidAddr string // "服务器地址格式不正确，应为 IP:端口"
+	DlgNameEmpty   string // "玩家名称不能为空"
 
 	// ── Client Web UI ──
 	WebUITitle        string // "GameTunnel"
@@ -123,16 +100,6 @@ type Strings struct {
 	AppSaveFail    string // "[app] 保存配置失败: %v"
 	AppDisconnected string // "[app] 连接断开"
 	AppDisconnectErr string // "[app] 连接断开: %v"
-
-	// ── Connection Error Dialog ──
-	ConnErrTitle     string // "连接失败"
-	ConnErrRetry     string // "重试"
-	ConnErrSettings  string // "修改设置"
-	ConnErrStop      string // "停止连接"
-	ConnErrBalloon   string // "GameTunnel 已启动，点击右下角托盘图标进行设置"
-	ConnErrBalloonTitle string // "GameTunnel"
-	FirstRunBalloon  string // "GameTunnel 已启动！请点击右下角托盘图标进行首次设置"
-	DlgNameEmpty     string // "玩家名称不能为空"
 
 	// ── Client Run ──
 	RunStartup string // "=== GameTunnel 启动 ==="
@@ -247,29 +214,6 @@ var zhStrings = &Strings{
 	StatusDroppedPkts: "丢弃包",
 	StatusSendErrors:  "发送错误",
 
-	TrayTitle:          "GameTunnel",
-	TrayTooltip:        "GameTunnel - 未连接",
-	TrayStatusOffline:  "🔴 未连接",
-	TrayConnect:        "⚡ 连接",
-	TrayConnectDesc:    "连接到服务器",
-	TrayDisconnect:     "🔌 断开",
-	TrayDisconnectDesc: "断开当前连接",
-	TraySettings:       "⚙ 设置...",
-	TraySettingsDesc:   "配置服务器和玩家信息",
-	TrayViewLog:        "📄 查看日志",
-	TrayOpenLogFile:    "打开日志文件",
-	TrayQuit:           "❌ 退出",
-	TrayQuitDesc:       "退出 GameTunnel",
-	TrayConnecting:     "🟡 连接中...",
-	TrayTooltipConn:    "GameTunnel - 连接中...",
-	TrayStatusOnline:   "🟢 %s · %d人",
-	TrayTooltipOnline:  "GameTunnel - %s · %d人在线",
-	TrayCfgUpdated:     "[tray] 配置已更新",
-	TrayNoServer:       "请先配置服务器地址",
-	TrayStatusError:    "🔴 连接失败",
-	TrayEditConfig:     "📝 编辑配置文件",
-	TrayEditConfigDesc: "用记事本打开配置文件",
-
 	DlgTitle:      "GameTunnel 设置",
 	DlgServerAddr: "服务器地址:",
 	DlgPlayerName: "玩家名称:",
@@ -304,13 +248,6 @@ var zhStrings = &Strings{
 	AppDisconnected:  "[app] 连接断开",
 	AppDisconnectErr: "[app] 连接断开: %v",
 
-	ConnErrTitle:        "连接失败",
-	ConnErrRetry:        "重试",
-	ConnErrSettings:     "修改设置",
-	ConnErrStop:         "停止连接",
-	ConnErrBalloon:      "GameTunnel 已启动，点击右下角托盘图标进行设置",
-	ConnErrBalloonTitle: "GameTunnel",
-	FirstRunBalloon:     "GameTunnel 已启动！请点击右下角托盘图标进行首次设置",
 	DlgNameEmpty:        "玩家名称不能为空",
 
 	RunStartup: "=== GameTunnel 启动 ===",
@@ -422,29 +359,6 @@ var enStrings = &Strings{
 	StatusDroppedPkts: "Dropped Pkts",
 	StatusSendErrors:  "Send Errors",
 
-	TrayTitle:          "GameTunnel",
-	TrayTooltip:        "GameTunnel - Disconnected",
-	TrayStatusOffline:  "🔴 Disconnected",
-	TrayConnect:        "⚡ Connect",
-	TrayConnectDesc:    "Connect to server",
-	TrayDisconnect:     "🔌 Disconnect",
-	TrayDisconnectDesc: "Disconnect current session",
-	TraySettings:       "⚙ Settings...",
-	TraySettingsDesc:   "Configure server and player info",
-	TrayViewLog:        "📄 View Log",
-	TrayOpenLogFile:    "Open log file",
-	TrayQuit:           "❌ Quit",
-	TrayQuitDesc:       "Quit GameTunnel",
-	TrayConnecting:     "🟡 Connecting...",
-	TrayTooltipConn:    "GameTunnel - Connecting...",
-	TrayStatusOnline:   "🟢 %s · %d online",
-	TrayTooltipOnline:  "GameTunnel - %s · %d online",
-	TrayCfgUpdated:     "[tray] Config updated",
-	TrayNoServer:       "Please configure server address first",
-	TrayStatusError:    "🔴 Connection failed",
-	TrayEditConfig:     "📝 Edit Config",
-	TrayEditConfigDesc: "Open config file in Notepad",
-
 	DlgTitle:      "GameTunnel Settings",
 	DlgServerAddr: "Server:",
 	DlgPlayerName: "Name:",
@@ -479,13 +393,6 @@ var enStrings = &Strings{
 	AppDisconnected:  "[app] Disconnected",
 	AppDisconnectErr: "[app] Disconnected: %v",
 
-	ConnErrTitle:        "Connection Failed",
-	ConnErrRetry:        "Retry",
-	ConnErrSettings:     "Edit Settings",
-	ConnErrStop:         "Stop",
-	ConnErrBalloon:      "GameTunnel is running. Click the tray icon in the bottom-right to set up.",
-	ConnErrBalloonTitle: "GameTunnel",
-	FirstRunBalloon:     "GameTunnel started! Click the tray icon in the bottom-right for first-time setup.",
 	DlgNameEmpty:        "Player name cannot be empty",
 
 	RunStartup: "=== GameTunnel Started ===",
