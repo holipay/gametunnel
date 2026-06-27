@@ -184,7 +184,16 @@ func (t *Tunnel) Connect(ctx context.Context, serverAddr string, mtu int, newTUN
 	if t.conn != nil {
 		t.conn.Close()
 	}
-	conn, err := net.ListenUDP("udp", &net.UDPAddr{})
+	// Bind to appropriate address family based on server address.
+	// IPv6 server → bind [::] (dual-stack on most systems)
+	// IPv4 server → bind 0.0.0.0
+	var bindAddr *net.UDPAddr
+	if sAddr.IP.To4() == nil {
+		bindAddr = &net.UDPAddr{IP: net.IPv6zero, Port: 0}
+	} else {
+		bindAddr = &net.UDPAddr{}
+	}
+	conn, err := net.ListenUDP("udp", bindAddr)
 	if err != nil {
 		return fmt.Errorf("%s", i18n.Format(i18n.T().ErrBindUDP, err))
 	}

@@ -249,6 +249,23 @@ func (r *Room) handleAuthResponse(payload []byte, from *net.UDPAddr) {
 	fromKey := addrToRateKey(from)
 	c := r.addrMap[fromKey]
 
+	// If direct address lookup fails (NAT rebinding between register and
+	// auth response), scan pending auth clients by username+roomID.
+	var oldKey rateKey
+	var foundByScan bool
+	if c == nil || c.auth != authChallengeSent {
+		for key, client := range r.addrMap {
+			if client.auth == authChallengeSent &&
+				client.authRoomID == resp.RoomID &&
+				client.Username == resp.Username {
+				c = client
+				oldKey = key
+				foundByScan = true
+				break
+			}
+		}
+	}
+
 	if c == nil || c.auth != authChallengeSent {
 		// If c == nil, the entry was already cleaned up (e.g. by CleanupStale
 		// which already rolled back ipConnCount). Don't double-decrement.
@@ -265,7 +282,11 @@ func (r *Room) handleAuthResponse(payload []byte, from *net.UDPAddr) {
 	}
 
 	if time.Since(c.challengeAt) > 15*time.Second {
-		delete(r.addrMap, fromKey)
+		deleteKey := fromKey
+		if foundByScan {
+			deleteKey = oldKey
+		}
+		delete(r.addrMap, deleteKey)
 		if r.pendingAuth > 0 {
 			r.pendingAuth--
 		}
@@ -281,7 +302,11 @@ func (r *Room) handleAuthResponse(payload []byte, from *net.UDPAddr) {
 
 	authKey, err := r.getAuthKey(c.authRoomID)
 	if err != nil || authKey == nil {
-		delete(r.addrMap, fromKey)
+		deleteKey := fromKey
+		if foundByScan {
+			deleteKey = oldKey
+		}
+		delete(r.addrMap, deleteKey)
 		if r.pendingAuth > 0 {
 			r.pendingAuth--
 		}
@@ -295,8 +320,15 @@ func (r *Room) handleAuthResponse(payload []byte, from *net.UDPAddr) {
 		return
 	}
 
-	if !auth.VerifyHMAC(authKey, resp.HMAC, c.challenge, resp.RoomID, resp.Username, from) {
-		delete(r.addrMap, fromKey)
+	// Use the address from registration (c.PublicAddr) for HMAC verification,
+	// NOT the auth response source address. NAT rebinding may have changed
+	// the client's observed address between registration and auth response.
+	if !auth.VerifyHMAC(authKey, resp.HMAC, c.challenge, resp.RoomID, resp.Username, c.PublicAddr) {
+		deleteKey := fromKey
+		if foundByScan {
+			deleteKey = oldKey
+		}
+		delete(r.addrMap, deleteKey)
 		if r.pendingAuth > 0 {
 			r.pendingAuth--
 		}
@@ -313,9 +345,19 @@ func (r *Room) handleAuthResponse(payload []byte, from *net.UDPAddr) {
 	}
 
 	log.Printf(t.LogAuthPass, resp.Username, from)
-	delete(r.addrMap, fromKey)
+	deleteKey := fromKey
+	if foundByScan {
+		deleteKey = oldKey
+	}
+	delete(r.addrMap, deleteKey)
 	if r.pendingAuth > 0 {
 		r.pendingAuth--
+	}
+
+	// Update address if NAT rebinding occurred
+	if foundByScan {
+		c.PublicAddr = from
+		r.addrMap[fromKey] = c
 	}
 
 	if len(r.clients) >= r.maxPlayers {

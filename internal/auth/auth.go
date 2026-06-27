@@ -33,6 +33,13 @@ const HMACSize = 32
 // Entries older than this are evicted on access or during periodic cleanup.
 const keyCacheTTL = 10 * time.Minute
 
+// cacheKey is a composite key for the derived key cache, avoiding string
+// concatenation allocation on every DeriveKey call.
+type cacheKey struct {
+	password string
+	roomID   string
+}
+
 // cachedKey holds a derived key with its creation time for TTL-based eviction.
 type cachedKey struct {
 	key       []byte
@@ -45,11 +52,11 @@ type cachedKey struct {
 // CleanupKeyCache handles entries that are never accessed again.
 var keyCache struct {
 	sync.Mutex
-	entries map[string]cachedKey
+	entries map[cacheKey]cachedKey
 }
 
 func init() {
-	keyCache.entries = make(map[string]cachedKey)
+	keyCache.entries = make(map[cacheKey]cachedKey)
 }
 
 // DeriveKey derives a 32-byte HMAC key from the room password using Argon2id.
@@ -61,33 +68,33 @@ func DeriveKey(password, roomID string) ([]byte, error) {
 		return nil, nil
 	}
 
-	cacheKey := password + ":" + roomID
+	ck := cacheKey{password: password, roomID: roomID}
 	now := time.Now()
 
 	keyCache.Lock()
-	if entry, ok := keyCache.entries[cacheKey]; ok {
+	if entry, ok := keyCache.entries[ck]; ok {
 		if now.Sub(entry.createdAt) < keyCacheTTL {
 			keyCache.Unlock()
 			return entry.key, nil
 		}
-		delete(keyCache.entries, cacheKey)
+		delete(keyCache.entries, ck)
 	}
 	keyCache.Unlock()
 
 	// Argon2id params: 19 MiB memory, 2 iterations, 1 parallelism
 	// On modern hardware ~200ms; may be slower on low-end ARM devices (OpenWrt routers).
 	salt := []byte("GameTunnel:" + roomID)
-	key := argon2.IDKey([]byte(password), salt, 2, 19*1024, 1, KeySize)
-	if len(key) != KeySize {
-		return nil, fmt.Errorf("argon2: key length mismatch: got %d, want %d", len(key), KeySize)
+	derived := argon2.IDKey([]byte(password), salt, 2, 19*1024, 1, KeySize)
+	if len(derived) != KeySize {
+		return nil, fmt.Errorf("argon2: key length mismatch: got %d, want %d", len(derived), KeySize)
 	}
 
 	// Cache a copy so the caller can't mutate the cached value
 	cached := make([]byte, KeySize)
-	copy(cached, key)
+	copy(cached, derived)
 
 	keyCache.Lock()
-	keyCache.entries[cacheKey] = cachedKey{key: cached, createdAt: now}
+	keyCache.entries[ck] = cachedKey{key: cached, createdAt: now}
 	keyCache.Unlock()
 
 	return cached, nil
