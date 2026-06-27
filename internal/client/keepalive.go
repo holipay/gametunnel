@@ -43,6 +43,19 @@ const holePunchBackoff = 5 * time.Second
 // doesn't silently expire and fall back to relay.
 const p2pKeepaliveInterval = 15 * time.Second
 
+// sendHolePunchRelay sends a TypeHolePunch to the server to request
+// server-relayed hole punch signaling. The server forwards the signal
+// to the destination peer, who then punches back directly. This is
+// essential for IPv6 peers where firewalls may block initial direct
+// packets but allow responses after the peer initiates its own flow.
+func (t *Tunnel) sendHolePunchRelay(peerIP net.IP) {
+	if peerIP == nil || len(peerIP.To4()) != 4 {
+		return
+	}
+	packet := protocol.EncodeChecked(protocol.TypeHolePunch, peerIP.To4())
+	t.sendCtrl(packet, t.serverAddr)
+}
+
 // startHolePunch initiates a multi-phase hole punch to a peer.
 // It runs until all phases complete or the context is cancelled.
 func (t *Tunnel) startHolePunch(ctx context.Context, peerIP net.IP) {
@@ -276,6 +289,7 @@ func (t *Tunnel) retryFailedHolePunches(ctx context.Context) {
 	log.Printf(i18n.T().LogRetryPunch, len(retryPeers))
 	for _, peerIP := range retryPeers {
 		go t.startHolePunch(ctx, peerIP)
+		t.sendHolePunchRelay(peerIP)
 	}
 }
 

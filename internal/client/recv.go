@@ -302,10 +302,12 @@ func (t *Tunnel) handlePeerInfo(ctx context.Context, payload []byte) {
 	// Launch hole punches outside the lock to avoid holding it during goroutine creation
 	for _, peerIP := range newPeerIPs {
 		go t.startHolePunch(ctx, peerIP)
+		t.sendHolePunchRelay(peerIP)
 	}
 	// Re-punch peers whose address changed (NAT rebinding)
 	for _, peerIP := range changedPeerIPs {
 		go t.startHolePunch(ctx, peerIP)
+		t.sendHolePunchRelay(peerIP)
 	}
 }
 
