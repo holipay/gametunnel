@@ -21,7 +21,7 @@ const ProtocolVersion byte = 1
 // AppVersion is the application version encoded as (major << 8 | minor).
 // Used for client-server compatibility negotiation during handshake.
 // v1.3 = 0x0103 = 259
-const AppVersion uint16 = 0x0103
+const AppVersion uint16 = 0x0104
 
 // HeaderLen is the fixed header size: version(1) + type(1).
 const HeaderLen = 2
