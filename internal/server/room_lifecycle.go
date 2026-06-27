@@ -11,10 +11,11 @@ import (
 // ── KeepAlive / Disconnect ─────────────────────────────────────
 
 func (r *Room) handleKeepAlive(from *net.UDPAddr) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if c := r.addrMap[addrToRateKey(from)]; c != nil {
-		c.LastSeen = time.Now()
+	r.mu.RLock()
+	c := r.addrMap[addrToRateKey(from)]
+	r.mu.RUnlock()
+	if c != nil {
+		c.SetLastSeen(time.Now())
 	}
 }
 
@@ -32,25 +33,13 @@ func (r *Room) handleDisconnect(from *net.UDPAddr) {
 			r.pendingAuth--
 		}
 		if c.PublicAddr != nil {
-			ip := addrToConnIPKey(c.PublicAddr)
-			r.ipConnMu.Lock()
-			r.ipConnCount[ip]--
-			if r.ipConnCount[ip] <= 0 {
-				delete(r.ipConnCount, ip)
-			}
-			r.ipConnMu.Unlock()
+			r.decrementIPConnCount(addrToConnIPKey(c.PublicAddr))
 		}
 	} else {
 		r.markIPFree(c.VirtualIP)
 		delete(r.clients, ipKey(c.VirtualIP))
 		if c.PublicAddr != nil {
-			ip := addrToConnIPKey(c.PublicAddr)
-			r.ipConnMu.Lock()
-			r.ipConnCount[ip]--
-			if r.ipConnCount[ip] <= 0 {
-				delete(r.ipConnCount, ip)
-			}
-			r.ipConnMu.Unlock()
+			r.decrementIPConnCount(addrToConnIPKey(c.PublicAddr))
 		}
 	}
 	delete(r.addrMap, fromKey)
@@ -82,7 +71,7 @@ func (r *Room) CleanupStale() bool {
 	var staleClients []staleClient
 	var staleAuths []staleAuth
 	for key, c := range r.clients {
-		if now.Sub(c.LastSeen) > 30*time.Second {
+		if now.Sub(c.GetLastSeen()) > 30*time.Second {
 			staleClients = append(staleClients, staleClient{key: key, c: c})
 		}
 	}
@@ -106,13 +95,7 @@ func (r *Room) CleanupStale() bool {
 			delete(r.clients, sc.key)
 			if sc.c.PublicAddr != nil {
 				delete(r.addrMap, addrToRateKey(sc.c.PublicAddr))
-				ip := addrToConnIPKey(sc.c.PublicAddr)
-				r.ipConnMu.Lock()
-				r.ipConnCount[ip]--
-				if r.ipConnCount[ip] <= 0 {
-					delete(r.ipConnCount, ip)
-				}
-				r.ipConnMu.Unlock()
+				r.decrementIPConnCount(addrToConnIPKey(sc.c.PublicAddr))
 			}
 			changed = true
 		}
@@ -124,13 +107,7 @@ func (r *Room) CleanupStale() bool {
 				r.pendingAuth--
 			}
 			if sa.c.PublicAddr != nil {
-				ip := addrToConnIPKey(sa.c.PublicAddr)
-				r.ipConnMu.Lock()
-				r.ipConnCount[ip]--
-				if r.ipConnCount[ip] <= 0 {
-					delete(r.ipConnCount, ip)
-				}
-				r.ipConnMu.Unlock()
+				r.decrementIPConnCount(addrToConnIPKey(sa.c.PublicAddr))
 			}
 		}
 	}

@@ -1,7 +1,6 @@
 package server
 
 import (
-	"context"
 	"net"
 	"sync"
 	"time"
@@ -57,41 +56,6 @@ func (b *clientBucket) tryTake(n int) bool {
 	return false
 }
 
-// waitTake blocks until n bytes worth of tokens are available, or times out.
-func (b *clientBucket) waitTake(ctx context.Context, n int) bool {
-	deadline := time.Now().Add(bandwidthTimeout)
-
-	for {
-		b.mu.Lock()
-		b.refill()
-		if b.tokens >= float64(n) {
-			b.tokens -= float64(n)
-			b.mu.Unlock()
-			return true
-		}
-		// Calculate how long until enough tokens are available
-		need := float64(n) - b.tokens
-		wait := time.Duration(need/b.rate*float64(time.Second)) + time.Millisecond
-		b.mu.Unlock()
-
-		if time.Now().After(deadline) {
-			return false
-		}
-		if wait > 10*time.Millisecond {
-			wait = 10 * time.Millisecond
-		}
-
-		timer := time.NewTimer(wait)
-		select {
-		case <-ctx.Done():
-			timer.Stop()
-			return false
-		case <-timer.C:
-			timer.Stop()
-		}
-	}
-}
-
 // refill adds tokens based on elapsed time. Must be called with b.mu held.
 func (b *clientBucket) refill() {
 	now := time.Now()
@@ -140,16 +104,6 @@ func (bl *BandwidthLimiter) Allow(dest *net.UDPAddr, size int) bool {
 	}
 	b := bl.getBucket(dest)
 	return b.tryTake(size)
-}
-
-// Wait blocks until a packet of `size` bytes can be sent to `dest`.
-// Returns false if timed out or context cancelled.
-func (bl *BandwidthLimiter) Wait(ctx context.Context, dest *net.UDPAddr, size int) bool {
-	if !bl.Enabled() {
-		return true
-	}
-	b := bl.getBucket(dest)
-	return b.waitTake(ctx, size)
 }
 
 // getBucket returns (or creates) the token bucket for a destination.

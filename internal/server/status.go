@@ -122,7 +122,6 @@ func (s *Server) handleStatusJSON(w http.ResponseWriter, r *http.Request) {
 	}
 	info := s.buildStatusInfo()
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	w.Header().Set("Access-Control-Allow-Origin", "*")
 	if err := json.NewEncoder(w).Encode(info); err != nil {
 		log.Printf("status JSON encode: %v", err)
 	}
@@ -146,7 +145,6 @@ func (s *Server) handleMetricsJSON(w http.ResponseWriter, r *http.Request) {
 		Samples:  s.metricsTS.Snapshot(),
 	}
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	w.Header().Set("Access-Control-Allow-Origin", "*")
 	if err := json.NewEncoder(w).Encode(resp); err != nil {
 		log.Printf("metrics JSON encode: %v", err)
 	}
@@ -168,7 +166,6 @@ func (s *Server) handleRoomsJSON(w http.ResponseWriter, r *http.Request) {
 	}
 	s.roomMu.RUnlock()
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	w.Header().Set("Access-Control-Allow-Origin", "*")
 	if err := json.NewEncoder(w).Encode(rooms); err != nil {
 		log.Printf("rooms JSON encode: %v", err)
 	}

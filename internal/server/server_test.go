@@ -1,7 +1,6 @@
 package server
 
 import (
-	"context"
 	"net"
 	"testing"
 	"time"
@@ -184,9 +183,9 @@ func TestCleanupStale(t *testing.T) {
 		Username:  "stale",
 		VirtualIP: net.IPv4(10, 10, 0, 2),
 		PublicAddr: addr,
-		LastSeen:  oldTime,
 		auth:      authNone,
 	}
+	c.SetLastSeen(oldTime)
 
 	r.mu.Lock()
 	r.clients[ipKey(c.VirtualIP)] = c
@@ -219,9 +218,9 @@ func TestCleanupStale_NoStaleClients(t *testing.T) {
 		Username:  "recent",
 		VirtualIP: net.IPv4(10, 10, 0, 2),
 		PublicAddr: addr,
-		LastSeen:  recentTime,
 		auth:      authNone,
 	}
+	c.SetLastSeen(recentTime)
 
 	r.mu.Lock()
 	r.clients[ipKey(c.VirtualIP)] = c
@@ -255,9 +254,9 @@ func TestRoomHandleKeepAlive(t *testing.T) {
 		Username:  "player1",
 		VirtualIP: net.IPv4(10, 10, 0, 2),
 		PublicAddr: addr,
-		LastSeen:  oldTime,
 		auth:      authNone,
 	}
+	c.SetLastSeen(oldTime)
 
 	r.mu.Lock()
 	r.clients[ipKey(c.VirtualIP)] = c
@@ -270,7 +269,7 @@ func TestRoomHandleKeepAlive(t *testing.T) {
 	updated := r.addrMap[addrToRateKey(addr)]
 	r.mu.RUnlock()
 
-	if updated.LastSeen.Equal(oldTime) {
+	if updated.GetLastSeen().Equal(oldTime) {
 		t.Error("LastSeen should be updated after keepalive")
 	}
 }
@@ -290,9 +289,9 @@ func TestRoomHandleDisconnect(t *testing.T) {
 		Username:  "leaver",
 		VirtualIP: vip,
 		PublicAddr: addr,
-		LastSeen:  time.Now(),
 		auth:      authNone,
 	}
+	c.SetLastSeen(time.Now())
 
 	r.mu.Lock()
 	r.clients[ipKey(vip)] = c
@@ -327,10 +326,10 @@ func TestBuildRoomStatus(t *testing.T) {
 		Username:  "player1",
 		VirtualIP: net.IPv4(10, 10, 0, 2),
 		PublicAddr: addr,
-		LastSeen:  time.Now(),
 		RTT:       50 * time.Millisecond,
 		auth:      authNone,
 	}
+	c.SetLastSeen(time.Now())
 
 	r.mu.Lock()
 	r.clients[ipKey(c.VirtualIP)] = c
@@ -517,9 +516,9 @@ func TestSnapshotState(t *testing.T) {
 		Username:  "player1",
 		VirtualIP: net.IPv4(10, 10, 0, 2),
 		PublicAddr: addr,
-		LastSeen:  time.Now(),
 		auth:      authNone,
 	}
+	c.SetLastSeen(time.Now())
 
 	r.mu.Lock()
 	r.clients[ipKey(c.VirtualIP)] = c
@@ -555,9 +554,9 @@ func TestSnapshotState_SkipsAuthChallenge(t *testing.T) {
 		Username:  "challenger",
 		VirtualIP: net.IPv4(10, 10, 0, 2),
 		PublicAddr: addr,
-		LastSeen:  time.Now(),
 		auth:      authChallengeSent, // not fully authenticated
 	}
+	c.SetLastSeen(time.Now())
 
 	r.mu.Lock()
 	r.clients[ipKey(c.VirtualIP)] = c
@@ -765,9 +764,9 @@ func TestHandlePacket_KeepAlive(t *testing.T) {
 		Username:  "player1",
 		VirtualIP: net.IPv4(10, 10, 0, 2),
 		PublicAddr: addr,
-		LastSeen:  time.Now().Add(-1 * time.Minute),
 		auth:      authNone,
 	}
+	c.SetLastSeen(time.Now().Add(-1 * time.Minute))
 
 	r.mu.Lock()
 	r.clients[ipKey(c.VirtualIP)] = c
@@ -780,7 +779,7 @@ func TestHandlePacket_KeepAlive(t *testing.T) {
 	updated := r.addrMap[addrToRateKey(addr)]
 	r.mu.RUnlock()
 
-	if updated.LastSeen.Before(time.Now().Add(-10 * time.Second)) {
+	if updated.GetLastSeen().Before(time.Now().Add(-10 * time.Second)) {
 		t.Error("LastSeen should be updated after keepalive")
 	}
 }
@@ -796,9 +795,9 @@ func TestHandlePacket_PeerRequest(t *testing.T) {
 		Username:  "player1",
 		VirtualIP: net.IPv4(10, 10, 0, 2),
 		PublicAddr: addr,
-		LastSeen:  time.Now(),
 		auth:      authNone,
 	}
+	c.SetLastSeen(time.Now())
 
 	r.mu.Lock()
 	r.clients[ipKey(c.VirtualIP)] = c
@@ -820,9 +819,9 @@ func TestHandlePacket_Disconnect(t *testing.T) {
 		Username:  "leaver",
 		VirtualIP: net.IPv4(10, 10, 0, 2),
 		PublicAddr: addr,
-		LastSeen:  time.Now(),
 		auth:      authNone,
 	}
+	c.SetLastSeen(time.Now())
 
 	r.mu.Lock()
 	r.clients[ipKey(c.VirtualIP)] = c
@@ -856,16 +855,16 @@ func TestHandleRelay_Unicast(t *testing.T) {
 		Username:  "sender",
 		VirtualIP: net.IPv4(10, 10, 0, 2),
 		PublicAddr: senderAddr,
-		LastSeen:  time.Now(),
 		auth:      authNone,
 	}
+	sender.SetLastSeen(time.Now())
 	receiver := &Client{
 		Username:  "receiver",
 		VirtualIP: net.IPv4(10, 10, 0, 3),
 		PublicAddr: receiverAddr,
-		LastSeen:  time.Now(),
 		auth:      authNone,
 	}
+	receiver.SetLastSeen(time.Now())
 
 	r.mu.Lock()
 	r.clients[ipKey(sender.VirtualIP)] = sender
@@ -901,23 +900,23 @@ func TestHandleRelay_Broadcast(t *testing.T) {
 		Username:  "sender",
 		VirtualIP: net.IPv4(10, 10, 0, 2),
 		PublicAddr: senderAddr,
-		LastSeen:  time.Now(),
 		auth:      authNone,
 	}
+	sender.SetLastSeen(time.Now())
 	receiver1 := &Client{
 		Username:  "receiver1",
 		VirtualIP: net.IPv4(10, 10, 0, 3),
 		PublicAddr: receiver1Addr,
-		LastSeen:  time.Now(),
 		auth:      authNone,
 	}
+	receiver1.SetLastSeen(time.Now())
 	receiver2 := &Client{
 		Username:  "receiver2",
 		VirtualIP: net.IPv4(10, 10, 0, 4),
 		PublicAddr: receiver2Addr,
-		LastSeen:  time.Now(),
 		auth:      authNone,
 	}
+	receiver2.SetLastSeen(time.Now())
 
 	r.mu.Lock()
 	r.clients[ipKey(sender.VirtualIP)] = sender
@@ -982,16 +981,16 @@ func TestHandleHolePunch_Valid(t *testing.T) {
 		Username:  "src",
 		VirtualIP: net.IPv4(10, 10, 0, 2),
 		PublicAddr: srcAddr,
-		LastSeen:  time.Now(),
 		auth:      authNone,
 	}
+	src.SetLastSeen(time.Now())
 	dst := &Client{
 		Username:  "dst",
 		VirtualIP: net.IPv4(10, 10, 0, 3),
 		PublicAddr: dstAddr,
-		LastSeen:  time.Now(),
 		auth:      authNone,
 	}
+	dst.SetLastSeen(time.Now())
 
 	r.mu.Lock()
 	r.clients[ipKey(src.VirtualIP)] = src
@@ -1040,9 +1039,9 @@ func TestHandlePong_Valid(t *testing.T) {
 		Username:  "player1",
 		VirtualIP: net.IPv4(10, 10, 0, 2),
 		PublicAddr: addr,
-		LastSeen:  time.Now(),
 		auth:      authNone,
 	}
+	c.SetLastSeen(time.Now())
 
 	r.mu.Lock()
 	r.clients[ipKey(c.VirtualIP)] = c
@@ -1070,9 +1069,9 @@ func TestHandlePong_InvalidTimestamp(t *testing.T) {
 		Username:  "player1",
 		VirtualIP: net.IPv4(10, 10, 0, 2),
 		PublicAddr: addr,
-		LastSeen:  time.Now(),
 		auth:      authNone,
 	}
+	c.SetLastSeen(time.Now())
 
 	r.mu.Lock()
 	r.clients[ipKey(c.VirtualIP)] = c
@@ -1206,53 +1205,7 @@ func TestMetricsTimeSeries_Wraparound(t *testing.T) {
 	}
 }
 
-// ── Bandwidth Limiter Wait / Cleanup ───────────────────────────
-
-func TestBandwidthLimiter_Wait(t *testing.T) {
-	bl := NewBandwidthLimiter(1000) // 1000 bytes/sec
-	addr := &net.UDPAddr{IP: net.IPv4(1, 2, 3, 4), Port: 100}
-
-	// First wait should succeed immediately (full bucket)
-	ctx := context.Background()
-	if !bl.Wait(ctx, addr, 100) {
-		t.Error("expected Wait to succeed")
-	}
-
-	// Second wait should also succeed (enough tokens)
-	if !bl.Wait(ctx, addr, 100) {
-		t.Error("expected Wait to succeed")
-	}
-}
-
-func TestBandwidthLimiter_WaitTimeout(t *testing.T) {
-	bl := NewBandwidthLimiter(10) // very slow: 10 bytes/sec
-	addr := &net.UDPAddr{IP: net.IPv4(1, 2, 3, 4), Port: 100}
-
-	ctx := context.Background()
-	// Exhaust tokens (burst is 512KB, so take that much)
-	bl.Allow(addr, 512*1024)
-
-	// Wait should timeout (can't get 1000 bytes in 50ms at 10 bytes/sec)
-	if bl.Wait(ctx, addr, 1000) {
-		t.Error("expected Wait to timeout")
-	}
-}
-
-func TestBandwidthLimiter_WaitContextCancel(t *testing.T) {
-	bl := NewBandwidthLimiter(10)
-	addr := &net.UDPAddr{IP: net.IPv4(1, 2, 3, 4), Port: 100}
-
-	ctx, cancel := context.WithCancel(context.Background())
-	// Exhaust tokens
-	bl.Allow(addr, 512*1024)
-
-	// Cancel immediately
-	cancel()
-
-	if bl.Wait(ctx, addr, 1000) {
-		t.Error("expected Wait to fail after context cancel")
-	}
-}
+// ── Bandwidth Limiter Cleanup ────────────────────────────────
 
 func TestBandwidthLimiter_Cleanup(t *testing.T) {
 	bl := NewBandwidthLimiter(1000)
