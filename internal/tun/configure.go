@@ -121,14 +121,22 @@ func (d *Device) configure() error {
 				d.physicalGateway = gw
 				serverIP := d.serverPublicIP.String()
 				if isv6 {
-					// netsh interface ipv6 add route <addr>/128 interface=<idx> nexthop=<gw> metric=1
-					ifaceIdx := d.getInterfaceIndex()
+					// netsh interface ipv6 add route <addr>/128 interface=<phyIdx> nexthop=<gw> metric=1
+					ifaceIdx := d.getPhysicalInterfaceIndex("::/0")
+					if ifaceIdx == 0 {
+						ifaceIdx = d.getPhysicalInterfaceIndex("0.0.0.0/0")
+					}
+					if ifaceIdx == 0 {
+						ifaceIdx = d.getInterfaceIndex()
+						log.Printf("[tun] WARNING: using TUN interface for IPv6 exclusion route (physical NIC not detected)")
+					}
+					d.physicalIfIdx = ifaceIdx
 					if err := RunCmd("netsh", "interface", "ipv6", "add", "route",
 						fmt.Sprintf("%s/128", serverIP), fmt.Sprintf("interface=%d", ifaceIdx),
 						fmt.Sprintf("nexthop=%s", gw), "metric=1"); err != nil {
 						log.Printf("[tun] server exclusion route warning: %v", err)
 					} else {
-						log.Printf("[tun] server exclusion (IPv6): %s → %s (physical NIC)", serverIP, gw)
+						log.Printf("[tun] server exclusion (IPv6): %s → %s via NIC idx=%d", serverIP, gw, ifaceIdx)
 					}
 				} else {
 					if err := RunCmd("route", "add",
@@ -226,7 +234,14 @@ func (d *Device) ReconfigureRoutes() {
 				d.physicalGateway = gw
 				serverIP := d.serverPublicIP.String()
 				if isv6 {
-					ifaceIdx := d.getInterfaceIndex()
+					ifaceIdx := d.getPhysicalInterfaceIndex("::/0")
+					if ifaceIdx == 0 {
+						ifaceIdx = d.getPhysicalInterfaceIndex("0.0.0.0/0")
+					}
+					if ifaceIdx == 0 {
+						ifaceIdx = d.getInterfaceIndex()
+					}
+					d.physicalIfIdx = ifaceIdx
 					RunCmd("netsh", "interface", "ipv6", "add", "route",
 						fmt.Sprintf("%s/128", serverIP), fmt.Sprintf("interface=%d", ifaceIdx),
 						fmt.Sprintf("nexthop=%s", gw), "metric=1")
@@ -317,6 +332,21 @@ func (d *Device) getInterfaceIndex() int {
 	return idx
 }
 
+// getPhysicalInterfaceIndex returns the interface index of the physical NIC
+// that holds the default route for the given prefix.
+func (d *Device) getPhysicalInterfaceIndex(prefix string) int {
+	out, err := runCmdOutput("powershell", "-NoProfile", "-Command",
+		fmt.Sprintf(
+			"(Get-NetRoute -DestinationPrefix '%s' | Where-Object { $_.InterfaceAlias -ne '%s' } | Sort-Object RouteMetric | Select-Object -First 1).InterfaceIndex",
+			prefix, d.name))
+	if err != nil {
+		return 0
+	}
+	var idx int
+	fmt.Sscanf(strings.TrimSpace(out), "%d", &idx)
+	return idx
+}
+
 // CleanupRoutes removes routes added by configure().
 // Called when the TUN device is being destroyed.
 func (d *Device) CleanupRoutes() {
@@ -324,7 +354,10 @@ func (d *Device) CleanupRoutes() {
 	if d.serverPublicIP != nil && d.physicalGateway != "" {
 		if d.serverPublicIP.To4() == nil {
 			// IPv6: use netsh to delete the host route
-			ifaceIdx := d.getInterfaceIndex()
+			ifaceIdx := d.physicalIfIdx
+			if ifaceIdx == 0 {
+				ifaceIdx = d.getInterfaceIndex()
+			}
 			RunCmd("netsh", "interface", "ipv6", "delete", "route",
 				fmt.Sprintf("%s/128", d.serverPublicIP.String()),
 				fmt.Sprintf("interface=%d", ifaceIdx))
