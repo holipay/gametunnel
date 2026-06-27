@@ -32,7 +32,7 @@ func (t *Tunnel) register(ctx context.Context) error {
 	retries := 0
 	authRounds := 0
 
-	t.writeUDP(packet, t.serverAddr)
+	t.writeUDP(t.conn, packet, t.serverAddr)
 
 	// Pre-allocate buffer for all readResponse calls during registration
 	respBuf := make([]byte, 1500)
@@ -53,7 +53,7 @@ func (t *Tunnel) register(ctx context.Context) error {
 					return fmt.Errorf("%s", i18n.Format(i18n.T().LogRegFailed, maxRetries))
 				}
 				log.Printf("%s", i18n.Format(i18n.T().LogRegTimeout, retries, maxRetries))
-				t.writeUDP(packet, t.serverAddr)
+				t.writeUDP(t.conn, packet, t.serverAddr)
 				t.conn.SetReadDeadline(time.Now().Add(deadline))
 				continue
 			}
@@ -201,7 +201,11 @@ func (t *Tunnel) handleAuthChallenge(payload []byte) error {
 	// 使用服务端观测到的客户端地址（经过 NAT 后的公网地址）
 	var clientAddr *net.UDPAddr
 	if acp.ClientAddr != "" {
-		clientAddr, _ = net.ResolveUDPAddr("udp", acp.ClientAddr)
+		var err error
+		clientAddr, err = net.ResolveUDPAddr("udp", acp.ClientAddr)
+		if err != nil {
+			log.Printf("resolve client addr: %v", err)
+		}
 	}
 
 	hmacVal := auth.ComputeHMAC(key, acp.Challenge, t.roomID, t.username, clientAddr)
@@ -213,7 +217,7 @@ func (t *Tunnel) handleAuthChallenge(payload []byte) error {
 	}
 
 	packet := protocol.EncodeChecked(protocol.TypeAuthResponse, resp.Marshal())
-	t.writeUDP(packet, t.serverAddr)
+	t.writeUDP(t.conn, packet, t.serverAddr)
 
 	log.Printf("%s", i18n.T().LogAuthSent)
 	return nil

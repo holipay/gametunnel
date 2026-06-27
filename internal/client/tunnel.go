@@ -249,7 +249,7 @@ func (t *Tunnel) Connect(ctx context.Context, serverAddr string, mtu int, newTUN
 	}
 
 	go func() {
-		t.sendLoop(runCtx)
+		t.sendLoop(runCtx, conn)
 		onGoroutineExit("sendLoop")
 	}()
 	go func() {
@@ -400,7 +400,8 @@ func (t *Tunnel) Status() TunnelStatus {
 // writes to the UDP socket serially, eliminating mutex contention on the
 // send path. Callers use sendUDP() which is non-blocking (channel send).
 // Uses batch draining to reduce per-packet syscall overhead.
-func (t *Tunnel) sendLoop(ctx context.Context) {
+// conn is captured locally to avoid data races with Connect() reassigning t.conn.
+func (t *Tunnel) sendLoop(ctx context.Context, conn *net.UDPConn) {
 	const batchSize = 64
 	var batch [batchSize]sendJob
 
@@ -413,7 +414,7 @@ func (t *Tunnel) sendLoop(ctx context.Context) {
 			for {
 				select {
 				case job := <-t.ctrlCh:
-					t.writeUDP(job.data, job.addr)
+					t.writeUDP(conn, job.data, job.addr)
 				case <-drainTimer.C:
 					drainTimer.Stop()
 					return
@@ -425,9 +426,9 @@ func (t *Tunnel) sendLoop(ctx context.Context) {
 			for {
 				select {
 				case job := <-t.sendCh:
-					t.writeUDP(job.data, job.addr)
+					t.writeUDP(conn, job.data, job.addr)
 				case job := <-t.ctrlCh:
-					t.writeUDP(job.data, job.addr)
+					t.writeUDP(conn, job.data, job.addr)
 				case <-drainTimer.C:
 					drainTimer.Stop()
 					return
@@ -457,7 +458,7 @@ func (t *Tunnel) sendLoop(ctx context.Context) {
 				}
 			}
 			for i := 0; i < n; i++ {
-				t.writeUDP(batch[i].data, batch[i].addr)
+				t.writeUDP(conn, batch[i].data, batch[i].addr)
 			}
 
 		case job := <-t.sendCh:
@@ -484,16 +485,17 @@ func (t *Tunnel) sendLoop(ctx context.Context) {
 				}
 			}
 			for i := 0; i < n; i++ {
-				t.writeUDP(batch[i].data, batch[i].addr)
+				t.writeUDP(conn, batch[i].data, batch[i].addr)
 			}
 		}
 	}
 }
 
-// writeUDP performs the actual UDP write. Only called from sendLoop.
-func (t *Tunnel) writeUDP(data []byte, addr *net.UDPAddr) {
-	if t.conn != nil {
-		if _, err := t.conn.WriteToUDP(data, addr); err != nil {
+// writeUDP performs the actual UDP write. conn is passed explicitly to avoid
+// data races with Connect() reassigning t.conn.
+func (t *Tunnel) writeUDP(conn *net.UDPConn, data []byte, addr *net.UDPAddr) {
+	if conn != nil {
+		if _, err := conn.WriteToUDP(data, addr); err != nil {
 			n := t.sendErrors.Add(1)
 			if n == 1 || n%100 == 0 {
 				log.Printf("%s", i18n.Format(i18n.T().LogSendFail, n, err))

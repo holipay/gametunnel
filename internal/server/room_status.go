@@ -37,7 +37,7 @@ func (r *Room) BuildRoomStatus() RoomStatusInfo {
 	r.mu.RLock()
 	conns := make([]ConnectionInfo, 0, len(r.clients))
 	for _, c := range r.clients {
-		idle := now.Sub(c.LastSeen)
+		idle := now.Sub(c.GetLastSeen())
 		idleStr := t.StatusJustNow
 		if idle > time.Second {
 			idleStr = fmt.Sprintf(t.StatusSecAgo, int(idle.Seconds()))
@@ -195,7 +195,7 @@ func (r *Room) SnapshotState() RoomState {
 		clients[ipStr] = ClientEntry{
 			Username:  c.Username,
 			VirtualIP: ipStr,
-			LastSeen:  c.LastSeen,
+			LastSeen:  c.GetLastSeen(),
 		}
 	}
 
@@ -219,7 +219,7 @@ func (r *Room) resolveRestoredClient(username string, roomID string, from *net.U
 		if c.Username == username && c.authRoomID == roomID && c.PublicAddr == nil && c.auth == authNone {
 			// Attach the real address
 			c.PublicAddr = from
-			c.LastSeen = time.Now()
+			c.SetLastSeen(time.Now())
 			r.addrMap[addrToRateKey(from)] = c
 
 			// Track per-IP connection count

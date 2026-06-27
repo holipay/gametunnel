@@ -71,7 +71,7 @@ func newTestTunnel(t *testing.T) (*Tunnel, *net.UDPConn) {
 	// ── 启动 sendLoop，让 sendCh 中的数据能实际写入 UDP ──
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	go tunnel.sendLoop(ctx)
+	go tunnel.sendLoop(ctx, tunnel.conn)
 
 	return tunnel, serverConn
 }

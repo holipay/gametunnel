@@ -128,10 +128,10 @@ func (s *Server) loadState() error {
 		c := &Client{
 			Username:   entry.Username,
 			VirtualIP:  ip,
-			LastSeen:   entry.LastSeen,
 			auth:       authNone,
 			authRoomID: "default", // single-room mode uses "default" roomID
 		}
+		c.SetLastSeen(entry.LastSeen)
 		room.clients[ipKey(ip)] = c
 		// NOTE: do NOT add to addrMap yet — no PublicAddr until reconnect
 		restored++

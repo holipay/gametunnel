@@ -354,3 +354,14 @@ func (r *Room) notifyShutdown() {
 		r.sendChecked(protocol.TypeKick, payload, addr)
 	}
 }
+
+// decrementIPConnCount decrements the per-IP connection counter and removes
+// the entry if it reaches zero. Caller must NOT hold r.mu (ipConnMu is internal).
+func (r *Room) decrementIPConnCount(ip [16]byte) {
+	r.ipConnMu.Lock()
+	r.ipConnCount[ip]--
+	if r.ipConnCount[ip] <= 0 {
+		delete(r.ipConnCount, ip)
+	}
+	r.ipConnMu.Unlock()
+}

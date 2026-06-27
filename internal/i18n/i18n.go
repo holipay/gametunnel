@@ -474,11 +474,6 @@ func Set(lang Lang) {
 	}
 }
 
-// S returns the current language strings.
-func S() *Strings {
-	return current.Load()
-}
-
 // T is a convenience shorthand: i18n.T().FieldName
 func T() *Strings {
 	return current.Load()

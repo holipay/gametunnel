@@ -68,13 +68,7 @@ func (r *Room) handleRegister(payload []byte, from *net.UDPAddr) {
 		// instead of being blocked for 30s until keepaliveLoop cleans it up.
 		// Also roll back the IP count from the previous registration attempt.
 		if existing.PublicAddr != nil {
-			oldIP := addrToConnIPKey(existing.PublicAddr)
-			r.ipConnMu.Lock()
-			r.ipConnCount[oldIP]--
-			if r.ipConnCount[oldIP] <= 0 {
-				delete(r.ipConnCount, oldIP)
-			}
-			r.ipConnMu.Unlock()
+			r.decrementIPConnCount(addrToConnIPKey(existing.PublicAddr))
 		}
 		delete(r.addrMap, fromKey)
 		if r.pendingAuth > 0 {
@@ -84,7 +78,7 @@ func (r *Room) handleRegister(payload []byte, from *net.UDPAddr) {
 	}
 
 	if existing := r.addrMap[fromKey]; existing != nil {
-		existing.LastSeen = time.Now()
+		existing.SetLastSeen(time.Now())
 		selfIP := existing.VirtualIP
 		r.mu.Unlock()
 		r.sendAssignIP(selfIP, from)
@@ -117,9 +111,7 @@ func (r *Room) handleRegister(payload []byte, from *net.UDPAddr) {
 	r.ipConnMu.Unlock()
 
 	if len(r.clients) >= r.maxPlayers {
-		r.ipConnMu.Lock()
-		r.ipConnCount[clientIP]--
-		r.ipConnMu.Unlock()
+		r.decrementIPConnCount(clientIP)
 		r.mu.Unlock()
 		r.sendKick(from, t.KickRoomFull)
 		return
@@ -130,9 +122,7 @@ func (r *Room) handleRegister(payload []byte, from *net.UDPAddr) {
 			continue
 		}
 		if c.authRoomID == reg.RoomID && c.Username == reg.Username {
-			r.ipConnMu.Lock()
-			r.ipConnCount[clientIP]--
-			r.ipConnMu.Unlock()
+			r.decrementIPConnCount(clientIP)
 			r.mu.Unlock()
 			r.sendKick(from, t.KickDuplicateName)
 			return
@@ -154,9 +144,7 @@ func (r *Room) handleRegister(payload []byte, from *net.UDPAddr) {
 	}
 
 	if r.pendingAuth >= r.maxPending {
-		r.ipConnMu.Lock()
-		r.ipConnCount[clientIP]--
-		r.ipConnMu.Unlock()
+		r.decrementIPConnCount(clientIP)
 		r.mu.Unlock()
 		r.sendKick(from, t.KickServerBusy)
 		return
@@ -164,9 +152,7 @@ func (r *Room) handleRegister(payload []byte, from *net.UDPAddr) {
 
 	challenge, ok := r.doSendAuthChallenge(reg, from)
 	if !ok {
-		r.ipConnMu.Lock()
-		r.ipConnCount[clientIP]--
-		r.ipConnMu.Unlock()
+		r.decrementIPConnCount(clientIP)
 		r.mu.Unlock()
 		r.sendKick(from, t.KickInternalError)
 		return
@@ -193,10 +179,10 @@ func (r *Room) doRegisterClient(reg *protocol.RegisterPayload, from *net.UDPAddr
 		Username:   reg.Username,
 		VirtualIP:  vip,
 		PublicAddr: from,
-		LastSeen:   time.Now(),
 		auth:       authNone,
 		authRoomID: reg.RoomID,
 	}
+	c.SetLastSeen(time.Now())
 	r.clients[ipKey(vip)] = c
 	r.addrMap[addrToRateKey(from)] = c
 
@@ -222,12 +208,12 @@ func (r *Room) doSendAuthChallenge(reg *protocol.RegisterPayload, from *net.UDPA
 	c := &Client{
 		Username:    reg.Username,
 		PublicAddr:  from,
-		LastSeen:    time.Now(),
 		auth:        authChallengeSent,
 		challenge:   challenge,
 		challengeAt: time.Now(),
 		authRoomID:  reg.RoomID,
 	}
+	c.SetLastSeen(time.Now())
 	r.addrMap[addrToRateKey(from)] = c
 	r.pendingAuth++
 	return challenge, true
@@ -271,10 +257,7 @@ func (r *Room) handleAuthResponse(payload []byte, from *net.UDPAddr) {
 		// which already rolled back ipConnCount). Don't double-decrement.
 		// Only rollback if c exists but has wrong auth state (genuine anomaly).
 		if c != nil {
-			clientIP := addrToConnIPKey(from)
-			r.ipConnMu.Lock()
-			r.ipConnCount[clientIP]--
-			r.ipConnMu.Unlock()
+			r.decrementIPConnCount(addrToConnIPKey(from))
 		}
 		r.mu.Unlock()
 		r.sendKick(from, t.KickAuthAbnormal)
@@ -290,11 +273,7 @@ func (r *Room) handleAuthResponse(payload []byte, from *net.UDPAddr) {
 		if r.pendingAuth > 0 {
 			r.pendingAuth--
 		}
-		// Rollback the IP count increment done in handleRegister
-		clientIP := addrToConnIPKey(from)
-		r.ipConnMu.Lock()
-		r.ipConnCount[clientIP]--
-		r.ipConnMu.Unlock()
+		r.decrementIPConnCount(addrToConnIPKey(from))
 		r.mu.Unlock()
 		r.sendKick(from, t.KickAuthTimeout)
 		return
@@ -310,11 +289,7 @@ func (r *Room) handleAuthResponse(payload []byte, from *net.UDPAddr) {
 		if r.pendingAuth > 0 {
 			r.pendingAuth--
 		}
-		// Rollback the IP count increment done in handleRegister
-		clientIP := addrToConnIPKey(from)
-		r.ipConnMu.Lock()
-		r.ipConnCount[clientIP]--
-		r.ipConnMu.Unlock()
+		r.decrementIPConnCount(addrToConnIPKey(from))
 		r.mu.Unlock()
 		r.sendKick(from, t.KickInternalError)
 		return
@@ -332,11 +307,7 @@ func (r *Room) handleAuthResponse(payload []byte, from *net.UDPAddr) {
 		if r.pendingAuth > 0 {
 			r.pendingAuth--
 		}
-		// Rollback the IP count increment done in handleRegister
-		clientIP := addrToConnIPKey(from)
-		r.ipConnMu.Lock()
-		r.ipConnCount[clientIP]--
-		r.ipConnMu.Unlock()
+		r.decrementIPConnCount(addrToConnIPKey(from))
 		r.mu.Unlock()
 		log.Printf(t.LogAuthFail, resp.Username, from)
 		r.authFailures.Add(1)
@@ -361,11 +332,7 @@ func (r *Room) handleAuthResponse(payload []byte, from *net.UDPAddr) {
 	}
 
 	if len(r.clients) >= r.maxPlayers {
-		// Rollback the IP count increment done in handleRegister
-		clientIP := addrToConnIPKey(from)
-		r.ipConnMu.Lock()
-		r.ipConnCount[clientIP]--
-		r.ipConnMu.Unlock()
+		r.decrementIPConnCount(addrToConnIPKey(from))
 		r.mu.Unlock()
 		r.sendKick(from, t.KickRoomFull)
 		return
@@ -376,11 +343,7 @@ func (r *Room) handleAuthResponse(payload []byte, from *net.UDPAddr) {
 			continue
 		}
 		if existing.authRoomID == resp.RoomID && existing.Username == resp.Username {
-			// Rollback the IP count increment done in handleRegister
-			clientIP := addrToConnIPKey(from)
-			r.ipConnMu.Lock()
-			r.ipConnCount[clientIP]--
-			r.ipConnMu.Unlock()
+			r.decrementIPConnCount(addrToConnIPKey(from))
 			r.mu.Unlock()
 			r.sendKick(from, t.KickDuplicateName)
 			return

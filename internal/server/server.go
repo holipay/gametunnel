@@ -47,7 +47,7 @@ type Client struct {
 	Username   string
 	VirtualIP  net.IP
 	PublicAddr *net.UDPAddr
-	LastSeen   time.Time
+	lastSeen   atomic.Int64 // unix nano, use GetLastSeen/SetLastSeen
 	RTT        time.Duration // latest round-trip latency
 
 	// Ping quality stats (ring buffer of recent RTTs, 0 = missed)
@@ -62,6 +62,14 @@ type Client struct {
 	challenge   []byte    // 16-byte nonce
 	challengeAt time.Time // for expiry
 	authRoomID  string    // room ID from register request (for key derivation)
+}
+
+func (c *Client) GetLastSeen() time.Time {
+	return time.Unix(0, c.lastSeen.Load())
+}
+
+func (c *Client) SetLastSeen(t time.Time) {
+	c.lastSeen.Store(t.UnixNano())
 }
 
 // PingStats returns loss rate (0.0-1.0) and jitter from recent ping history.

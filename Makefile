@@ -14,10 +14,6 @@ LDFLAGS    := -ldflags "-s -w \
 	-X main.Version=$(VERSION) \
 	-X main.Commit=$(COMMIT) \
 	-X main.BuildTime=$(BUILD_TIME)"
-CLIENT_LDFLAGS := -ldflags "-s -w \
-	-X main.Version=$(VERSION) \
-	-X main.Commit=$(COMMIT) \
-	-X main.BuildTime=$(BUILD_TIME)"
 
 all: server client server-openwrt
 
@@ -64,19 +60,26 @@ install-server: server
 
 client:
 	@mkdir -p $(BINARY_DIR)
-	CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -mod=vendor $(CLIENT_LDFLAGS) -o $(BINARY_DIR)/gtunnel-client.exe ./cmd/client
+	CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -mod=vendor $(LDFLAGS) -o $(BINARY_DIR)/gtunnel-client.exe ./cmd/client
 
 client-windows-x86:
 	@mkdir -p $(BINARY_DIR)
-	CGO_ENABLED=0 GOOS=windows GOARCH=386 go build -mod=vendor $(CLIENT_LDFLAGS) -o $(BINARY_DIR)/gtunnel-client-windows-x86.exe ./cmd/client
+	CGO_ENABLED=0 GOOS=windows GOARCH=386 go build -mod=vendor $(LDFLAGS) -o $(BINARY_DIR)/gtunnel-client-windows-x86.exe ./cmd/client
 
 # 所有平台客户端
 client-all: client client-windows-x86
 
+client-linux-amd64:
+	@mkdir -p $(BINARY_DIR)
+	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -mod=vendor $(LDFLAGS) -o $(BINARY_DIR)/gtunnel-client-linux-amd64 ./cmd/client
+
 # ── Dev / Test ─────────────────────────────────────────────────
 
 test:
-	go test -v -count=1 ./...
+	go test -v -count=1 -mod=vendor ./...
+
+vet:
+	go vet -mod=vendor ./...
 
 # ── Vendor (dependency lock) ────────────────────────────────────
 # Locks all dependencies into vendor/ for reproducible builds.

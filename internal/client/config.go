@@ -144,7 +144,7 @@ func SaveConfig(cfg *Config) error {
 	fmt.Fprintf(&b, "lang=%s\n", cfg.Lang)
 	fmt.Fprintln(&b, "# Tunnel MTU (576-9000, default 1400)")
 	fmt.Fprintf(&b, "mtu=%d\n", cfg.MTU)
-	return os.WriteFile(path, []byte(b.String()), 0644)
+	return os.WriteFile(path, []byte(b.String()), 0600)
 }
 
 // CreateDefaultConfig creates a default config.ini and returns its path.
