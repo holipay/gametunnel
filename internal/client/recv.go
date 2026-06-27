@@ -141,6 +141,10 @@ func (t *Tunnel) decryptWriteAndRelease(dp *protocol.DataPayload, cipher *crypto
 }
 
 func (t *Tunnel) handleDirectData(from *net.UDPAddr, msg *protocol.Message) {
+	if msg.Type == protocol.TypeHolePunch {
+		t.handleDirectHolePunch(from, msg)
+		return
+	}
 	if msg.Type != protocol.TypeData {
 		return
 	}
@@ -179,6 +183,51 @@ func (t *Tunnel) handleDirectData(from *net.UDPAddr, msg *protocol.Message) {
 	t.decryptWriteAndRelease(dp, cipher)
 }
 
+// handleDirectHolePunch processes a TypeHolePunch received directly from a peer.
+// Confirms direct reachability and triggers a punch-back response.
+func (t *Tunnel) handleDirectHolePunch(from *net.UDPAddr, msg *protocol.Message) {
+	if len(msg.Payload) < 4 {
+		return
+	}
+	peerIP := net.IP(append([]byte(nil), msg.Payload[:4]...))
+
+	t.mu.RLock()
+	peer, ok := t.peers[ipKey(peerIP)]
+	if !ok || peer.PublicAddr == nil {
+		t.mu.RUnlock()
+		return
+	}
+	peerAddr := peer.PublicAddr
+	t.mu.RUnlock()
+
+	// Verify the sender matches the peer's known public address (anti-spoofing)
+	if !from.IP.Equal(peerAddr.IP) || from.Port != peerAddr.Port {
+		return
+	}
+
+	// Rate limit: at most once per holePunchBackoff per peer
+	now := time.Now()
+	lastPunch := peer.lastPunchBack.Load()
+	if lastPunch != nil && now.Sub(*lastPunch) < holePunchBackoff {
+		return
+	}
+	peer.lastPunchBack.Store(&now)
+
+	// Mark direct path confirmed — received a packet directly from the peer
+	peer.DirectReach.Store(true)
+
+	// Punch back in a goroutine — don't block the receive loop
+	go func() {
+		t.mu.RLock()
+		packet := t.cachedPunchPacket
+		t.mu.RUnlock()
+		for i := 0; i < holePunchBurstPerPhase; i++ {
+			t.sendCtrl(packet, peerAddr)
+			time.Sleep(50 * time.Millisecond)
+		}
+	}()
+}
+
 // handlePeerInfo updates the peer list from the server.
 func (t *Tunnel) handlePeerInfo(ctx context.Context, payload []byte) {
 	info, err := protocol.UnmarshalPeerInfo(payload)
@@ -206,23 +255,33 @@ func (t *Tunnel) handlePeerInfo(ctx context.Context, payload []byte) {
 			continue
 		}
 		key := ipKey(entry.VirtualIP)
+		// Normalize PublicAddr.IP to 16 bytes (IPv4 → ::ffff:x.x.x.x) so
+		// that IP comparisons with addresses received on the IPv6 socket
+		// (always 16 bytes) work correctly. Required for fromServer check
+		// in receiveFromServer and P2P detection in handleDirectData.
+		pubAddr := entry.PublicAddr
+		if pubAddr != nil {
+			if ip16 := pubAddr.IP.To16(); ip16 != nil {
+				pubAddr = &net.UDPAddr{IP: ip16, Port: pubAddr.Port}
+			}
+		}
 		if existing, ok := oldPeers[key]; ok {
 			// Check if peer's public address changed (NAT rebinding)
-			addrChanged := existing.PublicAddr != nil && entry.PublicAddr != nil &&
-				(!existing.PublicAddr.IP.Equal(entry.PublicAddr.IP) || existing.PublicAddr.Port != entry.PublicAddr.Port)
+			addrChanged := existing.PublicAddr != nil && pubAddr != nil &&
+				(!existing.PublicAddr.IP.Equal(pubAddr.IP) || existing.PublicAddr.Port != pubAddr.Port)
 			if addrChanged {
 				log.Printf(i18n.T().LogPeerAddrChange, entry.Username, entry.VirtualIP, existing.PublicAddr, entry.PublicAddr)
 				existing.DirectReach.Store(false) // reset P2P status, need re-punch
 				changedPeerIPs = append(changedPeerIPs, entry.VirtualIP)
 			}
-			existing.PublicAddr = entry.PublicAddr
+			existing.PublicAddr = pubAddr
 			existing.Username = entry.Username
 			existing.lastSeen.Store(&now)
 			t.peers[key] = existing
 		} else {
 			p := &Peer{
 				VirtualIP:  entry.VirtualIP,
-				PublicAddr: entry.PublicAddr,
+				PublicAddr: pubAddr,
 				Username:   entry.Username,
 			}
 			p.lastSeen.Store(&now)

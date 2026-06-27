@@ -174,7 +174,6 @@ func (t *Tunnel) Connect(ctx context.Context, serverAddr string, mtu int, newTUN
 	if err != nil {
 		return fmt.Errorf("%s", i18n.Format(i18n.T().ErrInvalidServer, err))
 	}
-	t.serverAddr = sAddr
 
 	// Reset disconnectOnce so Disconnect() can send leave packet on each attempt.
 	t.disconnectOnce.Store(&sync.Once{})
@@ -184,16 +183,20 @@ func (t *Tunnel) Connect(ctx context.Context, serverAddr string, mtu int, newTUN
 	if t.conn != nil {
 		t.conn.Close()
 	}
-	// Bind to appropriate address family based on server address.
-	// IPv6 server → bind [::] (dual-stack on most systems)
-	// IPv4 server → bind 0.0.0.0
-	var bindAddr *net.UDPAddr
-	if sAddr.IP.To4() == nil {
-		bindAddr = &net.UDPAddr{IP: net.IPv6zero, Port: 0}
-	} else {
-		bindAddr = &net.UDPAddr{}
-	}
+	// Bind to [::] (dual-stack IPv6 socket) so the client can send UDP
+	// packets to both IPv4 and IPv6 peer addresses. An IPv4-only socket
+	// (0.0.0.0) cannot send to IPv6 destinations, which breaks hole
+	// punching when the server reports IPv6 peer addresses.
+	bindAddr := &net.UDPAddr{IP: net.IPv6zero, Port: 0}
 	conn, err := net.ListenUDP("udp", bindAddr)
+
+	// Normalize serverAddr.IP to 16 bytes so that IP comparisons with
+	// addresses received on the IPv6 socket (always 16 bytes) work
+	// correctly. IPv4 addresses become IPv4-mapped IPv6 (::ffff:x.x.x.x).
+	if ip16 := sAddr.IP.To16(); ip16 != nil {
+		sAddr.IP = ip16
+	}
+	t.serverAddr = sAddr
 	if err != nil {
 		return fmt.Errorf("%s", i18n.Format(i18n.T().ErrBindUDP, err))
 	}
