@@ -143,30 +143,17 @@ func findAdapter(name string) (ifIndex uint32, luid uint64, err error) {
 	return 0, 0, fmt.Errorf("adapter %q not found", name)
 }
 
-// checkAutoMetricDisabled 检查网卡的 AutomaticMetric 是否已禁用，
-// 或者 metric 是否已手动设为 1。两者满足其一即可保证广播路由优先走 TUN。
+// checkAutoMetricDisabled 检查网卡的 metric 是否已设为 1。
+// 使用 netsh 查询（与设置命令一致），比 PowerShell 更可靠。
 func checkAutoMetricDisabled(name string) bool {
-	// 方法 1: 检查 AutomaticMetric 是否已禁用
-	out, err := runCmdOutput("powershell", "-NoProfile", "-Command",
-		fmt.Sprintf("(Get-NetIPInterface -InterfaceAlias '%s' -ErrorAction SilentlyContinue).AutomaticMetric", name))
-	if err == nil {
-		out = strings.TrimSpace(strings.ToLower(out))
-		if out == "" || out == "disabled" || out == "0" {
-			return true
-		}
+	// 通过 netsh 查看接口配置，检查 metric 是否为 1
+	out, err := runCmdOutput("netsh", "interface", "ip", "show", "interface", name)
+	if err != nil {
+		return false
 	}
-
-	// 方法 2: 检查 InterfaceMetric 是否已设为 1（netsh 设置的值）
-	out2, err2 := runCmdOutput("powershell", "-NoProfile", "-Command",
-		fmt.Sprintf("(Get-NetIPInterface -InterfaceAlias '%s' -ErrorAction SilentlyContinue).InterfaceMetric", name))
-	if err2 == nil {
-		out2 = strings.TrimSpace(out2)
-		if out2 == "1" {
-			return true
-		}
-	}
-
-	return false
+	// netsh 输出中查找 "metric=1" 或 "Met=1"
+	lower := strings.ToLower(out)
+	return strings.Contains(lower, "metric=1") || strings.Contains(lower, "met=1") || strings.Contains(lower, " 1 ")
 }
 
 // disableAllPhysicalAutoMetric 枚举所有活跃物理网卡并禁用其 AutomaticMetric。
