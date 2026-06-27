@@ -192,15 +192,16 @@ func (t *Tunnel) handlePeerInfo(ctx context.Context, payload []byte) {
 
 	t.mu.Lock()
 
-	// Reuse existing map if possible to avoid per-PeerInfo allocation.
-	// Clear it instead of creating a new one — the old map's bucket memory
-	// is reused, saving ~1 allocation per PeerInfo message (every 50ms).
-	newPeers := t.peers
-	if newPeers == nil {
-		newPeers = make(map[[16]byte]*Peer, len(info.Peers))
+	// Save old peer map for lookups before clearing/replacing.
+	// We reuse the old map's memory to avoid per-PeerInfo allocation,
+	// but we MUST keep a reference to the old map for the lookup loop:
+	// clearing the map first then looking up in t.peers[key] always fails.
+	oldPeers := t.peers
+	if oldPeers == nil {
+		t.peers = make(map[[16]byte]*Peer, len(info.Peers))
 	} else {
-		for k := range newPeers {
-			delete(newPeers, k)
+		for k := range oldPeers {
+			delete(oldPeers, k)
 		}
 	}
 	for _, entry := range info.Peers {
@@ -209,7 +210,7 @@ func (t *Tunnel) handlePeerInfo(ctx context.Context, payload []byte) {
 			continue
 		}
 		key := ipKey(entry.VirtualIP)
-		if existing, ok := t.peers[key]; ok {
+		if existing, ok := oldPeers[key]; ok {
 			// Check if peer's public address changed (NAT rebinding)
 			addrChanged := existing.PublicAddr != nil && entry.PublicAddr != nil &&
 				(!existing.PublicAddr.IP.Equal(entry.PublicAddr.IP) || existing.PublicAddr.Port != entry.PublicAddr.Port)
@@ -221,7 +222,7 @@ func (t *Tunnel) handlePeerInfo(ctx context.Context, payload []byte) {
 			existing.PublicAddr = entry.PublicAddr
 			existing.Username = entry.Username
 			existing.lastSeen.Store(&now)
-			newPeers[key] = existing
+			t.peers[key] = existing
 		} else {
 			p := &Peer{
 				VirtualIP:  entry.VirtualIP,
@@ -229,18 +230,17 @@ func (t *Tunnel) handlePeerInfo(ctx context.Context, payload []byte) {
 				Username:   entry.Username,
 			}
 			p.lastSeen.Store(&now)
-			newPeers[key] = p
+			t.peers[key] = p
 			log.Printf(i18n.T().LogNewPeer, entry.Username, entry.VirtualIP)
 			newPeerIPs = append(newPeerIPs, entry.VirtualIP)
 		}
 	}
-	// Log removed peers
-	for key, peer := range t.peers {
-		if _, ok := newPeers[key]; !ok {
+	// Log removed peers (those in oldPeers but not in the updated t.peers)
+	for key, peer := range oldPeers {
+		if _, ok := t.peers[key]; !ok {
 			log.Printf(i18n.T().LogPeerLeave2, peer.Username, peer.VirtualIP)
 		}
 	}
-	t.peers = newPeers
 
 	t.mu.Unlock()
 
@@ -389,9 +389,5 @@ func isFatalKick(kick *protocol.KickPayload) bool {
 	return strings.Contains(reason, "密码错误") ||
 		strings.Contains(reason, "password") ||
 		strings.Contains(reason, "版本不兼容") ||
-		strings.Contains(versionMismatchTag, reason) ||
 		strings.Contains(reason, "incompatible")
 }
-
-// versionMismatchTag is used to avoid importing i18n in the comparison.
-const versionMismatchTag = "版本不兼容"

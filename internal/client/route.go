@@ -32,7 +32,7 @@ func buildDataPacket(srcIP, dstIP net.IP, data []byte) []byte {
 // CRC32 is omitted because ChaCha20-Poly1305 AEAD already provides
 // integrity verification. Saves 4 bytes per encrypted packet.
 func buildEncryptedDataPacket(srcIP, dstIP net.IP, pkt []byte, cipher *crypto.Cipher) []byte {
-	encMax := crypto.Overhead + len(pkt) + 16
+	encMax := crypto.Overhead + len(pkt)
 	size := protocol.HeaderLen + 8 + encMax
 	dst := make([]byte, size)
 
