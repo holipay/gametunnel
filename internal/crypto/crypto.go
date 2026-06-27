@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"math/big"
 	"sync/atomic"
+	"time"
 
 	"golang.org/x/crypto/chacha20poly1305"
 )
@@ -89,7 +90,11 @@ func (c *Cipher) initCounter() {
 	if err != nil {
 		// Fallback: use lower 48 bits of a random 8-byte read
 		var b [8]byte
-		rand.Read(b[:])
+		if _, err := rand.Read(b[:]); err != nil {
+			// Last resort: use time-based seed (not ideal, but better than zero)
+			c.counter.Store(uint64(time.Now().UnixNano()) & ((1 << 48) - 1))
+			return
+		}
 		c.counter.Store(binary.LittleEndian.Uint64(b[:]) & ((1 << 48) - 1))
 		return
 	}

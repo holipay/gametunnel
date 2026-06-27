@@ -68,10 +68,7 @@ func (t *Tunnel) receiveFromServer(ctx context.Context) {
 			continue
 		}
 
-		fromServer := from != nil && t.serverAddr != nil && from.IP.Equal(t.serverAddr.IP)
-		if !fromServer && from != nil && t.serverAddr != nil {
-			fromServer = from.Port == t.serverAddr.Port
-		}
+		fromServer := from != nil && t.serverAddr != nil && from.IP.Equal(t.serverAddr.IP) && from.Port == t.serverAddr.Port
 		if fromServer {
 			// Server-relayed packet
 			t.handleServerData(ctx, msg)

@@ -197,7 +197,14 @@ func New(cfg Config) (*Server, error) {
 		return nil, err
 	}
 
-	conn, err := net.ListenUDP("udp", udpAddr)
+	// Use "udp4" or "udp6" explicitly based on resolved address family.
+	// "udp" with an IPv4 addr creates IPv4-only socket; with IPv6 it's
+	// platform-dependent (dual-stack on Linux with bindv6only=0, but not guaranteed).
+	network := "udp"
+	if udpAddr.IP.To4() == nil {
+		network = "udp6"
+	}
+	conn, err := net.ListenUDP(network, udpAddr)
 	if err != nil {
 		return nil, err
 	}
