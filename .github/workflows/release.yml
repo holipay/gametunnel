@@ -82,9 +82,12 @@ jobs:
           echo "BUILD_TIME=$(date -u '+%Y-%m-%dT%H:%M:%SZ')" >> $GITHUB_ENV
 
       - name: Build client (amd64)
-        run: CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -ldflags "-s -w -H windowsgui -X main.Version=${VERSION} -X main.Commit=${COMMIT} -X main.BuildTime=${BUILD_TIME}" -o gtunnel-client.exe ./cmd/client
+        run: CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -ldflags "-s -w -X main.Version=${VERSION} -X main.Commit=${COMMIT} -X main.BuildTime=${BUILD_TIME}" -o gtunnel-client.exe ./cmd/client
 
-      - name: Download wintun.dll
+      - name: Build client (x86)
+        run: CGO_ENABLED=0 GOOS=windows GOARCH=386 go build -ldflags "-s -w -X main.Version=${VERSION} -X main.Commit=${COMMIT} -X main.BuildTime=${BUILD_TIME}" -o gtunnel-client-x86.exe ./cmd/client
+
+      - name: Download wintun.dll (amd64)
         run: |
           set -e
           curl -sL -o wintun.zip "https://www.wintun.net/builds/wintun-0.14.1.zip"
@@ -92,22 +95,69 @@ jobs:
           mv wintun/bin/amd64/wintun.dll wintun.dll
           rm -rf wintun wintun.zip
           test -s wintun.dll || { echo "ERROR: wintun.dll is empty or missing"; exit 1; }
-          echo "wintun.dll downloaded: $(wc -c < wintun.dll) bytes"
+
+      - name: Download wintun.dll (x86)
+        run: |
+          set -e
+          curl -sL -o wintun-x86.zip "https://www.wintun.net/builds/wintun-0.14.1.zip"
+          unzip -q wintun-x86.zip "wintun/bin/x86/wintun.dll"
+          mv wintun/bin/x86/wintun.dll wintun-x86.dll
+          rm -rf wintun wintun-x86.zip
 
       - name: Package client
         run: |
           cp configs/config.ini .
           zip GameTunnel-Client-windows-amd64.zip gtunnel-client.exe wintun.dll config.ini
+          zip GameTunnel-Client-windows-x86.zip gtunnel-client-x86.exe wintun-x86.dll config.ini
 
       - uses: actions/upload-artifact@v4
         with:
           name: client-windows
-          path: GameTunnel-Client-windows-amd64.zip
+          path: |
+            GameTunnel-Client-windows-amd64.zip
+            GameTunnel-Client-windows-x86.zip
+
+  # ── Linux Client ────────────────────────────────────────────
+
+  release-client-linux:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+
+      - name: Set version
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            VERSION=$(git describe --tags --abbrev=0)
+          else
+            VERSION=${GITHUB_REF_NAME}
+          fi
+          echo "VERSION=${VERSION}" >> $GITHUB_ENV
+          echo "COMMIT=$(git rev-parse --short HEAD)" >> $GITHUB_ENV
+          echo "BUILD_TIME=$(date -u '+%Y-%m-%dT%H:%M:%SZ')" >> $GITHUB_ENV
+
+      - name: Build client (linux/amd64)
+        run: CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags "-s -w -X main.Version=${VERSION} -X main.Commit=${COMMIT} -X main.BuildTime=${BUILD_TIME}" -o gtunnel-client ./cmd/client
+
+      - name: Package client
+        run: |
+          cp configs/config.ini .
+          tar czf GameTunnel-Client-linux-amd64.tar.gz gtunnel-client config.ini
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: client-linux
+          path: GameTunnel-Client-linux-amd64.tar.gz
 
   # ── Create GitHub Release ─────────────────────────────────
 
   publish:
-    needs: [release-server, release-client-windows]
+    needs: [release-server, release-client-windows, release-client-linux]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -137,3 +187,5 @@ jobs:
             gtunnel-server-openwrt-armv7
             gtunnel-server-openwrt-arm64
             GameTunnel-Client-windows-amd64.zip
+            GameTunnel-Client-windows-x86.zip
+            GameTunnel-Client-linux-amd64.tar.gz
