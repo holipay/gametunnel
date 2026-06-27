@@ -36,7 +36,7 @@ func run(cfg *client.Config, tunFactory func(client.TunConfig) (client.TunDevice
 	}
 	defer cleanup()
 
-	fmt.Printf("GameTunnel Client %s (commit: %s)\n", Version, Commit)
+	fmt.Printf("GameTunnel Client %s (commit: %s, built: %s)\n", Version, Commit, BuildTime)
 
 	if cfg.ServerAddr == "" {
 		fmt.Println("No server configured. Edit config.ini and set server=address:port")
