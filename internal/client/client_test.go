@@ -1316,7 +1316,7 @@ func TestHandleAssignIP_StoresVersion(t *testing.T) {
 		VirtualIP:  net.IPv4(10, 10, 0, 5).To4(),
 		SubnetMask: net.CIDRMask(24, 32),
 		ServerIP:   net.IPv4(10, 10, 0, 1).To4(),
-		Version:    0x0103, // v1.3 (same major, higher minor — compatible)
+		Version:    protocol.AppVersion, // same as client — compatible
 	}
 
 	err := tunnel.handleAssignIP(assign.Marshal())
@@ -1324,8 +1324,8 @@ func TestHandleAssignIP_StoresVersion(t *testing.T) {
 		t.Fatalf("handleAssignIP failed: %v", err)
 	}
 
-	if tunnel.serverVersion != 0x0103 {
-		t.Errorf("serverVersion: got 0x%04x, want 0x0103", tunnel.serverVersion)
+	if tunnel.serverVersion != protocol.AppVersion {
+		t.Errorf("serverVersion: got 0x%04x, want 0x%04x", tunnel.serverVersion, protocol.AppVersion)
 	}
 }
 
