@@ -21,10 +21,13 @@ import (
 
 var (
 	kernel32             = syscall.NewLazyDLL("kernel32.dll")
+	user32               = syscall.NewLazyDLL("user32.dll")
 	procCloseHandle      = kernel32.NewProc("CloseHandle")
 	procCreateToolhelp32 = kernel32.NewProc("CreateToolhelp32Snapshot")
 	procProcess32First   = kernel32.NewProc("Process32FirstW")
 	procProcess32Next    = kernel32.NewProc("Process32NextW")
+	procGetConsoleWindow = kernel32.NewProc("GetConsoleWindow")
+	procShowWindow       = user32.NewProc("ShowWindow")
 )
 
 type processEntry32 struct {
@@ -135,6 +138,13 @@ func requestAdmin() {
 	exe, err := os.Executable()
 	if err != nil {
 		return
+	}
+
+	// Hide the original console window before launching the elevated copy.
+	// Without this, the non-elevated window flashes briefly before exiting.
+	consoleWnd, _, _ := procGetConsoleWindow.Call()
+	if consoleWnd != 0 {
+		procShowWindow.Call(consoleWnd, 0) // SW_HIDE
 	}
 
 	verb, _ := windows.UTF16PtrFromString("runas")
