@@ -44,12 +44,23 @@ type processEntry32 struct {
 }
 
 func main() {
-	defer writeCrashLog()
+	// Hide console window immediately to prevent flash during UAC elevation.
+	// The elevated copy will show its own console window.
+	if wnd, _, _ := procGetConsoleWindow.Call(); wnd != 0 {
+		procShowWindow.Call(wnd, 0) // SW_HIDE
+	}
 
-	windows.SetConsoleOutputCP(65001)
+	defer writeCrashLog()
 
 	// Request admin rights if not elevated (needed for TUN device)
 	requestAdmin()
+
+	// Show console for the elevated (or already admin) process
+	if wnd, _, _ := procGetConsoleWindow.Call(); wnd != 0 {
+		procShowWindow.Call(wnd, 5) // SW_SHOW
+	}
+
+	windows.SetConsoleOutputCP(65001)
 
 	// Prevent multiple instances
 	checkSingleInstance()
@@ -140,13 +151,7 @@ func requestAdmin() {
 		return
 	}
 
-	// Hide the original console window before launching the elevated copy.
-	// Without this, the non-elevated window flashes briefly before exiting.
-	consoleWnd, _, _ := procGetConsoleWindow.Call()
-	if consoleWnd != 0 {
-		procShowWindow.Call(consoleWnd, 0) // SW_HIDE
-	}
-
+	// Console is already hidden by main(). Launch elevated copy.
 	verb, _ := windows.UTF16PtrFromString("runas")
 	exePath, _ := windows.UTF16PtrFromString(exe)
 
