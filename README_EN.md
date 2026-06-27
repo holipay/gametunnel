@@ -66,15 +66,21 @@ logread | grep gtunnel               # View logs
 
 > **Recommended devices**: NanoPi R2S/R4S (ARM64, budget-friendly), Raspberry Pi 4/5, GL.iNet series. Low-end MIPS routers are not recommended.
 
-### Player (Windows PC)
+### Client (Windows / Linux)
 
 **Option 1: Download archive (recommended)**
 1. Download the client from [Releases](https://github.com/holipay/gametunnel/releases)
-   - 64-bit: `GameTunnel-Client-windows-amd64.zip`
-   - **32-bit (older PCs/retro games)**: `GameTunnel-Client-windows-x86.zip`
-2. Extract to any folder (3 files total)
+   - Windows 64-bit: `GameTunnel-Client-windows-amd64.zip`
+   - Windows 32-bit: `GameTunnel-Client-windows-x86.zip`
+   - Linux: `GameTunnel-Client-linux-amd64.tar.gz`
+2. Extract to any folder
 3. Edit `config.ini` with your server address
-4. Double-click `gtunnel-client.exe` — it will auto-request admin privileges and connect
+4. Run the client (Linux requires root for TUN device):
+   ```bash
+   # Windows: double-click gtunnel-client.exe or run in cmd
+   # Linux:
+   sudo ./gtunnel-client
+   ```
 
 Config file `config.ini` example:
 ```ini
@@ -228,8 +234,9 @@ Setting a room password enables both **HMAC authentication** and **end-to-end en
 # Server
 gtunnel-server -addr :4700 -password mysecret
 
-# Client
-gtunnel-client -server 1.2.3.4:4700 -password mysecret
+# Client (config.ini)
+server=1.2.3.4:4700
+password=mysecret
 ```
 
 #### Authentication Flow
@@ -333,18 +340,17 @@ gtunnel-server -addr :4700 -subnet 10.10.0.0/24 -max 10 -password secret
 | `-version` | | Show version |
 
 ### Client
-```bash
-gtunnel-client -server 1.2.3.4:4700 -name PlayerName -room roomID -password secret
-```
-| Flag | Default | Description |
-|------|---------|-------------|
-| `-server` | _(required or config file)_ | Server address |
-| `-name` | Computer name | Player name (max 32 chars) |
-| `-room` | `default` | Room ID (players in the same room can communicate, max 32 chars) |
-| `-password` | _(empty)_ | Room password |
-| `-mtu` | `1400` | Tunnel MTU (576-9000) |
-| `-lang` | `zh` | Language (`zh` Chinese / `en` English) |
-| `-version` | | Show version |
+
+The client is configured via `config.ini` (located next to the executable). No command-line flags are supported.
+
+| Field | Default | Description |
+|-------|---------|-------------|
+| `server` | _(required)_ | Server address (IP:port or domain:port) |
+| `name` | Computer name | Player name (max 32 chars) |
+| `room` | `default` | Room ID (players in the same room can communicate, max 32 chars) |
+| `password` | _(empty)_ | Room password (empty = no password; setting it enables auth + encryption) |
+| `lang` | `zh` | Language (`zh` Chinese / `en` English) |
+| `mtu` | `1400` | Tunnel MTU (576-9000, usually no need to change) |
 
 Config file priority: `config.ini` (same directory as exe) > `%APPDATA%\GameTunnel\config.json`
 
@@ -396,8 +402,8 @@ firewall-cmd --reload
 **Q: Why not use ZeroTier/Tailscale?**
 A: You can, but GameTunnel is lighter, has no dependencies, and is specifically optimized for LAN game broadcast forwarding — it just works.
 
-**Q: Does the client need admin privileges?**
-A: Yes. Creating a virtual NIC requires Windows administrator rights (UAC prompt).
+**Q: Does the client need admin/root privileges?**
+A: Yes. Creating a virtual NIC requires admin privileges (Windows UAC prompt / Linux sudo).
 
 **Q: What's the latency?**
 A: Depends on the round-trip to the server. With a domestic VPS, typically 20-50ms. P2P direct connection via hole punching has even lower latency.
@@ -406,7 +412,7 @@ A: Depends on the round-trip to the server. With a domestic VPS, typically 20-50
 A: All IP-based LAN games. Broadcast forwarding is built-in, supporting games that rely on UDP broadcast discovery (e.g. StarCraft, Red Alert, Age of Empires, etc.).
 
 **Q: Which operating systems are supported?**
-A: Server: Linux and OpenWrt routers (mid-to-high-end ARM devices). Client: Windows 10+.
+A: Server: Linux and OpenWrt routers (mid-to-high-end ARM devices). Client: Windows 10+ and Linux.
 
 **Q: Is data secure?**
 A: With a password set, both authentication (HMAC-SHA256) and data transmission (ChaCha20-Poly1305) are end-to-end encrypted. The server cannot decrypt game data.
@@ -418,7 +424,10 @@ A: Yes. Different `-room` values are isolated from each other. With `-rooms` mod
 A: Automatically falls back to server relay with slightly higher latency. GameTunnel periodically retries hole punching.
 
 **Q: The client doesn't respond when I double-click it / won't run?**
-A: Windows may silently block executables downloaded from the internet (Mark of the Web / Zone Identifier). Right-click `gtunnel-client.exe` → **Properties** → check **"Unblock"** at the bottom → OK, then double-click again.
+A: Windows may silently block executables downloaded from the internet (Mark of the Web / Zone Identifier). Right-click `gtunnel-client.exe` → **Properties** → check **"Unblock"** at the bottom → OK, then run again.
+
+**Q: Linux client says "operation not permitted"?**
+A: Linux requires root privileges to create a virtual NIC. Run with `sudo ./gtunnel-client`.
 
 **Q: How do I check server status?**
 A: Use `-status-addr :4701` to enable the status page, then access via browser or curl. See the "Status Page" section above.
@@ -427,15 +436,15 @@ A: Use `-status-addr :4701` to enable the status page, then access via browser o
 
 ### Requirements
 
-- Go 1.25+
+- Go 1.26+
 
 ### Build
 
 ```bash
 # Build directly with go (recommended, no make needed)
 go build -o bin/gtunnel-server ./cmd/server
-go build -o bin/gtunnel-client.exe ./cmd/client     # requires Windows cross-compilation
-GOOS=windows GOARCH=amd64 go build -o bin/gtunnel-client.exe ./cmd/client  # specify target
+go build -o bin/gtunnel-client.exe ./cmd/client     # Linux native build
+GOOS=windows GOARCH=amd64 go build -o bin/gtunnel-client.exe ./cmd/client  # cross-compile for Windows
 
 # Or use make (convenient for batch builds and releases)
 make server          # Build server
