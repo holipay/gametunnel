@@ -584,6 +584,82 @@ func TestLoadINI_EmptyValuesPreserveDefaults(t *testing.T) {
 	}
 }
 
+func TestLoadINI_SeparateServerPort(t *testing.T) {
+	tmpDir := t.TempDir()
+	iniPath := filepath.Join(tmpDir, "config.ini")
+
+	// Separated format: server=host, port=port
+	content := "server=192.168.1.1\nport=5000\nname=Player1\nroom=test\npassword=abc\n"
+	if err := os.WriteFile(iniPath, []byte(content), 0644); err != nil {
+		t.Fatalf("failed to write INI file: %v", err)
+	}
+
+	cfg := &Config{PlayerName: "default", RoomID: "default"}
+	ok := loadINI(iniPath, cfg)
+	if !ok {
+		t.Fatal("expected loadINI to return true")
+	}
+
+	if cfg.ServerAddr != "192.168.1.1:5000" {
+		t.Errorf("expected ServerAddr '192.168.1.1:5000', got '%s'", cfg.ServerAddr)
+	}
+	if cfg.PlayerName != "Player1" {
+		t.Errorf("expected PlayerName 'Player1', got '%s'", cfg.PlayerName)
+	}
+	if cfg.RoomID != "test" {
+		t.Errorf("expected RoomID 'test', got '%s'", cfg.RoomID)
+	}
+	if cfg.RoomPassword != "abc" {
+		t.Errorf("expected RoomPassword 'abc', got '%s'", cfg.RoomPassword)
+	}
+}
+
+func TestLoadINI_SeparateIPv6Port(t *testing.T) {
+	tmpDir := t.TempDir()
+	iniPath := filepath.Join(tmpDir, "config.ini")
+
+	// IPv6 separated format: server=ipv6addr, port=port
+	content := "server=240d:c000:f07f:8e00:3ab0:2dee:7c06:0\nport=4700\nname=ipv6player\n"
+	if err := os.WriteFile(iniPath, []byte(content), 0644); err != nil {
+		t.Fatalf("failed to write INI file: %v", err)
+	}
+
+	cfg := &Config{PlayerName: "default", RoomID: "default"}
+	ok := loadINI(iniPath, cfg)
+	if !ok {
+		t.Fatal("expected loadINI to return true")
+	}
+
+	expected := "[240d:c000:f07f:8e00:3ab0:2dee:7c06:0]:4700"
+	if cfg.ServerAddr != expected {
+		t.Errorf("expected ServerAddr '%s', got '%s'", expected, cfg.ServerAddr)
+	}
+	if cfg.PlayerName != "ipv6player" {
+		t.Errorf("expected PlayerName 'ipv6player', got '%s'", cfg.PlayerName)
+	}
+}
+
+func TestLoadINI_ServerWithPortIgnoresSeparatePort(t *testing.T) {
+	tmpDir := t.TempDir()
+	iniPath := filepath.Join(tmpDir, "config.ini")
+
+	// When server already has port, separate port= should be ignored
+	content := "server=1.2.3.4:8000\nport=9000\n"
+	if err := os.WriteFile(iniPath, []byte(content), 0644); err != nil {
+		t.Fatalf("failed to write INI file: %v", err)
+	}
+
+	cfg := &Config{PlayerName: "default", RoomID: "default"}
+	ok := loadINI(iniPath, cfg)
+	if !ok {
+		t.Fatal("expected loadINI to return true")
+	}
+
+	if cfg.ServerAddr != "1.2.3.4:8000" {
+		t.Errorf("expected ServerAddr '1.2.3.4:8000', got '%s'", cfg.ServerAddr)
+	}
+}
+
 func TestLoadJSON(t *testing.T) {
 	tmpDir := t.TempDir()
 	jsonPath := filepath.Join(tmpDir, "config.json")
