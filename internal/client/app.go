@@ -269,23 +269,11 @@ func (a *App) connectLoop() {
 		a.Mu.Unlock()
 	}()
 
-	const (
-		baseDelay   = 2 * time.Second
-		maxDelay    = 60 * time.Second
-		fastRetries = 3 // number of rapid retries before prompting user
-	)
+	const fastRetries = 3
 
 	for attempt := 0; ; attempt++ {
 		if attempt > 0 {
-			// Linear backoff with jitter: 2s, 3s, 4s, 5s... capped at maxDelay.
-			// Gentler than exponential for better UX during server restarts.
-			delay := baseDelay + time.Duration(attempt)*baseDelay/2
-			if delay > maxDelay {
-				delay = maxDelay
-			}
-			// Add ±20% jitter to avoid thundering herd
-			jitter := time.Duration(rand.Int63n(int64(delay) / 5))
-			delay = delay - delay/10 + jitter
+			delay := computeBackoff(attempt)
 			select {
 			case <-ctx.Done():
 				return
@@ -309,28 +297,12 @@ func (a *App) connectLoop() {
 		}
 
 		if err != nil {
-			errMsg := err.Error()
-			a.Mu.Lock()
-			a.LastErr = errMsg
-			a.Connected = false
-			a.Mu.Unlock()
-			log.Printf("%s", i18n.Format(i18n.T().AppDisconnectErr, err))
-
-			// After exhausting fast retries, prompt user instead of silent backoff
-			if attempt+1 >= fastRetries {
-				// Reset attempt counter so next round also gets fast retries
-				a.Mu.RLock()
-				cb := a.OnConnFailed
-				a.Mu.RUnlock()
-				if cb != nil {
-					shouldRetry := cb(errMsg)
-					if !shouldRetry {
-						return
-					}
-					// User chose to retry — reset attempt for another round of fast retries
-					attempt = -1
-					continue
-				}
+			shouldRetry, resetAttempt := a.handleConnectError(err, attempt, fastRetries)
+			if !shouldRetry {
+				return
+			}
+			if resetAttempt {
+				attempt = -1
 			}
 		} else {
 			a.Mu.Lock()
@@ -338,10 +310,48 @@ func (a *App) connectLoop() {
 			a.LastErr = ""
 			a.Mu.Unlock()
 			log.Printf("%s", i18n.T().AppDisconnected)
-			// Successful connection that later dropped — reset attempt counter
 			attempt = -1
 		}
 	}
+}
+
+// computeBackoff returns a delay with linear backoff and ±10% jitter.
+func computeBackoff(attempt int) time.Duration {
+	const (
+		baseDelay = 2 * time.Second
+		maxDelay  = 60 * time.Second
+	)
+	delay := baseDelay + time.Duration(attempt)*baseDelay/2
+	if delay > maxDelay {
+		delay = maxDelay
+	}
+	jitter := time.Duration(rand.Int63n(int64(delay) / 5))
+	return delay - delay/10 + jitter
+}
+
+// handleConnectError processes a connection error. Returns (shouldRetry, resetAttempt).
+func (a *App) handleConnectError(err error, attempt, fastRetries int) (bool, bool) {
+	errMsg := err.Error()
+	a.Mu.Lock()
+	a.LastErr = errMsg
+	a.Connected = false
+	a.Mu.Unlock()
+	log.Printf("%s", i18n.Format(i18n.T().AppDisconnectErr, err))
+
+	if attempt+1 < fastRetries {
+		return true, false
+	}
+
+	a.Mu.RLock()
+	cb := a.OnConnFailed
+	a.Mu.RUnlock()
+	if cb == nil {
+		return true, false
+	}
+	if !cb(errMsg) {
+		return false, false
+	}
+	return true, true
 }
 
 // FormatDuration formats a duration as "HH:MM:SS" or "MM:SS".
