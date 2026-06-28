@@ -10,6 +10,10 @@ import (
 // DataFlagCompressed is set in Flags when Data is LZ4-compressed.
 const DataFlagCompressed byte = 0x01
 
+// DataFlagHasToken is set in Flags when a 16-byte session token follows the flags byte.
+// Only used when both client and server are v1.7+.
+const DataFlagHasToken byte = 0x02
+
 // DataPayload carries a relayed IP packet between client and server.
 // Wire format: srcIP(4) + dstIP(4) + flags(1) + data(N)
 //
@@ -120,14 +124,13 @@ func UnmarshalDataPooled(data []byte) (*DataPayload, error) {
 	return dp, nil
 }
 
-// isNewFormat returns true if the byte looks like a flags byte (0x00 or 0x01)
+// isNewFormat returns true if the byte looks like a flags byte (0x00, 0x01, or 0x02)
 // rather than an IPv4 version nibble (0x45-0x4F).
 // This is the backward-compatibility heuristic for detecting old vs new format.
-// IMPORTANT: Only flags values 0x00 and 0x01 are valid. Values 0x02-0xFF are
-// reserved to avoid collision with old-format IPv4 headers (0x4x-0xFx).
-// Adding new flags must not use values in this range without a protocol version bump.
+// IMPORTANT: Flags values 0x00-0x02 are valid. Values 0x03-0xFF are reserved to
+// avoid collision with old-format IPv4 headers (0x4x-0xFx).
 func isNewFormat(b byte) bool {
-	return b <= 0x01
+	return b <= 0x02
 }
 
 // IsCompressed returns true if the data payload flags indicate LZ4 compression.

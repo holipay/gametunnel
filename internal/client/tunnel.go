@@ -126,6 +126,14 @@ type Tunnel struct {
 	// Server version from AssignIP response (0 = old server without version)
 	serverVersion uint16
 
+	// Session token (v1.7+): 16-byte random token for anti-spoofing.
+	// Included in relay packets when server version >= 0x0107.
+	sessionToken [16]byte
+
+	// ECDH session key (forward secrecy): derived from X25519 shared secret.
+	// Used to create encryption ciphers when ECDH was negotiated.
+	ecdhSessionKey []byte
+
 	// Cached hole punch packet — built once on Connect, reused by
 	// startHolePunch, handleHolePunchReceived, and sendP2PKeepalives.
 	cachedPunchPacket []byte

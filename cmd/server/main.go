@@ -16,6 +16,7 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/holipay/gametunnel/internal/auth"
 	"github.com/holipay/gametunnel/internal/i18n"
 	"github.com/holipay/gametunnel/internal/server"
 	"github.com/holipay/gametunnel/internal/singleinstance"
@@ -63,6 +64,13 @@ func main() {
 	_, subnet, err := net.ParseCIDR(*subnetStr)
 	if err != nil {
 		log.Fatalf(t.ServerSubnetFail, *subnetStr, err)
+	}
+
+	// Password strength warning
+	if _, warnings := auth.CheckPasswordStrength(*roomPass); len(warnings) > 0 {
+		for _, w := range warnings {
+			log.Printf("[auth] %s", w)
+		}
 	}
 
 	s, err := server.New(server.Config{
