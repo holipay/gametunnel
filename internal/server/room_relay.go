@@ -4,6 +4,7 @@ import (
 	"net"
 	"time"
 
+	"github.com/holipay/gametunnel/internal/netutil"
 	"github.com/holipay/gametunnel/internal/protocol"
 )
 
@@ -34,7 +35,7 @@ func (r *Room) handleRelay(payload []byte, from *net.UDPAddr) {
 		return
 	}
 
-	isBroadcast := protocol.IsRelayTarget(dstIP, r.subnet)
+	isBroadcast := netutil.IsRelayTarget(dstIP, r.subnet)
 
 	var stackTargets [maxInlineTargets]*net.UDPAddr
 	targets := stackTargets[:0]

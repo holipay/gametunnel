@@ -14,6 +14,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
+	"math"
 	"net"
 
 	"golang.org/x/crypto/hkdf"
@@ -59,6 +60,9 @@ func ComputeHMAC(key []byte, challenge []byte, roomID, username string, remoteAd
 	if len(key) == 0 {
 		return nil
 	}
+	if len(roomID) > math.MaxUint16 || len(username) > math.MaxUint16 {
+		return nil
+	}
 	mac := hmac.New(sha256.New, key)
 	mac.Write(challenge)
 	var lenBuf [2]byte
@@ -70,6 +74,9 @@ func ComputeHMAC(key []byte, challenge []byte, roomID, username string, remoteAd
 	mac.Write([]byte(username))
 	if remoteAddr != nil {
 		addrStr := remoteAddr.String()
+		if len(addrStr) > math.MaxUint16 {
+			return nil
+		}
 		binary.BigEndian.PutUint16(lenBuf[:], uint16(len(addrStr)))
 		mac.Write(lenBuf[:])
 		mac.Write([]byte(addrStr))

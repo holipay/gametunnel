@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
-	"math/rand"
 	"net"
 	"sync"
 	"time"
@@ -45,13 +44,6 @@ type App struct {
 	// OnConnFailed is called when fast retries are exhausted.
 	// Args: error message. Return true to retry, false to stop.
 	OnConnFailed func(errMsg string) bool
-}
-
-// PeerStatus is the JSON-serializable peer info.
-type PeerStatus struct {
-	Username  string `json:"username"`
-	VirtualIP string `json:"virtual_ip"`
-	RTT       string `json:"rtt"`
 }
 
 // StatusResponse is the status payload for API/display.
@@ -357,46 +349,6 @@ func (a *App) connectLoop() {
 			attempt = -1 // reset attempt counter for fast reconnect phase
 		}
 	}
-}
-
-// computeBackoff returns a delay with linear backoff and ±10% jitter.
-// Deprecated: use SmartBackoff for smarter reconnection.
-func computeBackoff(attempt int) time.Duration {
-	const (
-		baseDelay = 2 * time.Second
-		maxDelay  = 60 * time.Second
-	)
-	delay := baseDelay + time.Duration(attempt)*baseDelay/2
-	if delay > maxDelay {
-		delay = maxDelay
-	}
-	jitter := time.Duration(rand.Int63n(int64(delay) / 5))
-	return delay - delay/10 + jitter
-}
-
-// handleConnectError processes a connection error. Returns (shouldRetry, resetAttempt).
-func (a *App) handleConnectError(err error, attempt, fastRetries int) (bool, bool) {
-	errMsg := err.Error()
-	a.Mu.Lock()
-	a.LastErr = errMsg
-	a.Connected = false
-	a.Mu.Unlock()
-	log.Printf("%s", i18n.Format(i18n.T().AppDisconnectErr, err))
-
-	if attempt+1 < fastRetries {
-		return true, false
-	}
-
-	a.Mu.RLock()
-	cb := a.OnConnFailed
-	a.Mu.RUnlock()
-	if cb == nil {
-		return true, false
-	}
-	if !cb(errMsg) {
-		return false, false
-	}
-	return true, true
 }
 
 // FormatDuration formats a duration as "HH:MM:SS" or "MM:SS".

@@ -1,11 +1,11 @@
 //go:build windows
 
-// configure.go — 替换 tun.go 中的 configure() 方法。
+// configure.go — replaces the configure() method from tun.go.
 //
-// 改动点：
-//   - Step 2/3: 用 IP Helper API 替代 PowerShell 设置 metric（保留 PS 回退）
-//   - verifyMetric 改为检查 AutomaticMetric 是否禁用（根因），而非检查 metric 值（会被覆盖）
-//   - 同时禁用所有物理网卡的 AutomaticMetric，防止 Windows NLA 服务回退
+// Changes compared to the Linux version:
+//   - Steps 2/3: use IP Helper API instead of PowerShell for metric (keep PS fallback)
+//   - verifyMetric checks if AutomaticMetric is disabled (root cause), not the metric value
+//   - disable AutomaticMetric on all physical NICs to prevent Windows NLA rollback
 
 package tun
 

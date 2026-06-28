@@ -392,46 +392,6 @@ func TestMessageTypeConstants(t *testing.T) {
 	}
 }
 
-// ── IPv6 Multicast Detection ──────────────────────────────────
-
-func TestIsIPv6Multicast(t *testing.T) {
-	tests := []struct {
-		name string
-		ip   net.IP
-		want bool
-	}{
-		{"IPv6 all-nodes ff02::1", net.ParseIP("ff02::1"), true},
-		{"IPv6 mDNS ff02::fb", net.ParseIP("ff02::fb"), true},
-		{"IPv6 solicited-node ff02::1:ff00:1", net.ParseIP("ff02::1:ff00:1"), true},
-		{"IPv6 global unicast", net.ParseIP("2408:abcd::1"), false},
-		{"IPv6 loopback", net.IPv6loopback, false},
-		{"IPv4 multicast (not IPv6)", net.IPv4(224, 0, 0, 251), false},
-		{"IPv4 broadcast", net.IPv4bcast, false},
-		{"nil", nil, false},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := IsIPv6Multicast(tt.ip); got != tt.want {
-				t.Errorf("IsIPv6Multicast(%s) = %v, want %v", tt.ip, got, tt.want)
-			}
-		})
-	}
-}
-
-func TestIsRelayTarget_IPv6Multicast(t *testing.T) {
-	_, subnet, _ := net.ParseCIDR("10.10.0.0/24")
-
-	// IPv6 multicast should be a relay target
-	if !IsRelayTarget(net.ParseIP("ff02::1"), subnet) {
-		t.Error("ff02::1 should be a relay target")
-	}
-
-	// IPv6 unicast should NOT be a relay target
-	if IsRelayTarget(net.ParseIP("2408:abcd::1"), subnet) {
-		t.Error("2408:abcd::1 should not be a relay target")
-	}
-}
-
 func TestPeerInfoWithIPv6PublicAddr(t *testing.T) {
 	// Simulates the IPv6 transport scenario: virtual IP is IPv4,
 	// but the peer's public address (from the server) is IPv6.
@@ -768,63 +728,11 @@ func TestAppendEncodeChecked_AppendsToExisting(t *testing.T) {
 	}
 }
 
-// ── EncodeCheckedPooled / PutEncodeBuf ────────────────────────────
-
-func TestEncodeCheckedPooled_RoundTrip(t *testing.T) {
-	payloads := [][]byte{
-		nil,
-		[]byte{},
-		[]byte("hello"),
-		bytes.Repeat([]byte("x"), 1000),
-	}
-	for _, payload := range payloads {
-		encoded := EncodeCheckedPooled(TypeData, payload)
-		if encoded == nil {
-			t.Fatal("EncodeCheckedPooled returned nil")
-		}
-		msg, err := DecodeChecked(encoded)
-		if err != nil {
-			t.Fatalf("DecodeChecked failed for payload len=%d: %v", len(payload), err)
-		}
-		if msg.Type != TypeData {
-			t.Errorf("type: got %d, want %d", msg.Type, TypeData)
-		}
-		if !bytes.Equal(msg.Payload, payload) {
-			t.Errorf("payload mismatch for len=%d", len(payload))
-		}
-		PutEncodeBuf(encoded)
-	}
-}
-
-func TestEncodeCheckedPooled_MatchesEncodeChecked(t *testing.T) {
-	payload := []byte("test payload")
-	pooled := EncodeCheckedPooled(TypeKeepAlive, payload)
-	regular := EncodeChecked(TypeKeepAlive, payload)
-
-	if !bytes.Equal(pooled, regular) {
-		t.Errorf("pooled and regular output differ: pooled=%x regular=%x", pooled, regular)
-	}
-	PutEncodeBuf(pooled)
-}
-
-func TestPutEncodeBuf_NilSafe(t *testing.T) {
-	// Should not panic
-	PutEncodeBuf(nil)
-}
-
-func TestPutEncodeBuf_VariousSizes(t *testing.T) {
-	sizes := []int{10, 300, 1500, 5000, 20000}
-	for _, size := range sizes {
-		buf := make([]byte, size)
-		PutEncodeBuf(buf) // should not panic
-	}
-}
-
 // ── DecodeLenient ─────────────────────────────────────────────
 
 func TestDecodeLenient_ValidCRC(t *testing.T) {
 	encoded := EncodeChecked(TypeKeepAlive, []byte("hello"))
-	msg, err := DecodeLenient(encoded)
+	msg, err := DecodeLenient(encoded, false)
 	if err != nil {
 		t.Fatalf("DecodeLenient failed: %v", err)
 	}
@@ -839,7 +747,7 @@ func TestDecodeLenient_ValidCRC(t *testing.T) {
 func TestDecodeLenient_NoCRC(t *testing.T) {
 	// Simulate AEAD packet: version + type + payload (no CRC)
 	encoded := Encode(TypeData, []byte("encrypted"))
-	msg, err := DecodeLenient(encoded)
+	msg, err := DecodeLenient(encoded, true)
 	if err != nil {
 		t.Fatalf("DecodeLenient failed for no-CRC packet: %v", err)
 	}
@@ -851,8 +759,17 @@ func TestDecodeLenient_NoCRC(t *testing.T) {
 	}
 }
 
+func TestDecodeLenient_NoCRC_Rejected(t *testing.T) {
+	// Without allowCRCFallback, no-CRC packet should be rejected
+	encoded := Encode(TypeData, []byte("encrypted"))
+	_, err := DecodeLenient(encoded, false)
+	if err == nil {
+		t.Fatal("expected error for no-CRC packet without fallback")
+	}
+}
+
 func TestDecodeLenient_TooShort(t *testing.T) {
-	_, err := DecodeLenient([]byte{ProtocolVersion})
+	_, err := DecodeLenient([]byte{ProtocolVersion}, true)
 	if err == nil {
 		t.Fatal("expected error for 1-byte packet")
 	}
@@ -861,7 +778,7 @@ func TestDecodeLenient_TooShort(t *testing.T) {
 func TestDecodeLenient_VersionMismatch(t *testing.T) {
 	encoded := Encode(TypeKeepAlive, []byte("test"))
 	encoded[0] = 99 // wrong version
-	_, err := DecodeLenient(encoded)
+	_, err := DecodeLenient(encoded, true)
 	if err == nil {
 		t.Fatal("expected error for version mismatch")
 	}
