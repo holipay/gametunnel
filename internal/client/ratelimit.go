@@ -39,6 +39,12 @@ func (l *clientSendLimiter) allow(size int) bool {
 	elapsed := now.Sub(l.lastTime).Seconds()
 	l.lastTime = now
 
+	// Guard against system clock rollback (NTP adjustments, VM migration).
+	// Negative elapsed would subtract tokens and could stall all sends.
+	if elapsed < 0 {
+		elapsed = 0
+	}
+
 	// Refill tokens
 	l.tokens += int64(elapsed * float64(l.rate))
 	if l.tokens > l.burst {

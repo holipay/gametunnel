@@ -31,7 +31,12 @@ func (r *Room) getAuthKey(roomID string) ([]byte, error) {
 
 // cleanupPendingAuth removes the pending auth entry, decrements counters,
 // and releases r.mu. MUST be called with r.mu held.
-func (r *Room) cleanupPendingAuth(fromKey, oldKey rateKey, foundByScan bool, from *net.UDPAddr) {
+// It decrements ipConnCount for the original registration address (c.PublicAddr),
+// NOT the current `from` address. When NAT rebinding occurs, `from` may differ
+// from the registration address — decrementing `from` would leave the original
+// address's count permanently incremented (memory leak) and the current address's
+// count negative (blocking future registrations from that IP).
+func (r *Room) cleanupPendingAuth(fromKey, oldKey rateKey, foundByScan bool, c *Client) {
 	deleteKey := fromKey
 	if foundByScan {
 		deleteKey = oldKey
@@ -40,7 +45,10 @@ func (r *Room) cleanupPendingAuth(fromKey, oldKey rateKey, foundByScan bool, fro
 	if r.pendingAuth > 0 {
 		r.pendingAuth--
 	}
-	r.decrementIPConnCount(addrToConnIPKey(from))
+	// Decrement for the ORIGINAL registration address, not the current source.
+	if c.PublicAddr != nil {
+		r.decrementIPConnCount(addrToConnIPKey(c.PublicAddr))
+	}
 	r.mu.Unlock()
 }
 
@@ -213,6 +221,7 @@ func (r *Room) doRegisterClient(reg *protocol.RegisterPayload, from *net.UDPAddr
 
 	log.Printf(t.LogPlayerJoin, reg.Username, from, vip, len(r.clients))
 
+	r.lastActivity.Store(time.Now().UnixNano())
 	r.totalRegistrations.Add(1)
 	if cur := uint32(len(r.clients)); cur > r.peakPlayers.Load() {
 		r.peakPlayers.Store(cur)
@@ -290,14 +299,14 @@ func (r *Room) handleAuthResponse(payload []byte, from *net.UDPAddr) {
 	}
 
 	if time.Since(c.challengeAt) > 15*time.Second {
-		r.cleanupPendingAuth(fromKey, oldKey, foundByScan, from)
+		r.cleanupPendingAuth(fromKey, oldKey, foundByScan, c)
 		r.sendKick(from, t.KickAuthTimeout)
 		return
 	}
 
 	authKey, err := r.getAuthKey(c.authRoomID)
 	if err != nil || authKey == nil {
-		r.cleanupPendingAuth(fromKey, oldKey, foundByScan, from)
+		r.cleanupPendingAuth(fromKey, oldKey, foundByScan, c)
 		r.sendKick(from, t.KickInternalError)
 		return
 	}
@@ -306,7 +315,7 @@ func (r *Room) handleAuthResponse(payload []byte, from *net.UDPAddr) {
 	// NOT the auth response source address. NAT rebinding may have changed
 	// the client's observed address between registration and auth response.
 	if !auth.VerifyHMAC(authKey, resp.HMAC, c.challenge, resp.RoomID, resp.Username, c.PublicAddr) {
-		r.cleanupPendingAuth(fromKey, oldKey, foundByScan, from)
+		r.cleanupPendingAuth(fromKey, oldKey, foundByScan, c)
 		log.Printf(t.LogAuthFail, resp.Username, from)
 		r.authFailures.Add(1)
 		r.sendKickCode(from, protocol.KickCodeWrongPassword, t.KickWrongPassword)

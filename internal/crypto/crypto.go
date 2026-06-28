@@ -39,6 +39,11 @@ const (
 
 	// Overhead is the total encryption overhead per packet.
 	Overhead = 1 + NonceSize + TagSize // 1 + 12 + 16 = 29 bytes
+
+	// replayWindowSize is the number of recent counter values tracked for replay detection.
+	// A window of 64 allows packets to arrive up to 64 positions out of order,
+	// which is generous for UDP gaming traffic where reordering is typically <10 packets.
+	replayWindowSize = 64
 )
 
 // Direction tags to prevent nonce reuse across send/receive.
@@ -53,6 +58,14 @@ type Cipher struct {
 	aead     cipher.AEAD
 	counter  atomic.Uint64 // 64-bit counter; nonce uses all 8 bytes. Collision risk: 2^64 packets ≈ impossible.
 	dirTag   []byte
+
+	// Replay protection: sliding window of recently received counter values.
+	// The window tracks counters in range [highestCounter - windowSize + 1, highestCounter].
+	// Packets with counters outside this window (too old or too far ahead) are rejected.
+	// This prevents replay attacks without requiring strict in-order delivery,
+	// which is important for UDP where packets may arrive slightly out of order.
+	highestCounter atomic.Uint64 // highest counter value seen in decrypted packets
+	replayBitmap   atomic.Uint64 // bitmap of received counters relative to highestCounter
 }
 
 // NewCipher creates a new Cipher with the given key and direction.
@@ -144,6 +157,8 @@ func (c *Cipher) EncryptTo(dst []byte, plaintext []byte) []byte {
 // Decrypt decrypts data produced by Encrypt.
 // Input format: [encVersion(1)] [nonce(12)] [ciphertext+tag(N+16)].
 // Returns the original plaintext or an error.
+// Includes replay protection via a sliding window that rejects duplicate
+// or too-old counter values in the nonce.
 func (c *Cipher) Decrypt(data []byte) ([]byte, error) {
 	if len(data) < Overhead {
 		return nil, errors.New("crypto: encrypted data too short")
@@ -154,11 +169,60 @@ func (c *Cipher) Decrypt(data []byte) ([]byte, error) {
 	nonce := data[1 : 1+NonceSize]
 	ciphertext := data[1+NonceSize:]
 
+	// Extract counter from nonce (first 8 bytes, little-endian)
+	ctr := binary.LittleEndian.Uint64(nonce[0:8])
+
+	// Replay protection: check if this counter is within the valid window
+	if !c.checkReplayWindow(ctr) {
+		return nil, errors.New("crypto: replay detected (counter out of window)")
+	}
+
 	plaintext, err := c.aead.Open(nil, nonce, ciphertext, nil)
 	if err != nil {
 		return nil, fmt.Errorf("crypto: decrypt: %w", err)
 	}
 	return plaintext, nil
+}
+
+// checkReplayWindow verifies that the counter is not a replay and updates the window.
+// Returns true if the counter is valid (not a replay), false if it's a duplicate or too old.
+// Uses a bitmap-based sliding window: tracks counters in range [highest-counterWindowSize+1, highest].
+func (c *Cipher) checkReplayWindow(ctr uint64) bool {
+	highest := c.highestCounter.Load()
+
+	if ctr > highest {
+		// New highest — shift the window
+		shift := ctr - highest
+		if shift < replayWindowSize {
+			oldBitmap := c.replayBitmap.Load()
+			// Shift bitmap and set bit 0 (the new highest)
+			c.replayBitmap.Store((oldBitmap << shift) | 1)
+		} else {
+			// Jumped past the entire window — reset
+			c.replayBitmap.Store(1)
+		}
+		highest = ctr
+		c.highestCounter.Store(ctr)
+		return true
+	}
+
+	// Check if within window
+	diff := highest - ctr
+	if diff >= replayWindowSize {
+		return false // too old
+	}
+
+	// Check if already seen (bit is set)
+	bit := uint64(1) << diff
+	for {
+		old := c.replayBitmap.Load()
+		if old&bit != 0 {
+			return false // already seen — replay!
+		}
+		if c.replayBitmap.CompareAndSwap(old, old|bit) {
+			return true
+		}
+	}
 }
 
 // IsEncrypted checks if data starts with the encryption version byte.
