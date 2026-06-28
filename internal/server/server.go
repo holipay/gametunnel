@@ -524,7 +524,7 @@ func (s *Server) tcpAcceptLoop(ctx context.Context) {
 
 		// Assign a unique port for this TCP client so its synthetic
 		// address is distinct in rateKey/addrMap lookups.
-		port := int(s.tcpPortCounter.Add(1) % 65535)
+		port := int(s.tcpPortCounter.Add(1) % 65536)
 		if port == 0 {
 			port = 1
 		}
