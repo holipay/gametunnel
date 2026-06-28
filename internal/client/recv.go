@@ -214,6 +214,7 @@ func (t *Tunnel) handleDirectData(ctx context.Context, from *net.UDPAddr, msg *p
 	p2pCipher := t.p2pCipher
 	fecDec := t.fecDecoder
 	dev := t.tunDev
+	lz4Dec := t.lz4Decoder
 
 	// Validate srcIP is a known peer (anti-spoofing)
 	srcKey := ipKey(dp.SrcIP)
@@ -235,15 +236,37 @@ func (t *Tunnel) handleDirectData(ctx context.Context, from *net.UDPAddr, msg *p
 	// Mark P2P direct path confirmed — this is the legitimate DirectReach signal
 	peer.DirectReach.Store(true)
 
-	// FEC: extract header from end of data, feed raw IP to decoder
-	if protocol.IsFECEnabled(dp.Flags) && len(dp.Data) >= protocol.FECHeaderSize && t.fecEnabled() {
-		off := len(dp.Data) - protocol.FECHeaderSize
-		groupID := binary.LittleEndian.Uint32(dp.Data[off:])
-		seq := dp.Data[off+4]
-		rawData := dp.Data[:off]
-		dp.Data = rawData
+	if dev == nil {
+		protocol.PutDataPayload(dp)
+		return
+	}
 
-		if fecDec != nil && dev != nil {
+	// ── Step 1: Decrypt (if encrypted) ──
+	// Must decrypt first because the FEC header is embedded INSIDE the
+	// encrypted payload on the P2P path. Operating on ciphertext would
+	// read garbage as groupID/seq and corrupt the AEAD by truncation.
+	outData := dp.Data
+	if p2pCipher != nil && crypto.IsEncrypted(dp.Data) {
+		decBuf := netutil.PktBufGet(len(dp.Data))
+		var decErr error
+		outData, decErr = p2pCipher.DecryptInto(decBuf[:0], dp.Data)
+		if decErr != nil {
+			netutil.PktBufPut(decBuf)
+			protocol.PutDataPayload(dp)
+			return
+		}
+		defer netutil.PktBufPut(decBuf)
+	}
+
+	// ── Step 2: FEC recovery (operates on plaintext data) ──
+	if protocol.IsFECEnabled(dp.Flags) && len(outData) >= protocol.FECHeaderSize && t.fecEnabled() {
+		off := len(outData) - protocol.FECHeaderSize
+		groupID := binary.LittleEndian.Uint32(outData[off:])
+		seq := outData[off+4]
+		rawData := outData[:off]
+		outData = rawData
+
+		if fecDec != nil {
 			recovered := fecDec.ProcessDataPacket(groupID, seq, rawData)
 			for _, pkt := range recovered {
 				if len(pkt) >= 20 {
@@ -255,8 +278,23 @@ func (t *Tunnel) handleDirectData(ctx context.Context, from *net.UDPAddr, msg *p
 		}
 	}
 
-	// Decrypt (P2P uses p2pCipher) and write to TUN
-	t.decryptWriteAndRelease(dp, p2pCipher)
+	// ── Step 3: Decompress (if compressed) ──
+	if protocol.IsCompressed(dp.Flags) && lz4Dec != nil {
+		decompressed, decErr := lz4Dec.Decompress(outData)
+		if decErr != nil {
+			log.Printf("[lz4] decompress error: %v", decErr)
+			protocol.PutDataPayload(dp)
+			return
+		}
+		outData = decompressed
+		defer lz4Dec.PutBuffer(decompressed)
+	}
+
+	// ── Step 4: Write to TUN ──
+	if _, werr := dev.Write(outData); werr != nil {
+		log.Printf(i18n.T().LogTUNWriteFail, werr)
+	}
+	protocol.PutDataPayload(dp)
 }
 
 // handleDirectHolePunch processes a TypeHolePunch received directly from a peer.
