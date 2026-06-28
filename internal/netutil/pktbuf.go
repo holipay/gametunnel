@@ -21,8 +21,12 @@ func PktBufGet(n int) []byte {
 		idx = 1
 	case n <= 16384:
 		idx = 2
-	default:
+	case n <= 65535:
 		idx = 3
+	default:
+		// n exceeds the largest pool class — allocate directly.
+		// PktBufPut will skip returning this (no matching capacity), GC handles it.
+		return make([]byte, n)
 	}
 	bp := pktPools[idx].Get().(*[]byte)
 	return (*bp)[:cap(*bp)]

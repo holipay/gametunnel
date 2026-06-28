@@ -148,19 +148,20 @@ func (a *App) Connect(cfg *Config) {
 	a.Connecting = true
 	a.ConnectGen++
 	a.LastErr = ""
-	a.Mu.Unlock()
-
-	// Clean up old tunnel before creating new one
+	// Capture old tunnel under lock before creating new one, so that
+	// a concurrent Disconnect() call sees a consistent snapshot.
+	oldTun := a.Tunnel
 	a.Cancel()
-	a.Tunnel.Disconnect()
-	a.Tunnel.CloseTUN()
 
-	// Update config and create new tunnel (under lock to avoid data race)
-	a.Mu.Lock()
+	// Update config and create new tunnel
 	a.Cfg = cfg
 	a.Tunnel = New(cfg)
 	a.Ctx, a.Cancel = context.WithCancel(context.Background())
 	a.Mu.Unlock()
+
+	// Clean up old tunnel after releasing lock (may block on I/O)
+	oldTun.Disconnect()
+	oldTun.CloseTUN()
 
 	if err := SaveConfig(cfg); err != nil {
 		log.Printf("%s", i18n.Format(i18n.T().AppSaveFail, err))
