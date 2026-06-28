@@ -427,6 +427,14 @@ func (s *Server) handlePacketMultiRoom(msg *protocol.Message, from *net.UDPAddr)
 		return // not registered in any room
 	}
 
+	// Room may have been stopped between the addrToRoom lookup and this
+	// call (e.g. during server shutdown or stale room cleanup).
+	select {
+	case <-room.done:
+		return
+	default:
+	}
+
 	room.HandlePacket(msg.Type, msg.Payload, from)
 }
 

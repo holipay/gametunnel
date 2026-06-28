@@ -76,6 +76,7 @@ func (t *Tunnel) routePacket(pkt []byte, srcIP, dstIP net.IP) {
 	// Single read lock snapshot for all fields needed in this call.
 	t.mu.RLock()
 	serverIPKey := t.serverIPKey
+	serverAddr := t.serverAddr
 	cachedSubnet := t.cachedSubnet
 	encCipher := t.encCipher
 	p2pCipher := t.p2pCipher
@@ -119,13 +120,13 @@ func (t *Tunnel) routePacket(pkt []byte, srcIP, dstIP net.IP) {
 
 	// Fast path: check server destination first (most common for relay)
 	if dstKey == serverIPKey {
-		t.sendToServerFEC(sendData, rawForFEC, srcIP, dstIP, encCipher, flags, fecEnc, token)
+		t.sendToServerFEC(sendData, rawForFEC, srcIP, dstIP, encCipher, flags, fecEnc, token, serverAddr)
 		return
 	}
 
 	// Broadcast/multicast: relay to all peers via server
 	if cachedSubnet != nil && netutil.IsRelayTarget(dstIP, cachedSubnet) {
-		t.sendToServerFEC(sendData, rawForFEC, srcIP, dstIP, encCipher, flags, fecEnc, token)
+		t.sendToServerFEC(sendData, rawForFEC, srcIP, dstIP, encCipher, flags, fecEnc, token, serverAddr)
 		return
 	}
 
@@ -142,22 +143,24 @@ func (t *Tunnel) routePacket(pkt []byte, srcIP, dstIP net.IP) {
 		t.feedFEC(rawForFEC, peerAddr, fecEnc)
 	} else {
 		// Fallback: relay through server.
-		t.sendToServerFEC(sendData, rawForFEC, srcIP, dstIP, encCipher, flags, fecEnc, token)
+		t.sendToServerFEC(sendData, rawForFEC, srcIP, dstIP, encCipher, flags, fecEnc, token, serverAddr)
 	}
 }
 
 // sendToServerFEC sends a packet via server relay and generates FEC parity.
 // data is the protocol payload (with FEC header if enabled).
 // rawForFEC is the raw IP data without FEC header, used for FEC encoding.
-func (t *Tunnel) sendToServerFEC(data, rawForFEC []byte, srcIP, dstIP net.IP, cipher *crypto.Cipher, flags byte, fecEnc *netutil.FECEncoder, token *[16]byte) {
+// serverAddr is passed explicitly (snapshotted under lock) to avoid data races
+// with Connect() reassigning t.serverAddr.
+func (t *Tunnel) sendToServerFEC(data, rawForFEC []byte, srcIP, dstIP net.IP, cipher *crypto.Cipher, flags byte, fecEnc *netutil.FECEncoder, token *[16]byte, serverAddr *net.UDPAddr) {
 	var packet []byte
 	if cipher != nil {
 		packet = buildEncryptedDataPacket(srcIP, dstIP, data, cipher, flags)
 	} else {
 		packet = buildDataPacket(srcIP, dstIP, data, flags, token)
 	}
-	t.sendUDP(packet, t.serverAddr)
-	t.feedFEC(rawForFEC, t.serverAddr, fecEnc)
+	t.sendUDP(packet, serverAddr)
+	t.feedFEC(rawForFEC, serverAddr, fecEnc)
 }
 
 // feedFEC feeds raw IP data to the FEC encoder and sends any generated
