@@ -105,15 +105,27 @@ func (t *Tunnel) routePacket(pkt []byte, srcIP, dstIP net.IP) {
 		}
 	}
 
+	// Embed FEC header (groupID + seq) at end of data when FEC is enabled.
+	// The encoder receives only the raw IP data (without FEC header).
+	rawForFEC := sendData
+	if fecEnc != nil && t.fecEnabled() {
+		gid, seq := fecEnc.CurrentGroupInfo()
+		var fecHeader [5]byte
+		binary.LittleEndian.PutUint32(fecHeader[:4], gid)
+		fecHeader[4] = seq
+		sendData = append(sendData, fecHeader[:]...)
+		flags |= protocol.DataFlagHasFEC
+	}
+
 	// Fast path: check server destination first (most common for relay)
 	if dstKey == serverIPKey {
-		t.sendToServerFEC(sendData, srcIP, dstIP, encCipher, flags, fecEnc, token)
+		t.sendToServerFEC(sendData, rawForFEC, srcIP, dstIP, encCipher, flags, fecEnc, token)
 		return
 	}
 
 	// Broadcast/multicast: relay to all peers via server
 	if cachedSubnet != nil && netutil.IsRelayTarget(dstIP, cachedSubnet) {
-		t.sendToServerFEC(sendData, srcIP, dstIP, encCipher, flags, fecEnc, token)
+		t.sendToServerFEC(sendData, rawForFEC, srcIP, dstIP, encCipher, flags, fecEnc, token)
 		return
 	}
 
@@ -126,34 +138,35 @@ func (t *Tunnel) routePacket(pkt []byte, srcIP, dstIP net.IP) {
 			packet = buildDataPacket(srcIP, dstIP, sendData, flags, nil)
 		}
 		t.sendUDP(packet, peerAddr)
-		// Generate FEC parity for P2P path
-		t.feedFEC(packet, peerAddr, fecEnc)
+		// Generate FEC parity for P2P path — use raw IP data without FEC header
+		t.feedFEC(rawForFEC, peerAddr, fecEnc)
 	} else {
 		// Fallback: relay through server.
-		t.sendToServerFEC(sendData, srcIP, dstIP, encCipher, flags, fecEnc, token)
+		t.sendToServerFEC(sendData, rawForFEC, srcIP, dstIP, encCipher, flags, fecEnc, token)
 	}
 }
 
 // sendToServerFEC sends a packet via server relay and generates FEC parity.
-func (t *Tunnel) sendToServerFEC(pkt []byte, srcIP, dstIP net.IP, cipher *crypto.Cipher, flags byte, fecEnc *netutil.FECEncoder, token *[16]byte) {
+// data is the protocol payload (with FEC header if enabled).
+// rawForFEC is the raw IP data without FEC header, used for FEC encoding.
+func (t *Tunnel) sendToServerFEC(data, rawForFEC []byte, srcIP, dstIP net.IP, cipher *crypto.Cipher, flags byte, fecEnc *netutil.FECEncoder, token *[16]byte) {
 	var packet []byte
 	if cipher != nil {
-		packet = buildEncryptedDataPacket(srcIP, dstIP, pkt, cipher, flags)
+		packet = buildEncryptedDataPacket(srcIP, dstIP, data, cipher, flags)
 	} else {
-		packet = buildDataPacket(srcIP, dstIP, pkt, flags, token)
+		packet = buildDataPacket(srcIP, dstIP, data, flags, token)
 	}
 	t.sendUDP(packet, t.serverAddr)
-	t.feedFEC(packet, t.serverAddr, fecEnc)
+	t.feedFEC(rawForFEC, t.serverAddr, fecEnc)
 }
 
-// feedFEC feeds a sent packet to the FEC encoder and sends any generated
+// feedFEC feeds raw IP data to the FEC encoder and sends any generated
 // parity packet to the same destination.
-func (t *Tunnel) feedFEC(packet []byte, dest *net.UDPAddr, fecEnc *netutil.FECEncoder) {
+func (t *Tunnel) feedFEC(data []byte, dest *net.UDPAddr, fecEnc *netutil.FECEncoder) {
 	if fecEnc == nil {
 		return
 	}
-	// Feed the packet data (after protocol header) to the FEC encoder
-	parity := fecEnc.Encode(packet[protocol.HeaderLen:])
+	parity := fecEnc.Encode(data)
 	if parity != nil {
 		t.sendUDP(parity, dest)
 	}

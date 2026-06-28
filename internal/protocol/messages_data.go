@@ -14,6 +14,15 @@ const DataFlagCompressed byte = 0x01
 // Only used when both client and server are v1.7+.
 const DataFlagHasToken byte = 0x02
 
+// DataFlagHasFEC is set in Flags when a 5-byte FEC header (groupID + seq)
+// is appended at the end of the data payload. Used for forward error correction.
+// Only used when server version >= 0x0108.
+const DataFlagHasFEC byte = 0x04
+
+// FECHeaderSize is the size of the FEC header appended to the data payload.
+// Wire format: [groupID(4, LE)] [seq(1)]
+const FECHeaderSize = 5
+
 // DataPayload carries a relayed IP packet between client and server.
 // Wire format: srcIP(4) + dstIP(4) + flags(1) + data(N)
 //
@@ -129,16 +138,21 @@ func UnmarshalDataPooled(data []byte) (*DataPayload, error) {
 	return dp, nil
 }
 
-// isNewFormat returns true if the byte looks like a flags byte (0x00, 0x01, or 0x02)
+// isNewFormat returns true if the byte looks like a flags byte (0x00-0x07)
 // rather than an IPv4 version nibble (0x45-0x4F).
 // This is the backward-compatibility heuristic for detecting old vs new format.
-// IMPORTANT: Flags values 0x00-0x02 are valid. Values 0x03-0xFF are reserved to
+// IMPORTANT: Flags values 0x00-0x07 are valid. Values 0x08-0xFF are reserved to
 // avoid collision with old-format IPv4 headers (0x4x-0xFx).
 func isNewFormat(b byte) bool {
-	return b <= 0x02
+	return b <= 0x07
 }
 
 // IsCompressed returns true if the data payload flags indicate LZ4 compression.
 func IsCompressed(flags byte) bool {
 	return flags&DataFlagCompressed != 0
+}
+
+// IsFECEnabled returns true if the data payload flags indicate FEC header is present.
+func IsFECEnabled(flags byte) bool {
+	return flags&DataFlagHasFEC != 0
 }

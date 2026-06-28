@@ -210,13 +210,16 @@ func (t *Tunnel) handleDirectData(ctx context.Context, from *net.UDPAddr, msg *p
 	}
 
 	// Snapshot all needed fields under a single read lock
-	srcKey := ipKey(dp.SrcIP)
 	t.mu.RLock()
-	peer, known := t.peers[srcKey]
 	p2pCipher := t.p2pCipher
-	t.mu.RUnlock()
+	fecDec := t.fecDecoder
+	dev := t.tunDev
 
 	// Validate srcIP is a known peer (anti-spoofing)
+	srcKey := ipKey(dp.SrcIP)
+	peer, known := t.peers[srcKey]
+	t.mu.RUnlock()
+
 	if !known {
 		protocol.PutDataPayload(dp)
 		return
@@ -231,6 +234,26 @@ func (t *Tunnel) handleDirectData(ctx context.Context, from *net.UDPAddr, msg *p
 
 	// Mark P2P direct path confirmed — this is the legitimate DirectReach signal
 	peer.DirectReach.Store(true)
+
+	// FEC: extract header from end of data, feed raw IP to decoder
+	if protocol.IsFECEnabled(dp.Flags) && len(dp.Data) >= protocol.FECHeaderSize && t.fecEnabled() {
+		off := len(dp.Data) - protocol.FECHeaderSize
+		groupID := binary.LittleEndian.Uint32(dp.Data[off:])
+		seq := dp.Data[off+4]
+		rawData := dp.Data[:off]
+		dp.Data = rawData
+
+		if fecDec != nil && dev != nil {
+			recovered := fecDec.ProcessDataPacket(groupID, seq, rawData)
+			for _, pkt := range recovered {
+				if len(pkt) >= 20 {
+					if _, werr := dev.Write(pkt); werr != nil {
+						log.Printf("[fec] recovered packet write error: %v", werr)
+					}
+				}
+			}
+		}
+	}
 
 	// Decrypt (P2P uses p2pCipher) and write to TUN
 	t.decryptWriteAndRelease(dp, p2pCipher)
@@ -279,9 +302,10 @@ func (t *Tunnel) handleFECPacket(data []byte) {
 	t.mu.RLock()
 	fecDec := t.fecDecoder
 	dev := t.tunDev
+	fecEnabled := t.fecEnabled()
 	t.mu.RUnlock()
 
-	if fecDec == nil || dev == nil {
+	if fecDec == nil || dev == nil || !fecEnabled {
 		return
 	}
 
@@ -404,6 +428,8 @@ func (t *Tunnel) handleDataFromServer(payload []byte) {
 	serverIPKey := t.serverIPKey
 	decCipher := t.decCipher
 	_, known := t.peers[srcKey]
+	fecDec := t.fecDecoder
+	dev := t.tunDev
 	t.mu.RUnlock()
 
 	// Allow traffic from the server's virtual IP (relay path) or known peers.
@@ -411,6 +437,27 @@ func (t *Tunnel) handleDataFromServer(payload []byte) {
 		// Unknown srcIP — drop to prevent injection.
 		protocol.PutDataPayload(dp)
 		return
+	}
+
+	// FEC: extract header from end of data, feed raw IP to decoder.
+	// Recovered packets are raw IP and written directly to TUN.
+	if protocol.IsFECEnabled(dp.Flags) && len(dp.Data) >= protocol.FECHeaderSize && t.fecEnabled() {
+		off := len(dp.Data) - protocol.FECHeaderSize
+		groupID := binary.LittleEndian.Uint32(dp.Data[off:])
+		seq := dp.Data[off+4]
+		rawData := dp.Data[:off]
+		dp.Data = rawData
+
+		if fecDec != nil && dev != nil {
+			recovered := fecDec.ProcessDataPacket(groupID, seq, rawData)
+			for _, pkt := range recovered {
+				if len(pkt) >= 20 {
+					if _, werr := dev.Write(pkt); werr != nil {
+						log.Printf("[fec] recovered packet write error: %v", werr)
+					}
+				}
+			}
+		}
 	}
 
 	// Decrypt (relay uses decCipher) and write to TUN
