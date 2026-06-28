@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -86,6 +87,15 @@ func setupLog() *os.File {
 	}
 	log.SetOutput(io.MultiWriter(f, os.Stderr))
 	return f
+}
+
+// parseHostIP extracts the IP from an address string (e.g. "1.2.3.4:4700" or "[::1]:4700").
+func parseHostIP(addr string) net.IP {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return net.ParseIP(addr)
+	}
+	return net.ParseIP(host)
 }
 
 func appDataPath() string {

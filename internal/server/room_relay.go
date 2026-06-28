@@ -2,29 +2,14 @@ package server
 
 import (
 	"net"
-	"strconv"
 	"time"
 
 	"github.com/holipay/gametunnel/internal/protocol"
 )
 
-// appendAddr appends "ip:port" to buf without allocating an intermediate string.
+// appendAddr appends "ip:port" to buf, delegating to protocol.AppendAddrStr.
 func appendAddr(buf []byte, addr *net.UDPAddr) []byte {
-	ip4 := addr.IP.To4()
-	if ip4 == nil {
-		// IPv6 fallback
-		return append(buf, addr.String()...)
-	}
-	buf = strconv.AppendInt(buf, int64(ip4[0]), 10)
-	buf = append(buf, '.')
-	buf = strconv.AppendInt(buf, int64(ip4[1]), 10)
-	buf = append(buf, '.')
-	buf = strconv.AppendInt(buf, int64(ip4[2]), 10)
-	buf = append(buf, '.')
-	buf = strconv.AppendInt(buf, int64(ip4[3]), 10)
-	buf = append(buf, ':')
-	buf = strconv.AppendInt(buf, int64(addr.Port), 10)
-	return buf
+	return protocol.AppendAddrStr(buf, addr)
 }
 
 // ── Relay ──────────────────────────────────────────────────────

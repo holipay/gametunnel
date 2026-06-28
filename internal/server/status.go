@@ -66,9 +66,9 @@ func (s *Server) startStatusServer(ctx context.Context, addr string) {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", s.handleStatusHTML)
-	mux.HandleFunc("/api/status", s.handleStatusJSON)
-	mux.HandleFunc("/api/metrics", s.handleMetricsJSON)
-	mux.HandleFunc("/api/rooms", s.handleRoomsJSON)
+	mux.HandleFunc("/api/status", s.requireToken(s.handleStatusJSON))
+	mux.HandleFunc("/api/metrics", s.requireToken(s.handleMetricsJSON))
+	mux.HandleFunc("/api/rooms", s.requireToken(s.handleRoomsJSON))
 
 	srv := &http.Server{
 		Addr:         addr,
@@ -115,16 +115,27 @@ func (s *Server) checkStatusToken(r *http.Request) bool {
 	return false
 }
 
-func (s *Server) handleStatusJSON(w http.ResponseWriter, r *http.Request) {
-	if !s.checkStatusToken(r) {
-		http.Error(w, "403 forbidden: invalid or missing token", http.StatusForbidden)
-		return
+// requireToken wraps an HTTP handler with token authentication.
+func (s *Server) requireToken(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if !s.checkStatusToken(r) {
+			http.Error(w, "403 forbidden: invalid or missing token", http.StatusForbidden)
+			return
+		}
+		next(w, r)
 	}
-	info := s.buildStatusInfo()
+}
+
+// writeJSON encodes v as JSON and writes it to w.
+func writeJSON(w http.ResponseWriter, v interface{}) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	if err := json.NewEncoder(w).Encode(info); err != nil {
-		log.Printf("status JSON encode: %v", err)
+	if err := json.NewEncoder(w).Encode(v); err != nil {
+		log.Printf("JSON encode: %v", err)
 	}
+}
+
+func (s *Server) handleStatusJSON(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, s.buildStatusInfo())
 }
 
 // MetricsAPIResponse is the JSON response from /api/metrics.
@@ -135,26 +146,15 @@ type MetricsAPIResponse struct {
 }
 
 func (s *Server) handleMetricsJSON(w http.ResponseWriter, r *http.Request) {
-	if !s.checkStatusToken(r) {
-		http.Error(w, "403 forbidden: invalid or missing token", http.StatusForbidden)
-		return
-	}
 	resp := MetricsAPIResponse{
 		Interval: "1m",
 		Window:   "1h",
 		Samples:  s.metricsTS.Snapshot(),
 	}
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	if err := json.NewEncoder(w).Encode(resp); err != nil {
-		log.Printf("metrics JSON encode: %v", err)
-	}
+	writeJSON(w, resp)
 }
 
 func (s *Server) handleRoomsJSON(w http.ResponseWriter, r *http.Request) {
-	if !s.checkStatusToken(r) {
-		http.Error(w, "403 forbidden: invalid or missing token", http.StatusForbidden)
-		return
-	}
 	if !s.multiRoom {
 		http.Error(w, "multi-room not enabled", http.StatusBadRequest)
 		return
@@ -165,10 +165,7 @@ func (s *Server) handleRoomsJSON(w http.ResponseWriter, r *http.Request) {
 		rooms = append(rooms, room.BuildRoomStatus())
 	}
 	s.roomMu.RUnlock()
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	if err := json.NewEncoder(w).Encode(rooms); err != nil {
-		log.Printf("rooms JSON encode: %v", err)
-	}
+	writeJSON(w, rooms)
 }
 
 func (s *Server) handleStatusHTML(w http.ResponseWriter, r *http.Request) {

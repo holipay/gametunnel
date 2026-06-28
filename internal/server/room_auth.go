@@ -29,6 +29,46 @@ func (r *Room) getAuthKey(roomID string) ([]byte, error) {
 
 // ── Register ───────────────────────────────────────────────────
 
+// cleanupPendingAuth removes the pending auth entry, decrements counters,
+// and releases r.mu. MUST be called with r.mu held.
+func (r *Room) cleanupPendingAuth(fromKey, oldKey rateKey, foundByScan bool, from *net.UDPAddr) {
+	deleteKey := fromKey
+	if foundByScan {
+		deleteKey = oldKey
+	}
+	delete(r.addrMap, deleteKey)
+	if r.pendingAuth > 0 {
+		r.pendingAuth--
+	}
+	r.decrementIPConnCount(addrToConnIPKey(from))
+	r.mu.Unlock()
+}
+
+// checkRoomCapacityAndDuplicate checks if the room is full or the username is taken.
+// Returns true if the client should be rejected. MUST be called with r.mu held.
+// Releases r.mu and sends a kick packet before returning true.
+func (r *Room) checkRoomCapacityAndDuplicate(username, roomID string, from *net.UDPAddr) bool {
+	t := i18n.T()
+	if len(r.clients) >= r.maxPlayers {
+		r.decrementIPConnCount(addrToConnIPKey(from))
+		r.mu.Unlock()
+		r.sendKick(from, t.KickRoomFull)
+		return true
+	}
+	for _, c := range r.clients {
+		if c.auth == authChallengeSent {
+			continue
+		}
+		if c.authRoomID == roomID && c.Username == username {
+			r.decrementIPConnCount(addrToConnIPKey(from))
+			r.mu.Unlock()
+			r.sendKick(from, t.KickDuplicateName)
+			return true
+		}
+	}
+	return false
+}
+
 func (r *Room) handleRegister(payload []byte, from *net.UDPAddr) {
 	reg, err := protocol.UnmarshalRegister(payload)
 	if err != nil {
@@ -110,23 +150,8 @@ func (r *Room) handleRegister(payload []byte, from *net.UDPAddr) {
 	r.ipConnCount[clientIP]++
 	r.ipConnMu.Unlock()
 
-	if len(r.clients) >= r.maxPlayers {
-		r.decrementIPConnCount(clientIP)
-		r.mu.Unlock()
-		r.sendKick(from, t.KickRoomFull)
+	if r.checkRoomCapacityAndDuplicate(reg.Username, reg.RoomID, from) {
 		return
-	}
-
-	for _, c := range r.clients {
-		if c.auth == authChallengeSent {
-			continue
-		}
-		if c.authRoomID == reg.RoomID && c.Username == reg.Username {
-			r.decrementIPConnCount(clientIP)
-			r.mu.Unlock()
-			r.sendKick(from, t.KickDuplicateName)
-			return
-		}
 	}
 
 	if r.roomPass == "" {
@@ -265,32 +290,14 @@ func (r *Room) handleAuthResponse(payload []byte, from *net.UDPAddr) {
 	}
 
 	if time.Since(c.challengeAt) > 15*time.Second {
-		deleteKey := fromKey
-		if foundByScan {
-			deleteKey = oldKey
-		}
-		delete(r.addrMap, deleteKey)
-		if r.pendingAuth > 0 {
-			r.pendingAuth--
-		}
-		r.decrementIPConnCount(addrToConnIPKey(from))
-		r.mu.Unlock()
+		r.cleanupPendingAuth(fromKey, oldKey, foundByScan, from)
 		r.sendKick(from, t.KickAuthTimeout)
 		return
 	}
 
 	authKey, err := r.getAuthKey(c.authRoomID)
 	if err != nil || authKey == nil {
-		deleteKey := fromKey
-		if foundByScan {
-			deleteKey = oldKey
-		}
-		delete(r.addrMap, deleteKey)
-		if r.pendingAuth > 0 {
-			r.pendingAuth--
-		}
-		r.decrementIPConnCount(addrToConnIPKey(from))
-		r.mu.Unlock()
+		r.cleanupPendingAuth(fromKey, oldKey, foundByScan, from)
 		r.sendKick(from, t.KickInternalError)
 		return
 	}
@@ -299,16 +306,7 @@ func (r *Room) handleAuthResponse(payload []byte, from *net.UDPAddr) {
 	// NOT the auth response source address. NAT rebinding may have changed
 	// the client's observed address between registration and auth response.
 	if !auth.VerifyHMAC(authKey, resp.HMAC, c.challenge, resp.RoomID, resp.Username, c.PublicAddr) {
-		deleteKey := fromKey
-		if foundByScan {
-			deleteKey = oldKey
-		}
-		delete(r.addrMap, deleteKey)
-		if r.pendingAuth > 0 {
-			r.pendingAuth--
-		}
-		r.decrementIPConnCount(addrToConnIPKey(from))
-		r.mu.Unlock()
+		r.cleanupPendingAuth(fromKey, oldKey, foundByScan, from)
 		log.Printf(t.LogAuthFail, resp.Username, from)
 		r.authFailures.Add(1)
 		r.sendKickCode(from, protocol.KickCodeWrongPassword, t.KickWrongPassword)
@@ -331,23 +329,8 @@ func (r *Room) handleAuthResponse(payload []byte, from *net.UDPAddr) {
 		r.addrMap[fromKey] = c
 	}
 
-	if len(r.clients) >= r.maxPlayers {
-		r.decrementIPConnCount(addrToConnIPKey(from))
-		r.mu.Unlock()
-		r.sendKick(from, t.KickRoomFull)
+	if r.checkRoomCapacityAndDuplicate(resp.Username, resp.RoomID, from) {
 		return
-	}
-
-	for _, existing := range r.clients {
-		if existing.auth == authChallengeSent {
-			continue
-		}
-		if existing.authRoomID == resp.RoomID && existing.Username == resp.Username {
-			r.decrementIPConnCount(addrToConnIPKey(from))
-			r.mu.Unlock()
-			r.sendKick(from, t.KickDuplicateName)
-			return
-		}
 	}
 
 	reg := &protocol.RegisterPayload{RoomID: resp.RoomID, Username: resp.Username}

@@ -163,14 +163,6 @@ func requestAdmin() {
 	os.Exit(0)
 }
 
-func parseHostIP(addr string) net.IP {
-	host, _, err := net.SplitHostPort(addr)
-	if err != nil {
-		return net.ParseIP(addr)
-	}
-	return net.ParseIP(host)
-}
-
 func writeCrashLog() {
 	r := recover()
 	if r == nil {
