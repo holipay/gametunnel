@@ -45,7 +45,7 @@ func (t *Tunnel) tryRebind(timeout time.Duration) bool {
 	packet := protocol.EncodeChecked(protocol.TypeRebind, rebind.Marshal())
 
 	// Send rebind request (use ctrl channel for reliability)
-	t.sendCtrl(packet, t.serverAddr)
+	t.sendCtrl(packet, t.serverAddr.Load())
 
 	// Drain any stale acks from previous attempts
 	select {

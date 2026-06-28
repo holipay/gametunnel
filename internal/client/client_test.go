@@ -66,7 +66,7 @@ func newTestTunnel(t *testing.T) (*Tunnel, *net.UDPConn) {
 	cfg := &Config{PlayerName: "test", RoomID: "test", RoomPassword: ""}
 	tunnel := New(cfg)
 	tunnel.conn = tunnelConn
-	tunnel.serverAddr = serverConn.LocalAddr().(*net.UDPAddr)
+	tunnel.serverAddr.Store(serverConn.LocalAddr().(*net.UDPAddr))
 
 	// ── 启动 sendLoop，让 sendCh 中的数据能实际写入 UDP ──
 	ctx, cancel := context.WithCancel(context.Background())
@@ -1456,7 +1456,7 @@ func TestDisconnect(t *testing.T) {
 	tunnel, _ := newTestTunnel(t)
 	mock := &mockTunDevice{}
 	tunnel.tunDev = mock
-	tunnel.serverAddr = &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 4700}
+	tunnel.serverAddr.Store(&net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 4700})
 
 	tunnel.Disconnect()
 
@@ -1618,7 +1618,7 @@ func TestSendUDP_Normal(t *testing.T) {
 	tunnel, serverConn := newTestTunnel(t)
 
 	data := []byte{0x01, 0x02, 0x03}
-	tunnel.sendUDP(data, tunnel.serverAddr)
+	tunnel.sendUDP(data, tunnel.serverAddr.Load())
 
 	pkt := readUDPWithTimeout(serverConn, 100*time.Millisecond)
 	if pkt == nil {
@@ -1635,7 +1635,7 @@ func TestSendCtrl_Normal(t *testing.T) {
 	tunnel, serverConn := newTestTunnel(t)
 
 	data := []byte{0x01, 0x02}
-	tunnel.sendCtrl(data, tunnel.serverAddr)
+	tunnel.sendCtrl(data, tunnel.serverAddr.Load())
 
 	pkt := readUDPWithTimeout(serverConn, 100*time.Millisecond)
 	if pkt == nil {
@@ -1649,8 +1649,8 @@ func TestSendLoop_CtrlPriority(t *testing.T) {
 	tunnel, serverConn := newTestTunnel(t)
 
 	// Send data first, then ctrl
-	tunnel.sendCh <- sendJob{data: []byte{0x01}, addr: tunnel.serverAddr}
-	tunnel.ctrlCh <- sendJob{data: []byte{0x02}, addr: tunnel.serverAddr}
+	tunnel.sendCh <- sendJob{data: []byte{0x01}, addr: tunnel.serverAddr.Load()}
+	tunnel.ctrlCh <- sendJob{data: []byte{0x02}, addr: tunnel.serverAddr.Load()}
 
 	// Both should be received
 	pkt1 := readUDPWithTimeout(serverConn, 100*time.Millisecond)

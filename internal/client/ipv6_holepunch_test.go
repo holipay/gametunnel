@@ -34,7 +34,7 @@ func newTestTunnelIPv6(t *testing.T) (*Tunnel, *net.UDPConn) {
 	cfg := &Config{PlayerName: "test6", RoomID: "test6", RoomPassword: ""}
 	tunnel := New(cfg)
 	tunnel.conn = tunnelConn
-	tunnel.serverAddr = serverConn.LocalAddr().(*net.UDPAddr)
+	tunnel.serverAddr.Store(serverConn.LocalAddr().(*net.UDPAddr))
 
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)

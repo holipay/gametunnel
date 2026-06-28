@@ -26,7 +26,7 @@ func (t *Tunnel) peerDiscoveryLoop(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			t.sendCtrl(packet, t.serverAddr)
+			t.sendCtrl(packet, t.serverAddr.Load())
 		}
 	}
 }

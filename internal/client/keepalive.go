@@ -26,7 +26,7 @@ func (t *Tunnel) keepaliveLoop(ctx context.Context, cancel context.CancelFunc) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			t.sendCtrl(packet, t.serverAddr)
+			t.sendCtrl(packet, t.serverAddr.Load())
 
 			// Check if server is still alive
 			lastSeen := t.lastServerResponse.Load()

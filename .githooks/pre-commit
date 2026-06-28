@@ -1,0 +1,30 @@
+#!/bin/sh
+# Pre-commit hook: reject binary files.
+
+changed=$(git diff --cached --name-only --diff-filter=ACM)
+if [ -z "$changed" ]; then
+    exit 0
+fi
+
+reject=0
+IFS='
+'
+for f in $changed; do
+    [ -f "$f" ] || continue
+    header=$(od -A n -t x1 -N 4 "$f" 2>/dev/null | tr -d ' ')
+    case "$header" in
+        7f454c46*)
+            echo "REJECTED: ELF binary in commit: $f"
+            reject=1
+            ;;
+        4d5a*)
+            echo "REJECTED: PE binary in commit: $f"
+            reject=1
+            ;;
+    esac
+done
+
+if [ "$reject" -ne 0 ]; then
+    echo "Commit aborted. Remove binary files and try again."
+    exit 1
+fi

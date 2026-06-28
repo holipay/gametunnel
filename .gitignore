@@ -1,6 +1,13 @@
 bin/
 *.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
 nul
 .mimocode/
 client
 server
+vendor/

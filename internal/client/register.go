@@ -32,7 +32,7 @@ func (t *Tunnel) register(ctx context.Context) error {
 	retries := 0
 	authRounds := 0
 
-	t.writeUDP(t.conn, packet, t.serverAddr)
+	t.writeUDP(t.conn, packet, t.serverAddr.Load())
 
 	// Pre-allocate buffer for all readResponse calls during registration
 	respBuf := make([]byte, 1500)
@@ -53,7 +53,7 @@ func (t *Tunnel) register(ctx context.Context) error {
 					return fmt.Errorf("%s", i18n.Format(i18n.T().LogRegFailed, maxRetries))
 				}
 				log.Printf("%s", i18n.Format(i18n.T().LogRegTimeout, retries, maxRetries))
-				t.writeUDP(t.conn, packet, t.serverAddr)
+				t.writeUDP(t.conn, packet, t.serverAddr.Load())
 				t.conn.SetReadDeadline(time.Now().Add(deadline))
 				continue
 			}
@@ -238,7 +238,7 @@ func (t *Tunnel) handleAuthChallenge(payload []byte) error {
 	}
 
 	packet := protocol.EncodeChecked(protocol.TypeAuthResponse, resp.Marshal())
-	t.writeUDP(t.conn, packet, t.serverAddr)
+	t.writeUDP(t.conn, packet, t.serverAddr.Load())
 
 	log.Printf("%s", i18n.T().LogAuthSent)
 	return nil
@@ -296,7 +296,7 @@ func (t *Tunnel) handleECDHExchange(payload []byte) error {
 	copy(confirm.HMAC[:], ecdhHMAC)
 
 	packet := protocol.EncodeChecked(protocol.TypeECDHConfirm, confirm.Marshal())
-	t.writeUDP(t.conn, packet, t.serverAddr)
+	t.writeUDP(t.conn, packet, t.serverAddr.Load())
 
 	// Store session key for cipher creation in handleAssignIP
 	t.mu.Lock()

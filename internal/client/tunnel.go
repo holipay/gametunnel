@@ -105,7 +105,7 @@ type Tunnel struct {
 	sendCh         chan sendJob // dedicated channel for UDP sends (replaces connMu)
 	ctrlCh         chan sendJob // high-priority channel for control packets (never dropped)
 	tunCh          chan tunJob  // TUN packet channel for worker pool
-	serverAddr     *net.UDPAddr
+	serverAddr     atomic.Pointer[net.UDPAddr]
 	tunDev         TunDevice
 	virtualIP      net.IP
 	serverIP       net.IP
@@ -275,7 +275,7 @@ func (t *Tunnel) Connect(ctx context.Context, serverAddr string, mtu int, newTUN
 	if ip16 := sAddr.IP.To16(); ip16 != nil {
 		sAddr.IP = ip16
 	}
-	t.serverAddr = sAddr
+	t.serverAddr.Store(sAddr)
 	// Tune UDP socket buffers for high-throughput gaming.
 	// Ignoring errors — non-Linux platforms may not support this.
 	netutil.SetSocketBuffers(conn)
@@ -453,11 +453,11 @@ func (t *Tunnel) createTUN(mtu int) error {
 func (t *Tunnel) Disconnect() {
 	if once := t.disconnectOnce.Load(); once != nil {
 		once.Do(func() {
-			if t.serverAddr != nil {
+			if addr := t.serverAddr.Load(); addr != nil {
 				packet := protocol.EncodeChecked(protocol.TypeDisconnect, nil)
 				// Use high-priority control channel to ensure the disconnect
 				// packet is sent even under heavy load
-				t.sendCtrl(packet, t.serverAddr)
+				t.sendCtrl(packet, addr)
 				time.Sleep(50 * time.Millisecond)
 			}
 			if t.conn != nil {
