@@ -61,6 +61,11 @@ func (b *clientBucket) refill() {
 	now := time.Now()
 	elapsed := now.Sub(b.lastTime).Seconds()
 	b.lastTime = now
+	// Guard against system clock rollback (NTP adjustments, VM migration).
+	// Negative elapsed would subtract tokens and could stall all sends.
+	if elapsed < 0 {
+		elapsed = 0
+	}
 	b.tokens += b.rate * elapsed
 	if b.tokens > b.maxBurst {
 		b.tokens = b.maxBurst

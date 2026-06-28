@@ -340,13 +340,13 @@ func (a *App) connectLoop() {
 					return
 				}
 			}
-	} else {
+		} else {
 			// Was connected, now disconnected — fast reconnect
-		a.Mu.Lock()
-		a.Connected = false
-		a.LastErr = ""
-		a.Mu.Unlock()
-		log.Printf("%s", i18n.T().AppDisconnected)
+			a.Mu.Lock()
+			a.Connected = false
+			a.LastErr = ""
+			a.Mu.Unlock()
+			log.Printf("%s", i18n.T().AppDisconnected)
 
 			// Use network glitch strategy for fast reconnect
 			backoff = NewSmartBackoff(DisconnectReasonNetworkGlitch, true)
