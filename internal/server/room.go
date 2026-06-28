@@ -179,12 +179,20 @@ func NewRoom(cfg RoomConfig) (*Room, error) {
 // ── IP Bitmap ──────────────────────────────────────────────────
 
 func (r *Room) markIPUsed(ip net.IP) {
-	octet := ip.To4()[3]
+	ip4 := ip.To4()
+	if ip4 == nil {
+		return
+	}
+	octet := ip4[3]
 	r.ipBitmap[octet/64] |= 1 << (octet % 64)
 }
 
 func (r *Room) markIPFree(ip net.IP) {
-	octet := ip.To4()[3]
+	ip4 := ip.To4()
+	if ip4 == nil {
+		return
+	}
+	octet := ip4[3]
 	r.ipBitmap[octet/64] &^= 1 << (octet % 64)
 }
 

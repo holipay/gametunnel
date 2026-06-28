@@ -536,6 +536,22 @@ func (s *Server) tcpAcceptLoop(ctx context.Context) {
 		if port == 0 {
 			port = 1
 		}
+		// Retry on collision (counter wrap-around after 65536 connections).
+		for {
+			syntheticAddr := &net.UDPAddr{
+				IP:   net.IPv4(127, 0, 0, 254),
+				Port: port,
+			}
+			key := addrToRateKey(syntheticAddr)
+			if _, loaded := s.tcpBridges.LoadOrStore(key, nil); !loaded {
+				s.tcpBridges.Delete(key) // we just checked, real Store happens later
+				break
+			}
+			port = int(s.tcpPortCounter.Add(1) % 65536)
+			if port == 0 {
+				port = 1
+			}
+		}
 		syntheticAddr := &net.UDPAddr{
 			IP:   net.IPv4(127, 0, 0, 254),
 			Port: port,

@@ -118,6 +118,7 @@ type Tunnel struct {
 	roomID         string
 	roomPass       string
 	disconnectOnce atomic.Pointer[sync.Once]
+	closeTUNOnce   sync.Once
 	sendErrors     atomic.Int64 // send failure counter
 	cancelKicks    atomic.Bool  // true if server sent a fatal kick (wrong password, version mismatch)
 
@@ -460,12 +461,17 @@ func (t *Tunnel) Disconnect() {
 				t.sendCtrl(packet, addr)
 				time.Sleep(50 * time.Millisecond)
 			}
-			if t.conn != nil {
-				t.conn.Close()
+			t.mu.Lock()
+			c := t.conn
+			tcp := t.tcpTransport
+			t.conn = nil
+			t.tcpTransport = nil
+			t.mu.Unlock()
+			if c != nil {
+				c.Close()
 			}
-			if t.tcpTransport != nil {
-				t.tcpTransport.Close()
-				t.tcpTransport = nil
+			if tcp != nil {
+				tcp.Close()
 			}
 		})
 	}
@@ -474,14 +480,16 @@ func (t *Tunnel) Disconnect() {
 // CloseTUN closes the TUN device if open. Call this when exiting the program
 // (not on every reconnect — the TUN should survive transient disconnections).
 func (t *Tunnel) CloseTUN() {
-	t.mu.Lock()
-	dev := t.tunDev
-	t.tunDev = nil
-	t.lastAssignedIP = nil
-	t.mu.Unlock()
-	if dev != nil {
-		dev.Close()
-	}
+	t.closeTUNOnce.Do(func() {
+		t.mu.Lock()
+		dev := t.tunDev
+		t.tunDev = nil
+		t.lastAssignedIP = nil
+		t.mu.Unlock()
+		if dev != nil {
+			dev.Close()
+		}
+	})
 }
 
 // VirtualIP returns the assigned virtual IP (valid after Connect).

@@ -95,8 +95,8 @@ func (t *Tunnel) receiveFromServer(ctx context.Context, conn *net.UDPConn) {
 			// packets (EncodeChecked appends CRC), but DecodeSkipCRC
 			// does not remove it.  Leaving the CRC in place corrupts
 			// UnmarshalDataPooled parsing for TypeData.
-			if encrypted && msg.Type == protocol.TypeData && len(msg.Payload) >= 4 {
-				msg.Payload = msg.Payload[:len(msg.Payload)-4]
+			if encrypted && msg.Type == protocol.TypeData && len(msg.Payload) >= protocol.ChecksumLen {
+				msg.Payload = msg.Payload[:len(msg.Payload)-protocol.ChecksumLen]
 			}
 			t.handleServerData(ctx, msg)
 		} else if from != nil && t.serverAddr.Load() != nil {
