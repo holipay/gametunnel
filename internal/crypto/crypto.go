@@ -160,6 +160,13 @@ func (c *Cipher) EncryptTo(dst []byte, plaintext []byte) []byte {
 // Includes replay protection via a sliding window that rejects duplicate
 // or too-old counter values in the nonce.
 func (c *Cipher) Decrypt(data []byte) ([]byte, error) {
+	return c.DecryptInto(nil, data)
+}
+
+// DecryptInto decrypts data into a caller-provided buffer, appending
+// the plaintext after existing content. Pass nil for dst to allocate
+// a new buffer (same as Decrypt). Returns the extended slice.
+func (c *Cipher) DecryptInto(dst, data []byte) ([]byte, error) {
 	if len(data) < Overhead {
 		return nil, errors.New("crypto: encrypted data too short")
 	}
@@ -177,7 +184,7 @@ func (c *Cipher) Decrypt(data []byte) ([]byte, error) {
 		return nil, errors.New("crypto: replay detected (counter out of window)")
 	}
 
-	plaintext, err := c.aead.Open(nil, nonce, ciphertext, nil)
+	plaintext, err := c.aead.Open(dst, nonce, ciphertext, nil)
 	if err != nil {
 		return nil, fmt.Errorf("crypto: decrypt: %w", err)
 	}

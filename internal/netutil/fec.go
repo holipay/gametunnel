@@ -5,6 +5,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unsafe"
 )
 
 // FEC (Forward Error Correction) provides packet loss recovery using
@@ -69,14 +70,22 @@ func (e *FECEncoder) Encode(data []byte) []byte {
 
 	// Grow parity buffer if this packet is longer than current
 	if len(data) > e.maxPktLen {
-		newParity := make([]byte, len(data))
+		newParity := PktBufGet(len(data))
 		copy(newParity, e.parity)
+		PktBufPut(e.parity)
 		e.parity = newParity
 		e.maxPktLen = len(data)
 	}
 
-	// XOR data into running parity
-	for i := 0; i < len(data); i++ {
+	// XOR data into running parity (8 bytes at a time)
+	n := len(data)
+	i := 0
+	for ; i+8 <= n; i += 8 {
+		p := *(*uint64)(unsafe.Pointer(&e.parity[i]))
+		d := *(*uint64)(unsafe.Pointer(&data[i]))
+		*(*uint64)(unsafe.Pointer(&e.parity[i])) = p ^ d
+	}
+	for ; i < n; i++ {
 		e.parity[i] ^= data[i]
 	}
 	e.pktCount++
@@ -126,6 +135,7 @@ func (e *FECEncoder) buildParityPacket() []byte {
 func (e *FECEncoder) resetGroup() {
 	e.pktCount = 0
 	e.maxPktLen = 0
+	PktBufPut(e.parity)
 	e.parity = nil
 }
 
@@ -149,12 +159,13 @@ type FECDecoder struct {
 }
 
 type fecGroup struct {
-	id       uint32
-	size     int
-	received map[byte][]byte // index → data (only received packets)
-	parity   []byte          // parity packet data
-	parityOK bool            // true if parity packet received
-	created  time.Time       // when this group was created (for age-based cleanup)
+	id        uint32
+	size      int
+	received  [32][]byte // index → data (only received packets)
+	recvCount int        // number of non-nil entries in received
+	parity    []byte     // parity packet data
+	parityOK  bool       // true if parity packet received
+	created   time.Time  // when this group was created (for age-based cleanup)
 }
 
 // NewFECDecoder creates a new decoder with the given group size.
@@ -184,10 +195,11 @@ func (d *FECDecoder) ProcessDataPacket(groupID uint32, seq byte, data []byte) []
 	defer d.mu.Unlock()
 
 	g := d.getOrCreateGroup(groupID)
-	if g.received[seq] != nil {
-		return nil // duplicate
+	if int(seq) >= len(g.received) || g.received[seq] != nil {
+		return nil // duplicate or out of range
 	}
 	g.received[seq] = copyBytes(data)
+	g.recvCount++
 
 	return d.tryRecover(g)
 }
@@ -212,10 +224,9 @@ func (d *FECDecoder) getOrCreateGroup(groupID uint32) *fecGroup {
 	g, ok := d.groups[groupID]
 	if !ok {
 		g = &fecGroup{
-			id:       groupID,
-			size:     d.groupSize,
-			received: make(map[byte][]byte),
-			created:  time.Now(),
+			id:      groupID,
+			size:    d.groupSize,
+			created: time.Now(),
 		}
 		d.groups[groupID] = g
 	}
@@ -230,12 +241,14 @@ func (d *FECDecoder) getOrCreateGroup(groupID uint32) *fecGroup {
 // Returns recovered packet data (nil if no recovery possible).
 // Must be called with d.mu held.
 func (d *FECDecoder) tryRecover(g *fecGroup) [][]byte {
-	if !g.parityOK || len(g.received) < g.size-1 {
+	if !g.parityOK || g.recvCount < g.size-1 {
 		return nil // need parity + at least size-1 data packets
 	}
 
-	if len(g.received) == g.size {
-		return nil // all packets received, no recovery needed
+	if g.recvCount == g.size {
+		releaseGroupBuffers(g)
+		delete(d.groups, g.id) // all received, no recovery needed
+		return nil
 	}
 
 	// Exactly 1 missing — recover it
@@ -258,6 +271,7 @@ func (d *FECDecoder) tryRecover(g *fecGroup) [][]byte {
 
 		recovered = append(recovered, parity)
 		d.recovered.Add(1)
+		releaseGroupBuffers(g)
 		delete(d.groups, g.id) // group complete
 		break
 	}
@@ -292,9 +306,10 @@ func (d *FECDecoder) cleanupLoop() {
 					continue // group is still active
 				}
 				// Group expired — count as dropped if incomplete
-				if len(g.received) < g.size {
+				if g.recvCount < g.size {
 					d.dropped.Add(1)
 				}
+				releaseGroupBuffers(g)
 				delete(d.groups, id)
 			}
 			d.mu.Unlock()
@@ -305,12 +320,21 @@ func (d *FECDecoder) cleanupLoop() {
 // ── Helpers ────────────────────────────────────────────────────
 
 // xorBytes performs dst = dst XOR src (in-place).
+// Processes 8 bytes at a time using uint64 for ~8x throughput on amd64.
 func xorBytes(dst, src []byte) {
 	n := len(dst)
 	if len(src) < n {
 		n = len(src)
 	}
-	for i := 0; i < n; i++ {
+	// Process 8 bytes at a time
+	i := 0
+	for ; i+8 <= n; i += 8 {
+		d := *(*uint64)(unsafe.Pointer(&dst[i]))
+		s := *(*uint64)(unsafe.Pointer(&src[i]))
+		*(*uint64)(unsafe.Pointer(&dst[i])) = d ^ s
+	}
+	// Handle remaining bytes
+	for ; i < n; i++ {
 		dst[i] ^= src[i]
 	}
 }
@@ -319,9 +343,23 @@ func copyBytes(b []byte) []byte {
 	if b == nil {
 		return nil
 	}
-	c := make([]byte, len(b))
+	c := PktBufGet(len(b))
 	copy(c, b)
-	return c
+	return c[:len(b)]
+}
+
+// releaseGroupBuffers returns all pooled buffers in a fecGroup.
+func releaseGroupBuffers(g *fecGroup) {
+	for i := range g.received {
+		if g.received[i] != nil {
+			PktBufPut(g.received[i])
+			g.received[i] = nil
+		}
+	}
+	if g.parity != nil {
+		PktBufPut(g.parity)
+		g.parity = nil
+	}
 }
 
 // IsFECPacket checks if data is an FEC parity packet by looking at

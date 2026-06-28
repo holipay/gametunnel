@@ -119,8 +119,9 @@ type Tunnel struct {
 	// Client-side send rate limiter (token bucket, per-server)
 	sendLimiter *clientSendLimiter
 
-	// Server liveness tracking — updated by handleServerData
-	lastServerResponse atomic.Pointer[time.Time]
+	// Server liveness tracking — updated by handleServerData.
+	// Stores time.Now().UnixNano() to avoid heap escape of time.Time.
+	lastServerResponse atomic.Int64
 
 	// Server version from AssignIP response (0 = old server without version)
 	serverVersion uint16
@@ -675,6 +676,7 @@ func (t *Tunnel) tunWorker(ctx context.Context) {
 			return
 		case job := <-t.tunCh:
 			t.routePacket(job.data, job.srcIP, job.dstIP)
+			netutil.PktBufPut(job.data)
 		}
 	}
 }

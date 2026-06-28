@@ -219,16 +219,27 @@ func hash4(b []byte) int {
 // ── Decoder ────────────────────────────────────────────────────
 
 // LZ4Decoder decompresses LZ4-compressed data packets.
-type LZ4Decoder struct{}
+// Uses a sync.Pool for output buffers to reduce GC pressure.
+type LZ4Decoder struct {
+	pool sync.Pool
+}
 
 // NewLZ4Decoder creates a new decoder.
 func NewLZ4Decoder() *LZ4Decoder {
-	return &LZ4Decoder{}
+	return &LZ4Decoder{
+		pool: sync.Pool{
+			New: func() interface{} {
+				buf := make([]byte, 0, 2048)
+				return &buf
+			},
+		},
+	}
 }
 
 // Decompress decompresses data that was compressed by LZ4Encoder.
 // The input must include the 2-byte original-size header.
-// Returns the original uncompressed data.
+// Returns the original uncompressed data from the internal pool.
+// Call PutBuffer to return the buffer after use.
 func (d *LZ4Decoder) Decompress(data []byte) ([]byte, error) {
 	if len(data) < 2 {
 		return nil, &FECError{"compressed data too short"}
@@ -240,14 +251,30 @@ func (d *LZ4Decoder) Decompress(data []byte) ([]byte, error) {
 	}
 
 	compressed := data[2:]
-	result := make([]byte, origSize)
+	bp := d.pool.Get().(*[]byte)
+	buf := (*bp)[:origSize]
+	if cap(buf) < origSize {
+		buf = make([]byte, origSize)
+	} else {
+		buf = buf[:origSize]
+	}
 
-	n := d.lz4Decompress(compressed, result)
+	n := d.lz4Decompress(compressed, buf)
 	if n != origSize {
+		d.pool.Put(bp)
 		return nil, &FECError{"decompressed size mismatch"}
 	}
 
-	return result, nil
+	return buf, nil
+}
+
+// PutBuffer returns a decompressed buffer to the pool.
+// Must be called after the buffer is no longer needed.
+func (d *LZ4Decoder) PutBuffer(buf []byte) {
+	if buf == nil {
+		return
+	}
+	d.pool.Put(&buf)
 }
 
 // lz4Decompress performs LZ4 block decompression.

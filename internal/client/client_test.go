@@ -1190,19 +1190,19 @@ func TestHandleDataFromServer_UnknownSrcIP(t *testing.T) {
 func TestMarkServerResponse(t *testing.T) {
 	tunnel, _ := newTestTunnel(t)
 
-	// Initially nil
-	if tunnel.lastServerResponse.Load() != nil {
-		t.Error("expected nil initially")
+	// Initially zero (no response yet)
+	if tunnel.lastServerResponse.Load() != 0 {
+		t.Error("expected zero initially")
 	}
 
 	tunnel.markServerResponse()
 
 	now := time.Now()
 	lastSeen := tunnel.lastServerResponse.Load()
-	if lastSeen == nil {
-		t.Fatal("expected non-nil after markServerResponse")
+	if lastSeen == 0 {
+		t.Fatal("expected non-zero after markServerResponse")
 	}
-	if now.Sub(*lastSeen) > time.Second {
+	if now.Sub(time.Unix(0, lastSeen)) > time.Second {
 		t.Error("timestamp should be recent")
 	}
 }
@@ -1734,9 +1734,9 @@ func TestHandleServerData_Ping(t *testing.T) {
 func TestHandleServerData_MarkServerResponse(t *testing.T) {
 	tunnel, _ := newTestTunnel(t)
 
-	// Initially nil
-	if tunnel.lastServerResponse.Load() != nil {
-		t.Error("expected nil initially")
+	// Initially zero (no response yet)
+	if tunnel.lastServerResponse.Load() != 0 {
+		t.Error("expected zero initially")
 	}
 
 	msg := &protocol.Message{
@@ -1747,7 +1747,7 @@ func TestHandleServerData_MarkServerResponse(t *testing.T) {
 	tunnel.handleServerData(context.Background(), msg)
 
 	// Should have marked server response
-	if tunnel.lastServerResponse.Load() == nil {
+	if tunnel.lastServerResponse.Load() == 0 {
 		t.Error("expected server response to be marked")
 	}
 }

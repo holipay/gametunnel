@@ -3,7 +3,7 @@
 # Server: Linux / OpenWrt
 # Client: Windows
 
-.PHONY: all server client client-all clean install-server release release-client release-server release-openwrt test server-openwrt server-openwrt-arm64 server-openwrt-armv7 vendor vendor-check
+.PHONY: all server client client-all clean install-server release release-client release-server release-openwrt test bench server-openwrt server-openwrt-arm64 server-openwrt-armv7 vendor vendor-check
 
 BINARY_DIR := bin
 SERVER := $(BINARY_DIR)/gtunnel-server-linux-amd64
@@ -77,6 +77,9 @@ client-linux-amd64:
 
 test:
 	go test -v -count=1 -mod=vendor ./...
+
+bench:
+	go test -bench=. -benchmem -count=3 -mod=vendor ./...
 
 vet:
 	go vet -mod=vendor ./...
