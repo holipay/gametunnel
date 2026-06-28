@@ -34,8 +34,10 @@ func buildDataPacket(srcIP, dstIP net.IP, data []byte, flags byte) []byte {
 // buildEncryptedDataPacket encrypts pkt and wraps it in a data packet:
 // header(2) + srcIP(4) + dstIP(4) + flags(1) + encrypted.
 func buildEncryptedDataPacket(srcIP, dstIP net.IP, pkt []byte, cipher *crypto.Cipher, flags byte) []byte {
-	// Include flags byte in the plaintext to be encrypted
-	plaintext := make([]byte, 1+len(pkt))
+	// Include flags byte in the plaintext to be encrypted.
+	// Use stack buffer for typical game packets (≤1500 bytes) to avoid heap allocation.
+	var stackBuf [1501]byte
+	plaintext := stackBuf[:1+len(pkt)]
 	plaintext[0] = flags
 	copy(plaintext[1:], pkt)
 

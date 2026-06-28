@@ -17,9 +17,6 @@ type Device struct {
 	subnetMask      net.IPMask
 	serverPublicIP  net.IP
 	mtu             int
-	readSizes       [1]int
-	readPackets     [1][]byte
-	writePackets    [1][]byte
 	physicalGateway string
 }
 
@@ -61,21 +58,33 @@ func New(cfg Config) (*Device, error) {
 
 func (d *Device) Name() string { return d.name }
 
+// ReadBatch reads up to batchSize packets from the TUN device in a single syscall.
+func (d *Device) ReadBatch(bufs [][]byte, sizes []int) (int, error) {
+	return d.tunDev.Read(bufs, sizes, 0)
+}
+
+// WriteBatch writes multiple packets to the TUN device in a single syscall.
+func (d *Device) WriteBatch(bufs [][]byte) (int, error) {
+	return d.tunDev.Write(bufs, 0)
+}
+
+// Read reads a single packet from the TUN device.
 func (d *Device) Read(buf []byte) (int, error) {
-	d.readPackets[0] = buf
-	n, err := d.tunDev.Read(d.readPackets[:], d.readSizes[:], 0)
+	bufs := [1][]byte{buf}
+	sizes := [1]int{}
+	n, err := d.tunDev.Read(bufs[:], sizes[:], 0)
 	if err != nil {
 		return 0, err
 	}
 	if n == 0 {
 		return 0, nil
 	}
-	return d.readSizes[0], nil
+	return sizes[0], nil
 }
 
 func (d *Device) Write(data []byte) (int, error) {
-	d.writePackets[0] = data
-	n, err := d.tunDev.Write(d.writePackets[:], 0)
+	bufs := [1][]byte{data}
+	n, err := d.tunDev.Write(bufs[:], 0)
 	if err != nil {
 		return 0, err
 	}

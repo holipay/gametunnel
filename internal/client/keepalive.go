@@ -30,7 +30,7 @@ func (t *Tunnel) keepaliveLoop(ctx context.Context, cancel context.CancelFunc) {
 
 			// Check if server is still alive
 			lastSeen := t.lastServerResponse.Load()
-			if lastSeen != nil && time.Since(*lastSeen) > serverTimeout {
+			if lastSeen != 0 && time.Since(time.Unix(0, lastSeen)) > serverTimeout {
 				// Server timeout — try connection migration before giving up
 				if t.tryRebind(rebindTimeout) {
 					log.Printf("[rebind] connection migrated successfully")
@@ -47,6 +47,5 @@ func (t *Tunnel) keepaliveLoop(ctx context.Context, cancel context.CancelFunc) {
 // markServerResponse records that we received data from the server.
 // Called from handleServerData to keep the liveness tracker updated.
 func (t *Tunnel) markServerResponse() {
-	now := time.Now()
-	t.lastServerResponse.Store(&now)
+	t.lastServerResponse.Store(time.Now().UnixNano())
 }

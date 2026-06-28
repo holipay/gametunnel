@@ -161,12 +161,17 @@ func (t *Tunnel) decryptWriteAndRelease(dp *protocol.DataPayload, cipher *crypto
 
 	outData := dp.Data
 	if cipher != nil && crypto.IsEncrypted(dp.Data) {
+		// Use pooled buffer for decryption output to reduce GC pressure
+		decBuf := netutil.PktBufGet(len(dp.Data))
 		var err error
-		outData, err = cipher.Decrypt(dp.Data)
+		outData, err = cipher.DecryptInto(decBuf[:0], dp.Data)
 		if err != nil {
+			netutil.PktBufPut(decBuf)
 			protocol.PutDataPayload(dp)
 			return
 		}
+		// Note: decBuf may be returned to pool after outData is consumed
+		defer netutil.PktBufPut(decBuf)
 	}
 
 	// Decompress if LZ4 flag is set
@@ -178,6 +183,7 @@ func (t *Tunnel) decryptWriteAndRelease(dp *protocol.DataPayload, cipher *crypto
 			return
 		}
 		outData = decompressed
+		defer lz4Dec.PutBuffer(decompressed)
 	}
 
 	if _, err := dev.Write(outData); err != nil {
@@ -480,10 +486,9 @@ func (t *Tunnel) receiveFromTUN(ctx context.Context) {
 		dstIP := net.IP(dstIPBuf[:])
 
 		// Copy packet data — buf is reused on the next Read, but workers
-		// process packets asynchronously. For game packets (60-1500 bytes)
-		// the copy cost is negligible compared to the benefit of parallel
-		// encryption and UDP send.
-		pkt := make([]byte, n)
+		// process packets asynchronously. Use pooled buffer to reduce
+		// GC pressure on the hot path.
+		pkt := netutil.PktBufGet(n)[:n]
 		copy(pkt, buf[:n])
 
 		select {

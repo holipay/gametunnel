@@ -12,9 +12,6 @@ import (
 )
 
 // Device represents an active TUN device with its virtual IP (Windows).
-//
-// TODO: batch=32 for high-throughput scenarios (>100 pps). Current batch=1 is
-// fine for games but wastes the wireguard/tun batch interface for bulk transfer.
 type Device struct {
 	tunDev          tun.Device
 	name            string
@@ -22,9 +19,6 @@ type Device struct {
 	subnetMask      net.IPMask
 	serverPublicIP  net.IP
 	mtu             int
-	readSizes       [1]int
-	readPackets     [1][]byte
-	writePackets    [1][]byte
 	physicalGateway string
 	physicalIfIdx   int // physical NIC interface index for IPv6 route cleanup
 }
@@ -67,16 +61,32 @@ func New(cfg Config) (*Device, error) {
 
 func (d *Device) Name() string { return d.name }
 
+// ReadBatch reads up to batchSize packets from the TUN device in a single syscall.
+// Returns the number of packets read and per-packet sizes.
+func (d *Device) ReadBatch(bufs [][]byte, sizes []int) (int, error) {
+	n, err := d.tunDev.Read(bufs, sizes, 0)
+	return n, err
+}
+
+// WriteBatch writes multiple packets to the TUN device in a single syscall.
+// Returns the number of packets written.
+func (d *Device) WriteBatch(bufs [][]byte) (int, error) {
+	n, err := d.tunDev.Write(bufs, 0)
+	return n, err
+}
+
+// Read reads a single packet from the TUN device.
 func (d *Device) Read(buf []byte) (int, error) {
-	d.readPackets[0] = buf
-	n, err := d.tunDev.Read(d.readPackets[:], d.readSizes[:], 0)
+	bufs := [1][]byte{buf}
+	sizes := [1]int{}
+	n, err := d.tunDev.Read(bufs[:], sizes[:], 0)
 	if err != nil {
 		return 0, err
 	}
 	if n == 0 {
 		return 0, nil
 	}
-	return d.readSizes[0], nil
+	return sizes[0], nil
 }
 
 func (d *Device) Close() error {
@@ -84,9 +94,10 @@ func (d *Device) Close() error {
 	return d.tunDev.Close()
 }
 
+// Write writes a single packet to the TUN device.
 func (d *Device) Write(data []byte) (int, error) {
-	d.writePackets[0] = data
-	n, err := d.tunDev.Write(d.writePackets[:], 0)
+	bufs := [1][]byte{data}
+	n, err := d.tunDev.Write(bufs[:], 0)
 	if err != nil {
 		return 0, err
 	}
