@@ -52,6 +52,10 @@ const (
 	// P2P enhancement: NAT type probing
 	TypeNATProbe    byte = 0x0E // client → server: NAT type probe request
 	TypeNATResponse byte = 0x0F // server → client: NAT type probe response
+
+	// Connection migration
+	TypeRebind    byte = 0x10 // client → server: request address migration (WiFi↔4G)
+	TypeRebindAck byte = 0x11 // server → client: migration confirmed
 )
 
 // ── Common Errors ──────────────────────────────────────────────

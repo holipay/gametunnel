@@ -7,6 +7,7 @@ package server
 
 import (
 	"context"
+	"crypto/hmac"
 	"errors"
 	"fmt"
 	"log"
@@ -16,9 +17,9 @@ import (
 	"time"
 
 	"github.com/holipay/gametunnel/internal/auth"
+	"github.com/holipay/gametunnel/internal/netutil"
 	"github.com/holipay/gametunnel/internal/protocol"
 	"github.com/holipay/gametunnel/internal/i18n"
-	"github.com/holipay/gametunnel/internal/netutil"
 )
 
 // pktPools is a set of graded byte buffer pools for incoming packets.
@@ -460,6 +461,11 @@ func (s *Server) handlePacket(data []byte, from *net.UDPAddr) {
 				s.handleNATProbe(msg.Payload, from)
 				return
 			}
+			// Rebind: client migrated to new address, reclaim session
+			if msg.Type == protocol.TypeRebind {
+				s.handleRebind(msg.Payload, from)
+				return
+			}
 			if s.multiRoom {
 				s.handlePacketMultiRoom(msg, from)
 			} else {
@@ -482,6 +488,12 @@ func (s *Server) handlePacket(data []byte, from *net.UDPAddr) {
 	// NAT probe — handle before room routing (probes happen pre-registration)
 	if msg.Type == protocol.TypeNATProbe {
 		s.handleNATProbe(msg.Payload, from)
+		return
+	}
+
+	// Rebind: client migrated to new address, reclaim session
+	if msg.Type == protocol.TypeRebind {
+		s.handleRebind(msg.Payload, from)
 		return
 	}
 
@@ -851,6 +863,108 @@ func (s *Server) handleNATProbe(payload []byte, from *net.UDPAddr) {
 	}
 
 	s.sendChecked(protocol.TypeNATResponse, resp.Marshal(), from)
+}
+
+// ── Rebind Handler (Connection Migration) ───────────────────────
+
+// handleRebind processes a client's address migration request.
+// When a client's network changes (WiFi↔4G, NAT rebinding), it sends
+// TypeRebind from the new address to reclaim its existing session.
+//
+// Security: if the room has a password, the client must provide a valid
+// HMAC over its virtual IP. Without a password, the server relies on
+// virtual IP matching + recent lastSeen (within 60s).
+func (s *Server) handleRebind(payload []byte, from *net.UDPAddr) {
+	req, err := protocol.UnmarshalRebind(payload)
+	if err != nil {
+		return
+	}
+	if req.VirtualIP.To4() == nil {
+		s.sendRebindAck(from, false)
+		return
+	}
+
+	vipKey := ipKey(req.VirtualIP)
+
+	// Search all rooms for the client with this virtual IP
+	var foundRoom *Room
+	var foundClient *Client
+
+	s.roomMu.RLock()
+	for _, room := range s.rooms {
+		room.mu.RLock()
+		if c, ok := room.clients[vipKey]; ok {
+			foundRoom = room
+			foundClient = c
+			room.mu.RUnlock()
+			break
+		}
+		room.mu.RUnlock()
+	}
+	s.roomMu.RUnlock()
+
+	if foundRoom == nil || foundClient == nil {
+		s.sendRebindAck(from, false)
+		return
+	}
+
+	// Verify HMAC if room has a password
+	if foundRoom.roomPass != "" {
+		if len(req.HMAC) == 0 {
+			s.sendRebindAck(from, false)
+			return
+		}
+		key, err := auth.DeriveKey(foundRoom.roomPass, foundClient.authRoomID)
+		if err != nil || key == nil {
+			s.sendRebindAck(from, false)
+			return
+		}
+		// Verify HMAC(key, virtualIP)
+		expected := auth.ComputeHMAC(key, nil, foundClient.authRoomID, foundClient.Username, from)
+		if !hmac.Equal(req.HMAC, expected) {
+			s.sendRebindAck(from, false)
+			return
+		}
+	} else {
+		// No password — check that the client was recently active
+		if time.Since(foundClient.GetLastSeen()) > 60*time.Second {
+			s.sendRebindAck(from, false)
+			return
+		}
+	}
+
+	// Migration valid — update the client's address
+	oldKey := addrToRateKey(foundClient.PublicAddr)
+	newKey := addrToRateKey(from)
+
+	foundRoom.mu.Lock()
+	// Remove old addrMap entry
+	delete(foundRoom.addrMap, oldKey)
+	// Update client address
+	foundClient.PublicAddr = from
+	foundClient.SetLastSeen(time.Now())
+	foundRoom.addrMap[newKey] = foundClient
+	foundRoom.lastActivity.Store(time.Now().UnixNano())
+	foundRoom.mu.Unlock()
+
+	// Update addrToRoom mapping in multi-room mode
+	if s.multiRoom {
+		s.roomMu.Lock()
+		delete(s.addrToRoom, oldKey)
+		s.addrToRoom[newKey] = foundRoom
+		s.roomMu.Unlock()
+	}
+
+	log.Printf("[rebind] %s migrated: %s → %s", foundClient.Username, oldKey, from)
+	s.sendRebindAck(from, true)
+
+	// Send current peer info to the client on new address
+	foundRoom.sendPeerInfoToClient(from)
+}
+
+func (s *Server) sendRebindAck(to *net.UDPAddr, success bool) {
+	ack := &protocol.RebindAckPayload{Success: success}
+	s.sendChecked(protocol.TypeRebindAck, ack.Marshal(), to)
 }
 
 // ── Send Helpers ───────────────────────────────────────────────

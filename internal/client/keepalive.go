@@ -6,6 +6,7 @@ import (
 	"net"
 	"time"
 
+	"github.com/holipay/gametunnel/internal/auth"
 	"github.com/holipay/gametunnel/internal/i18n"
 	"github.com/holipay/gametunnel/internal/netutil"
 	"github.com/holipay/gametunnel/internal/protocol"
@@ -197,6 +198,7 @@ func (t *Tunnel) hasDirectPeerTraffic(peerIP net.IP) bool {
 // to trigger a reconnect.
 func (t *Tunnel) keepaliveLoop(ctx context.Context, cancel context.CancelFunc) {
 	const serverTimeout = 30 * time.Second // 3 missed keepalives
+	const rebindTimeout = 5 * time.Second  // how long to wait for rebind ack
 
 	ticker := time.NewTicker(10 * time.Second)
 	defer ticker.Stop()
@@ -212,10 +214,95 @@ func (t *Tunnel) keepaliveLoop(ctx context.Context, cancel context.CancelFunc) {
 			// Check if server is still alive
 			lastSeen := t.lastServerResponse.Load()
 			if lastSeen != nil && time.Since(*lastSeen) > serverTimeout {
+				// Server timeout — try connection migration before giving up
+				if t.tryRebind(rebindTimeout) {
+					log.Printf("[rebind] connection migrated successfully")
+					continue // server responded, keep going
+				}
 				log.Printf(i18n.T().LogServerTimeout, serverTimeout)
 				cancel()
 				return
 			}
+		}
+	}
+}
+
+// tryRebind attempts to migrate the connection to the current network.
+// Called when the server appears unreachable (keepalive timeout).
+// Returns true if the server acknowledged the rebind.
+//
+// Flow:
+//  1. Build a Rebind request with our virtual IP + HMAC (if password)
+//  2. Send it to the server address (which may resolve via new network)
+//  3. Wait for RebindAck
+//  4. If ack received, the server has updated our address — connection survived
+func (t *Tunnel) tryRebind(timeout time.Duration) bool {
+	t.mu.RLock()
+	vip := t.virtualIP
+	roomPass := t.roomPass
+	roomID := t.roomID
+	username := t.username
+	t.mu.RUnlock()
+
+	if vip == nil {
+		return false
+	}
+
+	// Build rebind payload
+	rebind := &protocol.RebindPayload{VirtualIP: vip}
+
+	// If room has password, compute HMAC to prove ownership
+	if roomPass != "" {
+		key, err := auth.DeriveKey(roomPass, roomID)
+		if err != nil || key == nil {
+			return false
+		}
+		// Use current source address for HMAC binding
+		localAddr := t.conn.LocalAddr().(*net.UDPAddr)
+		rebind.HMAC = auth.ComputeHMAC(key, nil, roomID, username, localAddr)
+	}
+
+	packet := protocol.EncodeChecked(protocol.TypeRebind, rebind.Marshal())
+
+	// Send rebind request (use ctrl channel for reliability)
+	t.sendCtrl(packet, t.serverAddr)
+
+	// Wait for ack
+	t.conn.SetReadDeadline(time.Now().Add(timeout))
+	defer t.conn.SetReadDeadline(time.Time{})
+
+	buf := make([]byte, 1500)
+	for {
+		n, from, err := t.conn.ReadFromUDP(buf)
+		if err != nil {
+			return false
+		}
+
+		// Must come from the server
+		if from == nil || !from.IP.Equal(t.serverAddr.IP) || from.Port != t.serverAddr.Port {
+			continue
+		}
+
+		msg, err := protocol.DecodeLenient(buf[:n])
+		if err != nil {
+			continue
+		}
+
+		if msg.Type == protocol.TypeRebindAck {
+			ack, err := protocol.UnmarshalRebindAck(msg.Payload)
+			if err != nil {
+				return false
+			}
+			if ack.Success {
+				t.markServerResponse() // reset timeout
+				return true
+			}
+			return false
+		}
+
+		// Handle other server messages normally
+		if msg.Type == protocol.TypePing {
+			t.sendCtrl(protocol.EncodeChecked(protocol.TypePong, msg.Payload), t.serverAddr)
 		}
 	}
 }
