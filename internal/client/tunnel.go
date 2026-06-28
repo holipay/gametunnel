@@ -59,6 +59,18 @@ type Peer struct {
 	lastPunchBack atomic.Pointer[time.Time] // rate limit for hole punch responses
 }
 
+// tryRateLimitHolePunch checks and updates the hole-punch rate limiter.
+// Returns true if the punch is allowed (not rate-limited).
+func (p *Peer) tryRateLimitHolePunch(backoff time.Duration) bool {
+	now := time.Now()
+	lastPunch := p.lastPunchBack.Load()
+	if lastPunch != nil && now.Sub(*lastPunch) < backoff {
+		return false
+	}
+	p.lastPunchBack.Store(&now)
+	return true
+}
+
 // TunDevice abstracts the TUN device for testability and platform independence.
 type TunDevice interface {
 	Read(buf []byte) (int, error)
@@ -211,32 +223,9 @@ func (t *Tunnel) Connect(ctx context.Context, serverAddr string, mtu int, newTUN
 	}
 
 	// ── TUN device: reuse or create ─────────────────────────────────
-	ipChanged := t.lastAssignedIP != nil && !t.virtualIP.Equal(t.lastAssignedIP)
-	tunAlive := t.tunDev != nil
-
-	switch {
-	case tunAlive && !ipChanged:
-		log.Printf("%s", i18n.Format(i18n.T().LogReuseTUN, t.virtualIP))
-		// Re-apply routes that may have been modified by the OS during disconnection
-		if rc, ok := t.tunDev.(RouteConfigurator); ok {
-			rc.ReconfigureRoutes()
-		}
-
-	case tunAlive && ipChanged:
-		log.Printf("%s", i18n.Format(i18n.T().LogIPChanged, t.lastAssignedIP, t.virtualIP))
-		t.tunDev.Close()
-		t.tunDev = nil
-		if err := t.createTUN(mtu); err != nil {
-			conn.Close()
-			return err
-		}
-
-	case !tunAlive:
-		// First connection or TUN was lost — create new.
-		if err := t.createTUN(mtu); err != nil {
-			conn.Close()
-			return err
-		}
+	if err := t.ensureTUN(mtu); err != nil {
+		conn.Close()
+		return err
 	}
 
 	// ── Start relay goroutines ──────────────────────────────────────
@@ -293,6 +282,30 @@ func (t *Tunnel) Connect(ctx context.Context, serverAddr string, mtu int, newTUN
 	<-runCtx.Done()
 
 	log.Printf("%s", i18n.T().LogTunnelDisconnect)
+	return nil
+}
+
+// ensureTUN reuses or creates the TUN device based on whether the IP changed.
+func (t *Tunnel) ensureTUN(mtu int) error {
+	ipChanged := t.lastAssignedIP != nil && !t.virtualIP.Equal(t.lastAssignedIP)
+	tunAlive := t.tunDev != nil
+
+	switch {
+	case tunAlive && !ipChanged:
+		log.Printf("%s", i18n.Format(i18n.T().LogReuseTUN, t.virtualIP))
+		if rc, ok := t.tunDev.(RouteConfigurator); ok {
+			rc.ReconfigureRoutes()
+		}
+
+	case tunAlive && ipChanged:
+		log.Printf("%s", i18n.Format(i18n.T().LogIPChanged, t.lastAssignedIP, t.virtualIP))
+		t.tunDev.Close()
+		t.tunDev = nil
+		return t.createTUN(mtu)
+
+	case !tunAlive:
+		return t.createTUN(mtu)
+	}
 	return nil
 }
 
@@ -439,59 +452,44 @@ func (t *Tunnel) sendLoop(ctx context.Context, conn *net.UDPConn) {
 			}
 		case job := <-t.ctrlCh:
 			batch[0] = job
-			n := 1
-			// Drain remaining control packets
-		DrainCtrl1:
-			for n < batchSize {
-				select {
-				case batch[n] = <-t.ctrlCh:
-					n++
-				default:
-					break DrainCtrl1
-				}
-			}
-			// Also drain data packets
-			DrainData1:
-			for n < batchSize {
-				select {
-				case batch[n] = <-t.sendCh:
-					n++
-				default:
-					break DrainData1
-				}
-			}
+			n := t.drainBatch(batch[:], 1)
 			for i := 0; i < n; i++ {
 				t.writeUDP(conn, batch[i].data, batch[i].addr)
 			}
 
 		case job := <-t.sendCh:
 			batch[0] = job
-			n := 1
-			// Drain additional data packets
-			DrainData2:
-			for n < batchSize {
-				select {
-				case batch[n] = <-t.sendCh:
-					n++
-				default:
-					break DrainData2
-				}
-			}
-			// Drain control packets too
-			DrainCtrl2:
-			for n < batchSize {
-				select {
-				case batch[n] = <-t.ctrlCh:
-					n++
-				default:
-					break DrainCtrl2
-				}
-			}
+			n := t.drainBatch(batch[:], 1)
 			for i := 0; i < n; i++ {
 				t.writeUDP(conn, batch[i].data, batch[i].addr)
 			}
 		}
 	}
+}
+
+// drainBatch fills batch[start:] from ctrlCh then sendCh, returning total count.
+func (t *Tunnel) drainBatch(batch []sendJob, start int) int {
+	n := start
+	// Drain control packets (high priority)
+	for n < cap(batch) {
+		select {
+		case batch[n] = <-t.ctrlCh:
+			n++
+		default:
+			goto drainData
+		}
+	}
+drainData:
+	// Drain data packets
+	for n < cap(batch) {
+		select {
+		case batch[n] = <-t.sendCh:
+			n++
+		default:
+			return n
+		}
+	}
+	return n
 }
 
 // writeUDP performs the actual UDP write. conn is passed explicitly to avoid
