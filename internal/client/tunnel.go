@@ -138,6 +138,14 @@ type Tunnel struct {
 	natProbeResult *netutil.NATProbeResult // NAT type from probe (nil if not probed)
 	portPredictor  *netutil.PortPredictor  // port prediction for hole punching
 
+	// FEC: forward error correction for packet loss recovery
+	fecEncoder *netutil.FECEncoder // generates parity packets
+	fecDecoder *netutil.FECDecoder // recovers lost packets
+
+	// LZ4: lightweight compression
+	lz4Encoder *netutil.LZ4Encoder
+	lz4Decoder *netutil.LZ4Decoder
+
 	// TCP fallback transport (nil when using UDP)
 	tcpTransport *netutil.TCPTransport // TCP connection for when UDP is blocked
 
@@ -167,6 +175,12 @@ func New(cfg *Config) *Tunnel {
 		tunCh:    make(chan tunJob, tunChanSize),
 		// Default: 50 Mbps client send limit, 512 KB burst
 		sendLimiter: newClientSendLimiter(50*1024*1024/8, 512*1024),
+		// FEC: 8 packets per group (12.5% overhead)
+		fecEncoder: netutil.NewFECEncoder(0),
+		fecDecoder: netutil.NewFECDecoder(0),
+		// LZ4 compression
+		lz4Encoder: netutil.NewLZ4Encoder(),
+		lz4Decoder: netutil.NewLZ4Decoder(),
 	}
 	t.disconnectOnce.Store(&sync.Once{})
 	return t

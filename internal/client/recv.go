@@ -10,6 +10,7 @@ import (
 
 	"github.com/holipay/gametunnel/internal/crypto"
 	"github.com/holipay/gametunnel/internal/i18n"
+	"github.com/holipay/gametunnel/internal/netutil"
 	"github.com/holipay/gametunnel/internal/protocol"
 )
 
@@ -78,6 +79,13 @@ func (t *Tunnel) receiveFromServer(ctx context.Context) {
 		}
 
 		fromServer := from != nil && t.serverAddr != nil && from.IP.Equal(t.serverAddr.IP) && from.Port == t.serverAddr.Port
+
+		// Check for FEC parity packets (raw, not wrapped in protocol message)
+		if n >= netutil.FECHeaderSize && netutil.IsFECPacket(buf[:n]) {
+			t.handleFECPacket(buf[:n])
+			continue
+		}
+
 		if fromServer {
 			// Server-relayed packet
 			t.handleServerData(ctx, msg)
@@ -122,11 +130,13 @@ func (t *Tunnel) handleServerData(ctx context.Context, msg *protocol.Message) {
 	}
 }
 
-// decryptWriteAndRelease decrypts data (if encrypted) and writes to TUN device.
-// Releases the DataPayload back to the pool when done.
+// decryptWriteAndRelease decrypts data (if encrypted), decompresses (if
+// compressed), and writes to TUN device. Releases the DataPayload back to
+// the pool when done.
 func (t *Tunnel) decryptWriteAndRelease(dp *protocol.DataPayload, cipher *crypto.Cipher) {
 	t.mu.RLock()
 	dev := t.tunDev
+	lz4Dec := t.lz4Decoder
 	t.mu.RUnlock()
 	if dev == nil {
 		protocol.PutDataPayload(dp)
@@ -141,6 +151,17 @@ func (t *Tunnel) decryptWriteAndRelease(dp *protocol.DataPayload, cipher *crypto
 			protocol.PutDataPayload(dp)
 			return
 		}
+	}
+
+	// Decompress if LZ4 flag is set
+	if protocol.IsCompressed(dp.Flags) && lz4Dec != nil {
+		decompressed, err := lz4Dec.Decompress(outData)
+		if err != nil {
+			log.Printf("[lz4] decompress error: %v", err)
+			protocol.PutDataPayload(dp)
+			return
+		}
+		outData = decompressed
 	}
 
 	if _, err := dev.Write(outData); err != nil {
@@ -226,6 +247,39 @@ func (t *Tunnel) handleDirectHolePunch(from *net.UDPAddr, msg *protocol.Message)
 	go func() {
 		t.burstHolePunch(peerAddr, holePunchBurstPerPhase, 50*time.Millisecond, context.Background())
 	}()
+}
+
+// handleFECPacket processes an incoming FEC parity packet.
+// Extracts the parity data and feeds it to the FEC decoder.
+// If the decoder recovers any lost packets, they are written to TUN.
+func (t *Tunnel) handleFECPacket(data []byte) {
+	t.mu.RLock()
+	fecDec := t.fecDecoder
+	dev := t.tunDev
+	t.mu.RUnlock()
+
+	if fecDec == nil || dev == nil {
+		return
+	}
+
+	groupID, groupSize, err := netutil.ParseFECHeader(data)
+	if err != nil {
+		return
+	}
+	parity := netutil.ParseFECParity(data)
+	if parity == nil {
+		return
+	}
+
+	recovered := fecDec.processParityPacket(groupID, groupSize, parity)
+	for _, pkt := range recovered {
+		if len(pkt) >= 20 {
+			// Write recovered packet to TUN
+			if _, err := dev.Write(pkt); err != nil {
+				log.Printf("[fec] recovered packet write error: %v", err)
+			}
+		}
+	}
 }
 
 // handlePeerInfo updates the peer list from the server.
