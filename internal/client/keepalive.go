@@ -43,6 +43,23 @@ const holePunchBackoff = 5 * time.Second
 // doesn't silently expire and fall back to relay.
 const p2pKeepaliveInterval = 15 * time.Second
 
+// burstHolePunch sends count hole punch packets to addr at the given interval.
+// Respects context cancellation. Uses the cached hole punch packet.
+func (t *Tunnel) burstHolePunch(addr *net.UDPAddr, count int, interval time.Duration, ctx context.Context) {
+	t.mu.RLock()
+	packet := t.cachedPunchPacket
+	t.mu.RUnlock()
+	for i := 0; i < count; i++ {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+		t.sendCtrl(packet, addr)
+		time.Sleep(interval)
+	}
+}
+
 // sendHolePunchRelay sends a TypeHolePunch to the server to request
 // server-relayed hole punch signaling. The server forwards the signal
 // to the destination peer, who then punches back directly. This is
@@ -69,20 +86,10 @@ func (t *Tunnel) startHolePunch(ctx context.Context, peerIP net.IP) {
 	peerAddr := peer.PublicAddr
 	t.mu.RUnlock()
 
-	// Use cached hole punch packet (built once in handleAssignIP)
-	t.mu.RLock()
-	packet := t.cachedPunchPacket
-	t.mu.RUnlock()
-
 	for phase, interval := range holePunchIntervals {
-		for i := 0; i < holePunchBurstPerPhase; i++ {
-			select {
-			case <-ctx.Done():
-				return
-			default:
-			}
-			t.sendCtrl(packet, peerAddr)
-			time.Sleep(interval)
+		t.burstHolePunch(peerAddr, holePunchBurstPerPhase, interval, ctx)
+		if ctx.Err() != nil {
+			return
 		}
 
 		// If peer is already reachable via P2P after this phase, stop early.
@@ -119,27 +126,13 @@ func (t *Tunnel) handleHolePunchReceived(ctx context.Context, payload []byte) {
 	t.mu.RUnlock()
 
 	// Rate limit: check if we recently punched back to this peer
-	now := time.Now()
-	lastPunch := peer.lastPunchBack.Load()
-	if lastPunch != nil && now.Sub(*lastPunch) < holePunchBackoff {
+	if !peer.tryRateLimitHolePunch(holePunchBackoff) {
 		return
 	}
-	peer.lastPunchBack.Store(&now)
 
 	// Punch back in a goroutine — don't block the receive loop.
 	go func() {
-		t.mu.RLock()
-		packet := t.cachedPunchPacket
-		t.mu.RUnlock()
-		for i := 0; i < holePunchBurstPerPhase; i++ {
-			select {
-			case <-ctx.Done():
-				return
-			default:
-			}
-			t.sendCtrl(packet, peerAddr)
-			time.Sleep(50 * time.Millisecond)
-		}
+		t.burstHolePunch(peerAddr, holePunchBurstPerPhase, 50*time.Millisecond, ctx)
 	}()
 }
 

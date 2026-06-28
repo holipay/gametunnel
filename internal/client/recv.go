@@ -109,10 +109,6 @@ func (t *Tunnel) handleServerData(ctx context.Context, msg *protocol.Message) {
 	}
 }
 
-// handleDirectData processes a packet received directly from a peer's public
-// address (not via the server relay). Only TypeData is expected on this path.
-// This is the ONLY place DirectReach should be set — it confirms actual P2P
-// connectivity because the packet arrived from the peer's real address.
 // decryptWriteAndRelease decrypts data (if encrypted) and writes to TUN device.
 // Releases the DataPayload back to the pool when done.
 func (t *Tunnel) decryptWriteAndRelease(dp *protocol.DataPayload, cipher *crypto.Cipher) {
@@ -206,25 +202,16 @@ func (t *Tunnel) handleDirectHolePunch(from *net.UDPAddr, msg *protocol.Message)
 	}
 
 	// Rate limit: at most once per holePunchBackoff per peer
-	now := time.Now()
-	lastPunch := peer.lastPunchBack.Load()
-	if lastPunch != nil && now.Sub(*lastPunch) < holePunchBackoff {
+	if !peer.tryRateLimitHolePunch(holePunchBackoff) {
 		return
 	}
-	peer.lastPunchBack.Store(&now)
 
 	// Mark direct path confirmed — received a packet directly from the peer
 	peer.DirectReach.Store(true)
 
 	// Punch back in a goroutine — don't block the receive loop
 	go func() {
-		t.mu.RLock()
-		packet := t.cachedPunchPacket
-		t.mu.RUnlock()
-		for i := 0; i < holePunchBurstPerPhase; i++ {
-			t.sendCtrl(packet, peerAddr)
-			time.Sleep(50 * time.Millisecond)
-		}
+		t.burstHolePunch(peerAddr, holePunchBurstPerPhase, 50*time.Millisecond, context.Background())
 	}()
 }
 
@@ -300,12 +287,8 @@ func (t *Tunnel) handlePeerInfo(ctx context.Context, payload []byte) {
 	t.mu.Unlock()
 
 	// Launch hole punches outside the lock to avoid holding it during goroutine creation
-	for _, peerIP := range newPeerIPs {
-		go t.startHolePunch(ctx, peerIP)
-		t.sendHolePunchRelay(peerIP)
-	}
-	// Re-punch peers whose address changed (NAT rebinding)
-	for _, peerIP := range changedPeerIPs {
+	allPeerIPs := append(newPeerIPs, changedPeerIPs...)
+	for _, peerIP := range allPeerIPs {
 		go t.startHolePunch(ctx, peerIP)
 		t.sendHolePunchRelay(peerIP)
 	}
