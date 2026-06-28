@@ -1,7 +1,5 @@
 package protocol
 
-import "encoding/binary"
-
 // ── ECDH Key Exchange ──────────────────────────────────────────
 
 // ECDHExchangePayload is sent by the server after successful HMAC auth.
