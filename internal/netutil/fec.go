@@ -100,6 +100,15 @@ func (e *FECEncoder) Encode(data []byte) []byte {
 	return nil
 }
 
+// CurrentGroupInfo returns the current group ID and packet sequence number
+// within the group. Used by the sender to embed FEC metadata in data packets
+// so the receiver can associate them with the correct group.
+func (e *FECEncoder) CurrentGroupInfo() (groupID uint32, seq byte) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.groupID.Load(), byte(e.pktCount)
+}
+
 // Flush forces emission of a parity packet for the current (possibly
 // incomplete) group. Call this when there's a long pause in traffic
 // to avoid waiting for the group to fill.

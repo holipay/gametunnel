@@ -49,6 +49,11 @@ func ipKey(ip net.IP) [16]byte {
 	return netutil.IPKey(ip)
 }
 
+// fecEnabled returns true if FEC should be used (server supports it).
+func (t *Tunnel) fecEnabled() bool {
+	return t.serverVersion >= 0x0108
+}
+
 // Peer represents a remote player.
 type Peer struct {
 	VirtualIP     net.IP
