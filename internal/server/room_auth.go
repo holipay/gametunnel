@@ -320,8 +320,13 @@ func (r *Room) handleECDHConfirm(payload []byte, from *net.UDPAddr) {
 		return
 	}
 
-	// Store session key in client for cipher creation
+	// Re-fetch the newly registered client — doRegisterClient replaces the
+	// old pending-auth entry with a fresh Client in addrMap.
+	c = r.addrMap[fromKey]
 	c.SessionKey = sessionKey
+	if r.pendingAuth > 0 {
+		r.pendingAuth--
+	}
 	r.mu.Unlock()
 
 	// Send AssignIP with ECDH flag
@@ -331,9 +336,7 @@ func (r *Room) handleECDHConfirm(payload []byte, from *net.UDPAddr) {
 		ServerIP:   r.serverIP,
 		Version:    protocol.SetECDHFlag(protocol.AppVersion),
 	}
-	if c != nil {
-		assign.SessionToken = c.SessionToken
-	}
+	assign.SessionToken = c.SessionToken
 	r.sendChecked(protocol.TypeAssignIP, assign.Marshal(), from)
 	r.sendPeerInfoToClient(from)
 	r.invalidatePeerInfoCache()
@@ -442,6 +445,7 @@ func (r *Room) handleAuthResponse(payload []byte, from *net.UDPAddr) {
 		c.ecdhPub = pub
 		c.ecdhPending = true
 		r.addrMap[fromKey] = c
+		r.pendingAuth++
 		r.mu.Unlock()
 
 		ecdhPkt := &protocol.ECDHExchangePayload{}
