@@ -202,66 +202,52 @@ func getStatusTmpl(lang i18n.Lang) *template.Template {
 func (s *Server) buildStatusInfo() StatusInfo {
 	now := time.Now()
 
-	// Collect connections from default room (single-room) or all rooms (multi-room)
-	var conns []ConnectionInfo
-	var totalPlayers int
-	var maxPlayers int
-	var subnet string
-	var serverIP string
-	var hasAuth bool
-	var totalRegistrations uint64
-	var authFailures uint64
-	var peakPlayers uint32
-	var totalPacketsRelay uint64
-	var totalPacketsDropped uint64
-	var totalKicks uint64
-
-	// Multi-room: collect all rooms in a single lock acquisition
-	var roomInfos []RoomStatusInfo
+	// Collect rooms to iterate — single-room is just a list of 1.
+	s.roomMu.RLock()
+	var rooms []*Room
 	if s.multiRoom {
-		s.roomMu.RLock()
 		for _, room := range s.rooms {
-			status := room.BuildRoomStatus()
-			roomInfos = append(roomInfos, status)
-			conns = append(conns, status.Connections...)
-			totalPlayers += status.Players
-			maxPlayers += status.MaxPlayers
-			totalRegistrations += status.TotalRegistrations
-			authFailures += status.AuthFailures
-			if status.PeakPlayers > peakPlayers {
-				peakPlayers = status.PeakPlayers
-			}
-			totalPacketsRelay += status.TotalPacketsRelay
-			totalPacketsDropped += status.TotalPacketsDropped
-			totalKicks += status.TotalKicks
-		}
-		s.roomMu.RUnlock()
-		if s.defaultRoom != nil {
-			subnet = s.defaultRoom.subnet.String()
-			serverIP = s.defaultRoom.serverIP.String()
+			rooms = append(rooms, room)
 		}
 	} else if s.defaultRoom != nil {
-		// Single-room: get from default room
-		status := s.defaultRoom.BuildRoomStatus()
-		conns = status.Connections
-		totalPlayers = status.Players
-		maxPlayers = status.MaxPlayers
+		rooms = []*Room{s.defaultRoom}
+	}
+	s.roomMu.RUnlock()
+
+	// Aggregate stats from all rooms in one pass.
+	var conns []ConnectionInfo
+	var roomInfos []RoomStatusInfo
+	var totalPlayers, maxPlayers int
+	var totalRegistrations, authFailures, totalPacketsRelay, totalPacketsDropped, totalKicks uint64
+	var peakPlayers uint32
+
+	for _, room := range rooms {
+		status := room.BuildRoomStatus()
+		roomInfos = append(roomInfos, status)
+		conns = append(conns, status.Connections...)
+		totalPlayers += status.Players
+		maxPlayers += status.MaxPlayers
+		totalRegistrations += status.TotalRegistrations
+		authFailures += status.AuthFailures
+		if status.PeakPlayers > peakPlayers {
+			peakPlayers = status.PeakPlayers
+		}
+		totalPacketsRelay += status.TotalPacketsRelay
+		totalPacketsDropped += status.TotalPacketsDropped
+		totalKicks += status.TotalKicks
+	}
+
+	var subnet, serverIP string
+	var hasAuth bool
+	if s.defaultRoom != nil {
 		subnet = s.defaultRoom.subnet.String()
 		serverIP = s.defaultRoom.serverIP.String()
 		hasAuth = s.defaultRoom.roomPass != ""
-		totalRegistrations = status.TotalRegistrations
-		authFailures = status.AuthFailures
-		peakPlayers = status.PeakPlayers
-		totalPacketsRelay = status.TotalPacketsRelay
-		totalPacketsDropped = status.TotalPacketsDropped
-		totalKicks = status.TotalKicks
 	}
-
-	uptime := now.Sub(s.startTime)
 
 	return StatusInfo{
 		Version:     s.version,
-		Uptime:      formatDuration(uptime),
+		Uptime:      formatDuration(now.Sub(s.startTime)),
 		Players:     totalPlayers,
 		MaxPlayers:  maxPlayers,
 		Subnet:      subnet,
