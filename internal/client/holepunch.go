@@ -59,7 +59,7 @@ func (t *Tunnel) sendHolePunchRelay(peerIP net.IP) {
 		return
 	}
 	packet := protocol.EncodeChecked(protocol.TypeHolePunch, peerIP.To4())
-	t.sendCtrl(packet, t.serverAddr)
+	t.sendCtrl(packet, t.serverAddr.Load())
 }
 
 // startHolePunch initiates a multi-phase hole punch to a peer.

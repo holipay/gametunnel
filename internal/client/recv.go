@@ -86,7 +86,8 @@ func (t *Tunnel) receiveFromServer(ctx context.Context, conn *net.UDPConn) {
 			continue
 		}
 
-		fromServer := from != nil && t.serverAddr != nil && from.IP.Equal(t.serverAddr.IP) && from.Port == t.serverAddr.Port
+		sa := t.serverAddr.Load()
+		fromServer := from != nil && sa != nil && from.IP.Equal(sa.IP) && from.Port == sa.Port
 
 		if fromServer {
 			// Server-relayed packet.
@@ -98,7 +99,7 @@ func (t *Tunnel) receiveFromServer(ctx context.Context, conn *net.UDPConn) {
 				msg.Payload = msg.Payload[:len(msg.Payload)-4]
 			}
 			t.handleServerData(ctx, msg)
-		} else if from != nil && t.serverAddr != nil {
+		} else if from != nil && t.serverAddr.Load() != nil {
 			// Direct P2P packet from a peer's public address
 			t.handleDirectData(ctx, from, msg)
 		}
@@ -116,7 +117,7 @@ func (t *Tunnel) handleServerData(ctx context.Context, msg *protocol.Message) {
 	case protocol.TypeData:
 		t.handleDataFromServer(msg.Payload)
 	case protocol.TypePing:
-		t.sendCtrl(protocol.EncodeChecked(protocol.TypePong, msg.Payload), t.serverAddr)
+		t.sendCtrl(protocol.EncodeChecked(protocol.TypePong, msg.Payload), t.serverAddr.Load())
 	case protocol.TypeHolePunch:
 		t.handleHolePunchReceived(ctx, msg.Payload)
 	case protocol.TypeNATResponse:
