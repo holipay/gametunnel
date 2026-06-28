@@ -130,7 +130,7 @@ func (c *Cipher) Encrypt(plaintext []byte) []byte {
 	c.makeNonce(&nonceBuf)
 
 	// Seal directly into output buffer to avoid intermediate allocation.
-	out := make([]byte, 0, Overhead+len(plaintext)+TagSize)
+	out := make([]byte, 0, Overhead+len(plaintext))
 	out = append(out, EncVersion)
 	out = append(out, nonceBuf[:]...)
 	out = c.aead.Seal(out, nonceBuf[:], plaintext, nil)
@@ -191,20 +191,37 @@ func (c *Cipher) checkReplayWindow(ctr uint64) bool {
 	highest := c.highestCounter.Load()
 
 	if ctr > highest {
-		// New highest — shift the window
-		shift := ctr - highest
-		if shift < replayWindowSize {
-			oldBitmap := c.replayBitmap.Load()
-			// Shift bitmap and set bit 0 (the new highest)
-			c.replayBitmap.Store((oldBitmap << shift) | 1)
-		} else {
-			// Jumped past the entire window — reset
-			c.replayBitmap.Store(1)
+		// New highest — atomically advance the window using CAS loop
+		for {
+			oldHighest := c.highestCounter.Load()
+			if ctr <= oldHighest {
+				// Another goroutine already advanced past us
+				break
+			}
+			shift := ctr - oldHighest
+			var newBitmap uint64
+			if shift < replayWindowSize {
+				oldBitmap := c.replayBitmap.Load()
+				newBitmap = (oldBitmap << shift) | 1
+			} else {
+				newBitmap = 1
+			}
+			if c.highestCounter.CompareAndSwap(oldHighest, ctr) {
+				c.replayBitmap.Store(newBitmap)
+				return true
+			}
+			// CAS failed — retry
 		}
-		highest = ctr
-		c.highestCounter.Store(ctr)
-		return true
+		// Re-check after another goroutine advanced
+		return c.checkReplayWindowRecheck(ctr)
 	}
+
+	return c.checkReplayWindowRecheck(ctr)
+}
+
+// checkReplayWindowRecheck checks if ctr is within the current window.
+func (c *Cipher) checkReplayWindowRecheck(ctr uint64) bool {
+	highest := c.highestCounter.Load()
 
 	// Check if within window
 	diff := highest - ctr

@@ -222,6 +222,9 @@ func (t *Tunnel) Connect(ctx context.Context, serverAddr string, mtu int, newTUN
 	// punching when the server reports IPv6 peer addresses.
 	bindAddr := &net.UDPAddr{IP: net.IPv6zero, Port: 0}
 	conn, err := net.ListenUDP("udp", bindAddr)
+	if err != nil {
+		return fmt.Errorf("%s", i18n.Format(i18n.T().ErrBindUDP, err))
+	}
 
 	// Normalize serverAddr.IP to 16 bytes so that IP comparisons with
 	// addresses received on the IPv6 socket (always 16 bytes) work
@@ -230,9 +233,6 @@ func (t *Tunnel) Connect(ctx context.Context, serverAddr string, mtu int, newTUN
 		sAddr.IP = ip16
 	}
 	t.serverAddr = sAddr
-	if err != nil {
-		return fmt.Errorf("%s", i18n.Format(i18n.T().ErrBindUDP, err))
-	}
 	// Tune UDP socket buffers for high-throughput gaming.
 	// Ignoring errors — non-Linux platforms may not support this.
 	setClientSocketBuffers(conn)
@@ -363,6 +363,9 @@ func (t *Tunnel) ensureTUN(mtu int) error {
 // createTUN creates a new TUN device using the cached factory and current
 // virtual IP/subnet/serverIP. Called when TUN doesn't exist or IP changed.
 func (t *Tunnel) createTUN(mtu int) error {
+	if t.newTUNFunc == nil {
+		return fmt.Errorf("TUN factory not set")
+	}
 	tunCfg := TunConfig{
 		VirtualIP:  t.virtualIP,
 		SubnetMask: t.subnetMask,

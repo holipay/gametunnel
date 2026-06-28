@@ -149,7 +149,7 @@ func TestIPv6_PeerInfoWithIPv6PublicAddr(t *testing.T) {
 
 	tunnel.mu.RLock()
 	peer, ok := tunnel.peers[ipKey(peerVIP)]
-	tunnel.mu.RLock()
+	tunnel.mu.RUnlock()
 	if !ok {
 		t.Fatal("peer not found after PeerInfo")
 	}
@@ -1099,7 +1099,7 @@ func TestIPv6_PeerInfo_GlobalUnicastAddr(t *testing.T) {
 
 	tunnel.mu.RLock()
 	peer, ok := tunnel.peers[ipKey(peerVIP)]
-	tunnel.mu.RLock()
+	tunnel.mu.RUnlock()
 	if !ok {
 		t.Fatal("peer not found")
 	}
