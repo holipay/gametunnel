@@ -131,6 +131,7 @@ func (sq *sendQueue) run(ctx context.Context) {
 				for i := 0; i < deferredCount; i++ {
 					sq.writeUDP(deferredLow[i].data, deferredLow[i].addr)
 				}
+				clear(deferredLow[:deferredCount])
 				deferredCount = 0
 			} else {
 				// Low priority: batch drain to reduce per-packet overhead

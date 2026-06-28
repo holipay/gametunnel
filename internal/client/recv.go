@@ -63,7 +63,16 @@ func (t *Tunnel) receiveFromServer(ctx context.Context) {
 		// Successful read — reset error counter.
 		consecutiveErrors = 0
 
-		msg, err := protocol.DecodeLenient(buf[:n])
+		// Encrypted rooms skip CRC32 (AEAD provides integrity).
+		t.mu.RLock()
+		encrypted := t.decCipher != nil
+		t.mu.RUnlock()
+		var msg *protocol.Message
+		if encrypted {
+			msg, err = protocol.DecodeSkipCRC(buf[:n])
+		} else {
+			msg, err = protocol.DecodeLenient(buf[:n])
+		}
 		if err != nil {
 			continue
 		}

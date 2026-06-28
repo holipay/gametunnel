@@ -136,6 +136,12 @@ func DecodeLenient(data []byte) (*Message, error) {
 	return nil, err
 }
 
+// DecodeSkipCRC decodes a packet without CRC32 verification.
+// Use only when AEAD encryption provides integrity (roomPass != "").
+func DecodeSkipCRC(data []byte) (*Message, error) {
+	return Decode(data)
+}
+
 // EncodeChecked is a convenience: Encode + AppendChecksum.
 // Combines into a single allocation to reduce GC pressure on the hot path.
 func EncodeChecked(typ byte, payload []byte) []byte {
