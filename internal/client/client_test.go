@@ -1112,7 +1112,7 @@ func TestHandleDirectData_UnknownPeer(t *testing.T) {
 		Payload: dp.Marshal(),
 	}
 
-	tunnel.handleDirectData(fromAddr, msg)
+	tunnel.handleDirectData(context.Background(), fromAddr, msg)
 
 	// Should not write to TUN
 	if len(mock.writeBuf) != 0 {
@@ -1146,13 +1146,13 @@ func TestHandleDirectData_WrongAddress(t *testing.T) {
 	msg := &protocol.Message{Type: protocol.TypeData, Payload: dp.Marshal()}
 
 	// Wrong IP
-	tunnel.handleDirectData(wrongAddr, msg)
+	tunnel.handleDirectData(context.Background(), wrongAddr, msg)
 	if len(mock.writeBuf) != 0 {
 		t.Error("wrong IP should not write to TUN")
 	}
 
 	// Wrong port
-	tunnel.handleDirectData(wrongPort, msg)
+	tunnel.handleDirectData(context.Background(), wrongPort, msg)
 	if len(mock.writeBuf) != 0 {
 		t.Error("wrong port should not write to TUN")
 	}
@@ -1678,7 +1678,7 @@ func TestHandleDirectData_NonTypeData(t *testing.T) {
 		Payload: []byte{},
 	}
 
-	tunnel.handleDirectData(fromAddr, msg)
+	tunnel.handleDirectData(context.Background(), fromAddr, msg)
 
 	if len(mock.writeBuf) != 0 {
 		t.Error("non-TypeData should not write to TUN")
@@ -1703,7 +1703,7 @@ func TestHandleDirectData_EmptyPayload(t *testing.T) {
 		Payload: dp.Marshal(),
 	}
 
-	tunnel.handleDirectData(fromAddr, msg)
+	tunnel.handleDirectData(context.Background(), fromAddr, msg)
 
 	if len(mock.writeBuf) != 0 {
 		t.Error("empty data should not write to TUN")

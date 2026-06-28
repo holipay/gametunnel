@@ -76,7 +76,9 @@ func (sq *sendQueue) send(data []byte, addr *net.UDPAddr, priority sendPriority)
 			return true
 		case <-timer.C:
 			// Timer fired and channel drained — safe to reuse.
-			timer.Reset(50 * time.Millisecond)
+			// Do NOT re-arm the timer before returning it to the pool:
+			// Reset would cause it to fire while idle in the pool, poisoning
+			// the channel for the next user and causing false timeouts.
 			sendTimerPool.Put(timer)
 			return false
 		}

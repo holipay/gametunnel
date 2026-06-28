@@ -278,20 +278,24 @@ func (a *App) connectLoop() {
 			if attempt > fastRetries && !IsNetworkAvailable(cfg.ServerAddr) {
 				log.Printf("reconnect: network unavailable, waiting...")
 				// Wait a bit and re-check
+				netTimer := time.NewTimer(5 * time.Second)
 				select {
 				case <-ctx.Done():
+					netTimer.Stop()
 					return
-				case <-time.After(5 * time.Second):
+				case <-netTimer.C:
 				}
 				if !IsNetworkAvailable(cfg.ServerAddr) {
 					log.Printf("reconnect: network still unavailable, retrying anyway")
 				}
 			}
 
+			delayTimer := time.NewTimer(delay)
 			select {
 			case <-ctx.Done():
+				delayTimer.Stop()
 				return
-			case <-time.After(delay):
+			case <-delayTimer.C:
 			}
 		}
 

@@ -30,7 +30,7 @@ const readBufSize = 65535
 // receiveFromServer handles packets from the server and direct P2P peers.
 // It distinguishes between server-relayed packets and direct peer packets
 // by checking the source address, which is critical for P2P detection.
-func (t *Tunnel) receiveFromServer(ctx context.Context) {
+func (t *Tunnel) receiveFromServer(ctx context.Context, conn *net.UDPConn) {
 	buf := make([]byte, readBufSize)
 	consecutiveErrors := 0
 
@@ -41,7 +41,7 @@ func (t *Tunnel) receiveFromServer(ctx context.Context) {
 		default:
 		}
 
-		n, from, err := t.conn.ReadFromUDP(buf)
+		n, from, err := conn.ReadFromUDP(buf)
 		if err != nil {
 			select {
 			case <-ctx.Done():
@@ -89,11 +89,18 @@ func (t *Tunnel) receiveFromServer(ctx context.Context) {
 		fromServer := from != nil && t.serverAddr != nil && from.IP.Equal(t.serverAddr.IP) && from.Port == t.serverAddr.Port
 
 		if fromServer {
-			// Server-relayed packet
+			// Server-relayed packet.
+			// Strip trailing CRC — the server always sends checked
+			// packets (EncodeChecked appends CRC), but DecodeSkipCRC
+			// does not remove it.  Leaving the CRC in place corrupts
+			// UnmarshalDataPooled parsing for TypeData.
+			if encrypted && len(msg.Payload) >= 4 {
+				msg.Payload = msg.Payload[:len(msg.Payload)-4]
+			}
 			t.handleServerData(ctx, msg)
 		} else if from != nil && t.serverAddr != nil {
 			// Direct P2P packet from a peer's public address
-			t.handleDirectData(from, msg)
+			t.handleDirectData(ctx, from, msg)
 		}
 	}
 }
@@ -179,9 +186,9 @@ func (t *Tunnel) decryptWriteAndRelease(dp *protocol.DataPayload, cipher *crypto
 	protocol.PutDataPayload(dp)
 }
 
-func (t *Tunnel) handleDirectData(from *net.UDPAddr, msg *protocol.Message) {
+func (t *Tunnel) handleDirectData(ctx context.Context, from *net.UDPAddr, msg *protocol.Message) {
 	if msg.Type == protocol.TypeHolePunch {
-		t.handleDirectHolePunch(from, msg)
+		t.handleDirectHolePunch(ctx, from, msg)
 		return
 	}
 	if msg.Type != protocol.TypeData {
@@ -227,7 +234,7 @@ func (t *Tunnel) handleDirectData(from *net.UDPAddr, msg *protocol.Message) {
 
 // handleDirectHolePunch processes a TypeHolePunch received directly from a peer.
 // Confirms direct reachability and triggers a punch-back response.
-func (t *Tunnel) handleDirectHolePunch(from *net.UDPAddr, msg *protocol.Message) {
+func (t *Tunnel) handleDirectHolePunch(ctx context.Context, from *net.UDPAddr, msg *protocol.Message) {
 	if len(msg.Payload) < 4 {
 		return
 	}
@@ -257,7 +264,7 @@ func (t *Tunnel) handleDirectHolePunch(from *net.UDPAddr, msg *protocol.Message)
 
 	// Punch back in a goroutine — don't block the receive loop
 	go func() {
-		t.burstHolePunch(peerAddr, holePunchBurstPerPhase, 50*time.Millisecond, context.Background())
+		t.burstHolePunch(peerAddr, holePunchBurstPerPhase, 50*time.Millisecond, ctx)
 	}()
 }
 
