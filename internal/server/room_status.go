@@ -34,42 +34,67 @@ func (r *Room) BuildRoomStatus() RoomStatusInfo {
 	t := i18n.T()
 	now := time.Now()
 
+	// Collect raw data under lock — no allocations from fmt.Sprintf.
+	type clientSnap struct {
+		username  string
+		vip       string
+		pubAddr   string
+		idle      time.Duration
+		rtt       time.Duration
+		lossRate  float64
+		jitter    time.Duration
+		pingCount int
+	}
 	r.mu.RLock()
-	conns := make([]ConnectionInfo, 0, len(r.clients))
+	snaps := make([]clientSnap, 0, len(r.clients))
 	for _, c := range r.clients {
-		idle := now.Sub(c.GetLastSeen())
-		idleStr := t.StatusJustNow
-		if idle > time.Second {
-			idleStr = fmt.Sprintf(t.StatusSecAgo, int(idle.Seconds()))
-		}
-		pubAddr := ""
+		var pubAddr string
 		if c.PublicAddr != nil {
 			pubAddr = c.PublicAddr.String()
 		}
-		pingStr := "--"
-		if c.RTT > 0 {
-			pingStr = fmt.Sprintf("%dms", c.RTT.Milliseconds())
-		}
 		lossRate, jitter := c.PingStats()
+		snaps = append(snaps, clientSnap{
+			username:  c.Username,
+			vip:       c.VirtualIP.String(),
+			pubAddr:   pubAddr,
+			idle:      now.Sub(c.GetLastSeen()),
+			rtt:       c.RTT,
+			lossRate:  lossRate,
+			jitter:    jitter,
+			pingCount: c.pingIdx,
+		})
+	}
+	r.mu.RUnlock()
+
+	// Format strings outside the lock.
+	conns := make([]ConnectionInfo, 0, len(snaps))
+	for _, s := range snaps {
+		idleStr := t.StatusJustNow
+		if s.idle > time.Second {
+			idleStr = fmt.Sprintf(t.StatusSecAgo, int(s.idle.Seconds()))
+		}
+		pingStr := "--"
+		if s.rtt > 0 {
+			pingStr = fmt.Sprintf("%dms", s.rtt.Milliseconds())
+		}
 		lossStr := "--"
-		if c.pingIdx > 0 {
-			lossStr = fmt.Sprintf("%.0f%%", lossRate*100)
+		if s.pingCount > 0 {
+			lossStr = fmt.Sprintf("%.0f%%", s.lossRate*100)
 		}
 		jitterStr := "--"
-		if jitter > 0 {
-			jitterStr = fmt.Sprintf("%dms", jitter.Milliseconds())
+		if s.jitter > 0 {
+			jitterStr = fmt.Sprintf("%dms", s.jitter.Milliseconds())
 		}
 		conns = append(conns, ConnectionInfo{
-			Username:   c.Username,
-			VirtualIP:  c.VirtualIP.String(),
-			PublicAddr: pubAddr,
+			Username:   s.username,
+			VirtualIP:  s.vip,
+			PublicAddr: s.pubAddr,
 			Idle:       idleStr,
 			Ping:       pingStr,
 			Loss:       lossStr,
 			Jitter:     jitterStr,
 		})
 	}
-	r.mu.RUnlock()
 
 	return RoomStatusInfo{
 		RoomID:              r.roomID,

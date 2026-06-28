@@ -394,13 +394,16 @@ func (s *Server) worker(ctx context.Context) {
 // ── Packet Dispatch ────────────────────────────────────────────
 
 func (s *Server) handlePacket(data []byte, from *net.UDPAddr) {
-	// Fast path: encrypted data packets have no CRC32 — skip the wasted
-	// compute by decoding directly. The AEAD in HandlePacket provides
-	// integrity verification instead.
-	if s.defaultRoom != nil && s.defaultRoom.roomPass != "" && len(data) > 1 && data[1] == protocol.TypeData {
-		msg, _ := protocol.Decode(data)
+	// Fast path: encrypted packets have no CRC32 — skip the wasted
+	// CRC compute by decoding directly. AEAD provides integrity.
+	if s.defaultRoom != nil && s.defaultRoom.roomPass != "" {
+		msg, _ := protocol.DecodeSkipCRC(data)
 		if msg != nil {
-			s.defaultRoom.HandlePacket(msg.Type, msg.Payload, from)
+			if s.multiRoom {
+				s.handlePacketMultiRoom(msg, from)
+			} else {
+				s.defaultRoom.HandlePacket(msg.Type, msg.Payload, from)
+			}
 			return
 		}
 	}
@@ -635,32 +638,36 @@ func (s *Server) keepaliveLoop(ctx context.Context) {
 		// Clean up stale addrToRoom entries in multi-room mode.
 		// When clients disconnect, the room removes from addrMap but
 		// addrToRoom is only cleaned here to avoid cross-package coupling.
-		//
-		// Lock order: we NEVER hold s.roomMu while acquiring room.mu,
-		// and vice versa. Both are acquired/released sequentially per entry
-		// to avoid ABBA deadlock with handleRegisterMultiRoom.
 		if s.multiRoom {
+			// Snapshot addrToRoom under one lock, then check each room once.
 			s.roomMu.RLock()
-			keys := make([]rateKey, 0, len(s.addrToRoom))
-			for k := range s.addrToRoom {
-				keys = append(keys, k)
+			type roomEntry struct {
+				key  rateKey
+				room *Room
+			}
+			entries := make([]roomEntry, 0, len(s.addrToRoom))
+			for k, room := range s.addrToRoom {
+				if room != nil {
+					entries = append(entries, roomEntry{key: k, room: room})
+				}
 			}
 			s.roomMu.RUnlock()
 
+			// Group by room to minimize lock acquisitions.
+			byRoom := make(map[*Room][]rateKey)
+			for _, e := range entries {
+				byRoom[e.room] = append(byRoom[e.room], e.key)
+			}
+
 			var stale []rateKey
-			for _, k := range keys {
-				s.roomMu.RLock()
-				room := s.addrToRoom[k]
-				s.roomMu.RUnlock()
-				if room == nil {
-					continue
-				}
+			for room, keys := range byRoom {
 				room.mu.RLock()
-				c := room.addrMap[k]
-				room.mu.RUnlock()
-				if c == nil {
-					stale = append(stale, k)
+				for _, k := range keys {
+					if room.addrMap[k] == nil {
+						stale = append(stale, k)
+					}
 				}
+				room.mu.RUnlock()
 			}
 
 			if len(stale) > 0 {
