@@ -438,6 +438,7 @@ func (r *Room) handleAuthResponse(payload []byte, from *net.UDPAddr) {
 		priv, pub, err := auth.GenerateECDHKeyPair()
 		if err != nil {
 			log.Printf("[ecdh] failed to generate keypair: %v", err)
+			r.mu.Unlock()
 			r.sendKick(from, t.KickInternalError)
 			return
 		}

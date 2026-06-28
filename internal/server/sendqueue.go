@@ -117,10 +117,13 @@ func (sq *sendQueue) run(ctx context.Context) {
 					select {
 					case batch[n] = <-sq.ch:
 						if batch[n].priority != priorityHigh {
-							// Defer low-priority — don't send during high-priority drain
 							if deferredCount < batchBufSize {
+								// Defer — send after high-priority batch completes
 								deferredLow[deferredCount] = batch[n]
 								deferredCount++
+							} else {
+								// Deferred buffer full — send immediately instead of dropping
+								sq.writeUDP(batch[n].data, batch[n].addr)
 							}
 							continue DrainHigh
 						}
