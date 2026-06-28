@@ -48,6 +48,10 @@ const (
 	TypeDisconnect    byte = 0x0B // client → server: graceful disconnect
 	TypePing          byte = 0x0C // server → client: latency ping
 	TypePong          byte = 0x0D // client → server: latency pong (echo)
+
+	// P2P enhancement: NAT type probing
+	TypeNATProbe    byte = 0x0E // client → server: NAT type probe request
+	TypeNATResponse byte = 0x0F // server → client: NAT type probe response
 )
 
 // ── Common Errors ──────────────────────────────────────────────

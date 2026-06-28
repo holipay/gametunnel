@@ -134,6 +134,13 @@ type Tunnel struct {
 	decCipher *crypto.Cipher // server→client (relay receive, DirServerToClient)
 	p2pCipher *crypto.Cipher // client↔client (P2P direct, DirClientToClient)
 
+	// P2P enhancement: NAT type detection and port prediction
+	natProbeResult *netutil.NATProbeResult // NAT type from probe (nil if not probed)
+	portPredictor  *netutil.PortPredictor  // port prediction for hole punching
+
+	// TCP fallback transport (nil when using UDP)
+	tcpTransport *netutil.TCPTransport // TCP connection for when UDP is blocked
+
 	// TUN reuse state — persists across Connect() calls
 	lastAssignedIP net.IP                             // virtual IP from last registration
 	lastMTU        int                                // MTU from last connection
@@ -218,8 +225,38 @@ func (t *Tunnel) Connect(ctx context.Context, serverAddr string, mtu int, newTUN
 	t.conn = conn
 
 	if err := t.register(ctx); err != nil {
-		conn.Close()
-		return fmt.Errorf("%s", i18n.Format(i18n.T().ErrRegisterFailed, err))
+		// UDP registration failed — try TCP fallback
+		log.Printf("[tunnel] UDP registration failed: %v, trying TCP fallback...", err)
+		tcp, tcpErr := netutil.DialTCP(serverAddr, 5*time.Second)
+		if tcpErr != nil {
+			conn.Close()
+			return fmt.Errorf("%s (TCP fallback also failed: %v)", i18n.Format(i18n.T().ErrRegisterFailed, err), tcpErr)
+		}
+		t.tcpTransport = tcp
+		// TCP registration uses the same protocol over TCP
+		if regErr := t.registerTCP(ctx); regErr != nil {
+			tcp.Close()
+			conn.Close()
+			return fmt.Errorf("%s", i18n.Format(i18n.T().ErrRegisterFailed, regErr))
+		}
+		log.Printf("[tunnel] connected via TCP fallback")
+	}
+
+	// ── NAT type probe (background, non-blocking) ─────────────────
+	if t.tcpTransport == nil { // only probe over UDP
+		go func() {
+			result, err := netutil.ProbeNATType(conn, sAddr)
+			if err != nil {
+				log.Printf("[nat-probe] probe failed: %v", err)
+			} else {
+				t.mu.Lock()
+				t.natProbeResult = result
+				t.portPredictor = netutil.PortPredictorFromNATProbe([]*netutil.NATProbeResult{result})
+				t.mu.Unlock()
+				log.Printf("[nat-probe] NAT type: %d, external: %s:%d, RTT: %v",
+					result.Type, result.ExternalIP, result.ExternalPort, result.RTT)
+			}
+		}()
 	}
 
 	// ── TUN device: reuse or create ─────────────────────────────────
@@ -381,6 +418,11 @@ type TunnelStatus struct {
 	LossRate    float64 // average loss rate 0.0-1.0
 	P2PPeers    int     // number of peers with direct P2P connection
 	RelayPeers  int     // number of peers using relay
+
+	// P2P enhancement: NAT type info
+	NATType     netutil.NATType // NAT type from probe (0 = unknown)
+	ExternalIP  net.IP          // external IP as seen by server
+	ExternalPort int            // external port as seen by server
 }
 
 // Status returns a snapshot of the current tunnel state.
@@ -395,6 +437,13 @@ func (t *Tunnel) Status() TunnelStatus {
 		ServerIP:      t.serverIP,
 		PeerCount:     len(t.peers),
 		ServerVersion: t.serverVersion,
+	}
+
+	// NAT probe info
+	if t.natProbeResult != nil {
+		st.NATType = t.natProbeResult.Type
+		st.ExternalIP = t.natProbeResult.ExternalIP
+		st.ExternalPort = t.natProbeResult.ExternalPort
 	}
 
 	if !st.Connected || len(t.peers) == 0 {

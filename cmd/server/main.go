@@ -39,6 +39,7 @@ func main() {
 	stateDir := flag.String("state-dir", "", "directory for room state persistence (empty = disabled)")
 	multiRoom := flag.Bool("rooms", false, "enable multi-room mode (each room gets independent subnet)")
 	bandwidthLimit := flag.Int("bandwidth", 0, "per-client outbound bandwidth limit in bytes/sec (0 = default 10Mbps)")
+	tcpAddr := flag.String("tcp-addr", "", "TCP listen address for fallback (e.g. :4700), empty = disabled")
 	langFlag := flag.String("lang", "zh", "language (zh or en)")
 	versionFlag := flag.Bool("version", false, "show version")
 	flag.Parse()
@@ -77,6 +78,7 @@ func main() {
 		StateDir:       *stateDir,
 		MultiRoom:      *multiRoom,
 		BandwidthLimit: *bandwidthLimit,
+		TCPAddr:        *tcpAddr,
 	})
 	if err != nil {
 		log.Fatalf(t.ServerStartFail, err)
