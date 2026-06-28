@@ -166,6 +166,7 @@ type FECDecoder struct {
 	cleanTick *time.Ticker
 	done      chan struct{}
 	wg        sync.WaitGroup // tracks cleanupLoop goroutine
+	closed    bool           // true after Close() is called
 
 	// Stats
 	recovered atomic.Uint64 // packets recovered via FEC
@@ -208,6 +209,10 @@ func (d *FECDecoder) ProcessDataPacket(groupID uint32, seq byte, data []byte) []
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
+	if d.closed {
+		return nil
+	}
+
 	g := d.getOrCreateGroup(groupID)
 	if int(seq) >= len(g.received) || int(seq) >= g.size || g.received[seq] != nil {
 		return nil // duplicate or out of range
@@ -223,6 +228,10 @@ func (d *FECDecoder) ProcessDataPacket(groupID uint32, seq byte, data []byte) []
 func (d *FECDecoder) ProcessParityPacket(groupID uint32, groupSize int, parity []byte) [][]byte {
 	d.mu.Lock()
 	defer d.mu.Unlock()
+
+	if d.closed {
+		return nil
+	}
 
 	if groupSize > maxGroupSize {
 		d.dropped.Add(1)
@@ -305,6 +314,9 @@ func (d *FECDecoder) Stats() (recovered, dropped uint64) {
 
 // Close stops the decoder's background cleanup and waits for it to exit.
 func (d *FECDecoder) Close() {
+	d.mu.Lock()
+	d.closed = true
+	d.mu.Unlock()
 	close(d.done)
 	d.cleanTick.Stop()
 	d.wg.Wait()

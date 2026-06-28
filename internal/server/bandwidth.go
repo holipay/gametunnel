@@ -132,6 +132,7 @@ func (bl *BandwidthLimiter) Remove(dest *net.UDPAddr) {
 
 // Cleanup removes stale buckets that haven't been used in the given duration.
 // Call periodically to prevent memory leaks from disconnected clients.
+// If maxBuckets > 0, also evicts the oldest buckets when count exceeds the limit.
 func (bl *BandwidthLimiter) Cleanup(stale time.Duration) {
 	if !bl.Enabled() {
 		return
@@ -147,4 +148,17 @@ func (bl *BandwidthLimiter) Cleanup(stale time.Duration) {
 		}
 		return true
 	})
+}
+
+// Count returns the number of active buckets.
+func (bl *BandwidthLimiter) Count() int {
+	if !bl.Enabled() {
+		return 0
+	}
+	n := 0
+	bl.buckets.Range(func(_, _ interface{}) bool {
+		n++
+		return true
+	})
+	return n
 }

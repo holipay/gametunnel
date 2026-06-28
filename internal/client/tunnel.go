@@ -174,9 +174,10 @@ type Tunnel struct {
 	newTUNFunc     func(TunConfig) (TunDevice, error) // cached factory
 
 	// Connect lifecycle — ensures old goroutines exit before new ones start
-	runCancel context.CancelFunc
-	runDone  chan struct{}
-	runWg    sync.WaitGroup
+	runCancel   context.CancelFunc
+	runDone     chan struct{}
+	runWg       sync.WaitGroup
+	natProbeDone chan struct{} // closed when NAT probe goroutine finishes
 }
 
 // sendChanSize is the buffer size for the UDP send channel.
@@ -252,6 +253,17 @@ func (t *Tunnel) Connect(ctx context.Context, serverAddr string, mtu int, newTUN
 		}
 	}
 
+	// Wait for any in-flight NAT probe to finish before closing the old conn,
+	// so the probe goroutine doesn't operate on a closed connection.
+	if t.natProbeDone != nil {
+		select {
+		case <-t.natProbeDone:
+		case <-time.After(3 * time.Second):
+			log.Printf("[tunnel] NAT probe did not finish within 3s, proceeding anyway")
+		}
+		t.natProbeDone = nil
+	}
+
 	// Close old FEC decoder goroutine before creating a new one
 	t.fecDecoder.Close()
 	t.fecDecoder = netutil.NewFECDecoder(0)
@@ -308,7 +320,9 @@ func (t *Tunnel) Connect(ctx context.Context, serverAddr string, mtu int, newTUN
 	alreadyProbed := t.natProbeResult != nil
 	t.mu.RUnlock()
 	if t.tcpTransport == nil && !alreadyProbed {
+		t.natProbeDone = make(chan struct{})
 		go func() {
+			defer close(t.natProbeDone)
 			// Use t.conn snapshot to avoid referencing a stale connection
 			// if Connect is called again before the probe finishes.
 			t.mu.RLock()

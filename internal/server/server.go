@@ -618,7 +618,7 @@ func (s *Server) bwCleanupLoop(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			s.bwLimiter.Cleanup(10 * time.Minute)
+			s.bwLimiter.Cleanup(5 * time.Minute)
 		}
 	}
 }

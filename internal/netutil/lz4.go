@@ -28,9 +28,6 @@ const (
 	// origSize is stored as uint16, so 65535 is the theoretical max. This
 	// constant provides a defense-in-depth cap.
 	MaxUncompressedLen = 65535
-
-	// CompressFlag is set in the DataPayload flags byte when data is compressed.
-	CompressFlag byte = 0x01
 )
 
 // ── Encoder ────────────────────────────────────────────────────
@@ -354,9 +351,4 @@ func (d *LZ4Decoder) lz4Decompress(src, dst []byte) int {
 	}
 
 	return di
-}
-
-// IsCompressed checks if data has the compression flag set.
-func IsCompressed(flags byte) bool {
-	return flags&CompressFlag != 0
 }
