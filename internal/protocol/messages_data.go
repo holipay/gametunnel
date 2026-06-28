@@ -124,7 +124,10 @@ func UnmarshalDataPooled(data []byte) (*DataPayload, error) {
 // rather than an IPv4 version nibble (0x45-0x4F).
 // This is the backward-compatibility heuristic for detecting old vs new format.
 func isNewFormat(b byte) bool {
-	// IPv4 packets start with version=4 (0x4_) and IHL=5-15 (0x_5-0x_F)
-	// So valid first bytes are 0x45-0x4F. Anything else is likely flags.
-	return b <= 0x01 // DataFlagCompressed = 0x01, no flags = 0x00
+	return b <= 0x01
+}
+
+// IsCompressed returns true if the data payload flags indicate LZ4 compression.
+func IsCompressed(flags byte) bool {
+	return flags&DataFlagCompressed != 0
 }

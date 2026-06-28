@@ -189,9 +189,9 @@ func (d *FECDecoder) processDataPacket(groupID uint32, seq byte, data []byte) []
 	return d.tryRecover(g)
 }
 
-// processParityPacket processes a received FEC parity packet.
+// ProcessParityPacket processes a received FEC parity packet.
 // Returns recovered packets (if any).
-func (d *FECDecoder) processParityPacket(groupID uint32, groupSize int, parity []byte) [][]byte {
+func (d *FECDecoder) ProcessParityPacket(groupID uint32, groupSize int, parity []byte) [][]byte {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
