@@ -52,7 +52,7 @@ func run(cfg *client.Config, tunFactory func(client.TunConfig) (client.TunDevice
 		return
 	}
 
-	app := NewApp(cfg)
+	app := client.NewApp(cfg)
 	app.SetTUNFactory(tunFactory)
 
 	log.Printf("%s", i18n.Format(i18n.T().AppAutoConnect, cfg.ServerAddr))
