@@ -4,7 +4,6 @@ package main
 
 import (
 	"fmt"
-	"net"
 	"os"
 	"runtime/debug"
 
@@ -35,14 +34,6 @@ func main() {
 	}
 
 	run(cfg, tunFactory)
-}
-
-func parseHostIP(addr string) net.IP {
-	host, _, err := net.SplitHostPort(addr)
-	if err != nil {
-		return net.ParseIP(addr)
-	}
-	return net.ParseIP(host)
 }
 
 func writeCrashLog() {
