@@ -160,9 +160,9 @@ func TestIntegration_RegisterWithAuth(t *testing.T) {
 	}
 
 	// Step 2: Compute HMAC using address from challenge
-	key, err := auth.DeriveKey("test123", "room1")
-	if err != nil {
-		t.Fatalf("DeriveKey failed: %v", err)
+	key := auth.DeriveKey("test123", "room1")
+	if key == nil {
+		t.Fatal("DeriveKey returned nil")
 	}
 	var clientAddr *net.UDPAddr
 	if challenge.ClientAddr != "" {

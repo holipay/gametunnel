@@ -253,13 +253,13 @@ func (t *Tunnel) tryRebind(timeout time.Duration) bool {
 
 	// If room has password, compute HMAC to prove ownership
 	if roomPass != "" {
-		key, err := auth.DeriveKey(roomPass, roomID)
-		if err != nil || key == nil {
+		key := auth.DeriveKey(roomPass, roomID)
+		if key == nil {
 			return false
 		}
-		// Use current source address for HMAC binding
-		localAddr := t.conn.LocalAddr().(*net.UDPAddr)
-		rebind.HMAC = auth.ComputeHMAC(key, nil, roomID, username, localAddr)
+		// HMAC proves password knowledge — no address binding because
+		// the whole point of rebind is that the address is changing.
+		rebind.HMAC = auth.ComputeHMAC(key, nil, roomID, username, nil)
 	}
 
 	packet := protocol.EncodeChecked(protocol.TypeRebind, rebind.Marshal())

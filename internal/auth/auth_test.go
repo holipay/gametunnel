@@ -7,41 +7,38 @@ import (
 )
 
 func TestDeriveKeyEmptyPassword(t *testing.T) {
-	key, err := DeriveKey("", "room1")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	key := DeriveKey("", "room1")
 	if key != nil {
 		t.Fatalf("expected nil for empty password, got %v", key)
 	}
 }
 
 func TestDeriveKeyDeterministic(t *testing.T) {
-	key1, _ := DeriveKey("secret", "room1")
-	key2, _ := DeriveKey("secret", "room1")
+	key1 := DeriveKey("secret", "room1")
+	key2 := DeriveKey("secret", "room1")
 	if !bytes.Equal(key1, key2) {
 		t.Fatal("same inputs should produce same key")
 	}
 }
 
 func TestDeriveKeyDifferentRoom(t *testing.T) {
-	key1, _ := DeriveKey("secret", "room1")
-	key2, _ := DeriveKey("secret", "room2")
+	key1 := DeriveKey("secret", "room1")
+	key2 := DeriveKey("secret", "room2")
 	if bytes.Equal(key1, key2) {
 		t.Fatal("different rooms should produce different keys")
 	}
 }
 
 func TestDeriveKeyDifferentPassword(t *testing.T) {
-	key1, _ := DeriveKey("pass1", "room1")
-	key2, _ := DeriveKey("pass2", "room1")
+	key1 := DeriveKey("pass1", "room1")
+	key2 := DeriveKey("pass2", "room1")
 	if bytes.Equal(key1, key2) {
 		t.Fatal("different passwords should produce different keys")
 	}
 }
 
 func TestDeriveKeyLength(t *testing.T) {
-	key, _ := DeriveKey("secret", "room1")
+	key := DeriveKey("secret", "room1")
 	if len(key) != KeySize {
 		t.Fatalf("key length: got %d, want %d", len(key), KeySize)
 	}
@@ -66,7 +63,7 @@ func TestGenerateChallengeUnique(t *testing.T) {
 }
 
 func TestComputeAndVerifyHMAC(t *testing.T) {
-	key, _ := DeriveKey("testpassword", "room1")
+	key := DeriveKey("testpassword", "room1")
 	challenge, _ := GenerateChallenge()
 	addr := &net.UDPAddr{IP: net.IPv4(192, 168, 1, 100), Port: 12345}
 
@@ -81,8 +78,8 @@ func TestComputeAndVerifyHMAC(t *testing.T) {
 }
 
 func TestVerifyHMACWrongKey(t *testing.T) {
-	key, _ := DeriveKey("correct", "room1")
-	wrongKey, _ := DeriveKey("wrong", "room1")
+	key := DeriveKey("correct", "room1")
+	wrongKey := DeriveKey("wrong", "room1")
 	challenge, _ := GenerateChallenge()
 	addr := &net.UDPAddr{IP: net.IPv4(1, 2, 3, 4), Port: 1000}
 
@@ -93,7 +90,7 @@ func TestVerifyHMACWrongKey(t *testing.T) {
 }
 
 func TestVerifyHMACWrongChallenge(t *testing.T) {
-	key, _ := DeriveKey("secret", "room1")
+	key := DeriveKey("secret", "room1")
 	challenge, _ := GenerateChallenge()
 	wrongChallenge, _ := GenerateChallenge()
 	addr := &net.UDPAddr{IP: net.IPv4(1, 2, 3, 4), Port: 1000}
@@ -105,7 +102,7 @@ func TestVerifyHMACWrongChallenge(t *testing.T) {
 }
 
 func TestVerifyHMACWrongRoom(t *testing.T) {
-	key, _ := DeriveKey("secret", "room1")
+	key := DeriveKey("secret", "room1")
 	challenge, _ := GenerateChallenge()
 	addr := &net.UDPAddr{IP: net.IPv4(1, 2, 3, 4), Port: 1000}
 
@@ -116,7 +113,7 @@ func TestVerifyHMACWrongRoom(t *testing.T) {
 }
 
 func TestVerifyHMACWrongUsername(t *testing.T) {
-	key, _ := DeriveKey("secret", "room1")
+	key := DeriveKey("secret", "room1")
 	challenge, _ := GenerateChallenge()
 	addr := &net.UDPAddr{IP: net.IPv4(1, 2, 3, 4), Port: 1000}
 
@@ -127,7 +124,7 @@ func TestVerifyHMACWrongUsername(t *testing.T) {
 }
 
 func TestVerifyHMACWrongAddr(t *testing.T) {
-	key, _ := DeriveKey("secret", "room1")
+	key := DeriveKey("secret", "room1")
 	challenge, _ := GenerateChallenge()
 	addr1 := &net.UDPAddr{IP: net.IPv4(1, 2, 3, 4), Port: 1000}
 	addr2 := &net.UDPAddr{IP: net.IPv4(5, 6, 7, 8), Port: 2000}
@@ -139,7 +136,7 @@ func TestVerifyHMACWrongAddr(t *testing.T) {
 }
 
 func TestVerifyHMACNilAddr(t *testing.T) {
-	key, _ := DeriveKey("secret", "room1")
+	key := DeriveKey("secret", "room1")
 	challenge, _ := GenerateChallenge()
 
 	hmacVal := ComputeHMAC(key, challenge, "room1", "user", nil)
@@ -172,7 +169,7 @@ func TestVerifyHMACNilKey(t *testing.T) {
 }
 
 func TestVerifyHMACNilClientHMAC(t *testing.T) {
-	key, _ := DeriveKey("secret", "room1")
+	key := DeriveKey("secret", "room1")
 	challenge, _ := GenerateChallenge()
 	if VerifyHMAC(key, nil, challenge, "room1", "user", nil) {
 		t.Fatal("should not verify with nil client HMAC")
@@ -185,10 +182,10 @@ func TestFullAuthFlow(t *testing.T) {
 	username := "ProPlayer"
 	serverAddr := &net.UDPAddr{IP: net.IPv4(203, 0, 113, 1), Port: 4700}
 
-	serverKey, _ := DeriveKey(password, roomID)
+	serverKey := DeriveKey(password, roomID)
 	challenge, _ := GenerateChallenge()
 
-	clientKey, _ := DeriveKey(password, roomID)
+	clientKey := DeriveKey(password, roomID)
 	if !bytes.Equal(serverKey, clientKey) {
 		t.Fatal("client and server keys should match")
 	}
@@ -201,7 +198,7 @@ func TestFullAuthFlow(t *testing.T) {
 
 func TestFieldBoundaryAmbiguity(t *testing.T) {
 	// Verify that length-prefixed encoding prevents field boundary ambiguity
-	key, _ := DeriveKey("secret", "room1")
+	key := DeriveKey("secret", "room1")
 	challenge, _ := GenerateChallenge()
 	addr := &net.UDPAddr{IP: net.IPv4(1, 2, 3, 4), Port: 1000}
 
