@@ -153,11 +153,13 @@ func (e *LZ4Encoder) lz4Compress(src []byte) []byte {
 		}
 		buf = append(buf, byte(tokenLit<<4|tokenMatch))
 
-		// Extended literal length
-		for litLen > 15 {
-			litLen -= 15
+		// Extended literal length (LZ4 spec: each 0xFF adds 255, final byte is remainder)
+		remaining := litLen - 15
+		for remaining >= 255 {
 			buf = append(buf, 0xFF)
+			remaining -= 255
 		}
+		buf = append(buf, byte(remaining))
 
 		// Literals
 		buf = append(buf, src[anchor:ip]...)
@@ -165,12 +167,13 @@ func (e *LZ4Encoder) lz4Compress(src []byte) []byte {
 		// Offset (little-endian)
 		buf = append(buf, byte(offset), byte(offset>>8))
 
-		// Extended match length
-		extMatch := matchLen - minMatch
-		for extMatch > 15 {
-			extMatch -= 15
+		// Extended match length (LZ4 spec: each 0xFF adds 255, final byte is remainder)
+		extRemaining := matchLen - minMatch - 15
+		for extRemaining >= 255 {
 			buf = append(buf, 0xFF)
+			extRemaining -= 255
 		}
+		buf = append(buf, byte(extRemaining))
 
 		ip += matchLen
 		anchor = ip
@@ -187,10 +190,12 @@ func (e *LZ4Encoder) lz4Compress(src []byte) []byte {
 		tokenLit = 15
 	}
 	buf = append(buf, byte(tokenLit<<4))
-	for litLen > 15 {
-		litLen -= 15
+	remaining := litLen - 15
+	for remaining >= 255 {
 		buf = append(buf, 0xFF)
+		remaining -= 255
 	}
+	buf = append(buf, byte(remaining))
 	buf = append(buf, src[anchor:srcLen]...)
 
 	return buf
@@ -299,7 +304,7 @@ func (d *LZ4Decoder) lz4Decompress(src, dst []byte) int {
 
 		// Copy match (may overlap — must copy byte by byte)
 		matchStart := di - offset
-		for i := 0; i < matchLen && di < dstLen; i++ {
+		for i := 0; i < matchLen && di < dstLen && matchStart+i < dstLen; i++ {
 			dst[di] = dst[matchStart+i]
 			di++
 		}

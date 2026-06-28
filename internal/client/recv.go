@@ -64,6 +64,14 @@ func (t *Tunnel) receiveFromServer(ctx context.Context) {
 		// Successful read — reset error counter.
 		consecutiveErrors = 0
 
+		// Check for FEC parity packets first (raw, not protocol-wrapped).
+		// FEC packets are raw byte sequences that fail protocol decoding,
+		// so this check must precede DecodeLenient/DecodeSkipCRC.
+		if n >= netutil.FECHeaderSize && netutil.IsFECPacket(buf[:n]) {
+			t.handleFECPacket(buf[:n])
+			continue
+		}
+
 		// Encrypted rooms skip CRC32 (AEAD provides integrity).
 		t.mu.RLock()
 		encrypted := t.decCipher != nil
@@ -72,19 +80,13 @@ func (t *Tunnel) receiveFromServer(ctx context.Context) {
 		if encrypted {
 			msg, err = protocol.DecodeSkipCRC(buf[:n])
 		} else {
-			msg, err = protocol.DecodeLenient(buf[:n])
+			msg, err = protocol.DecodeChecked(buf[:n])
 		}
 		if err != nil {
 			continue
 		}
 
 		fromServer := from != nil && t.serverAddr != nil && from.IP.Equal(t.serverAddr.IP) && from.Port == t.serverAddr.Port
-
-		// Check for FEC parity packets (raw, not wrapped in protocol message)
-		if n >= netutil.FECHeaderSize && netutil.IsFECPacket(buf[:n]) {
-			t.handleFECPacket(buf[:n])
-			continue
-		}
 
 		if fromServer {
 			// Server-relayed packet
@@ -191,6 +193,7 @@ func (t *Tunnel) handleDirectData(from *net.UDPAddr, msg *protocol.Message) {
 	srcKey := ipKey(dp.SrcIP)
 	t.mu.RLock()
 	peer, known := t.peers[srcKey]
+	peerAddr := peer.PublicAddr // snapshot under lock
 	t.mu.RUnlock()
 	if !known {
 		protocol.PutDataPayload(dp)
@@ -198,7 +201,7 @@ func (t *Tunnel) handleDirectData(from *net.UDPAddr, msg *protocol.Message) {
 	}
 
 	// Verify the packet actually came from this peer's public address (IP + port)
-	if peer.PublicAddr == nil || !from.IP.Equal(peer.PublicAddr.IP) || from.Port != peer.PublicAddr.Port {
+	if peerAddr == nil || !from.IP.Equal(peerAddr.IP) || from.Port != peerAddr.Port {
 		protocol.PutDataPayload(dp)
 		return
 	}

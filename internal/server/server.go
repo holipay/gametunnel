@@ -810,7 +810,18 @@ func (s *Server) keepaliveLoop(ctx context.Context) {
 			if len(stale) > 0 {
 				s.roomMu.Lock()
 				for _, k := range stale {
-					delete(s.addrToRoom, k)
+					// Re-check under write lock: the entry may have been
+					// replaced by a valid new registration (TOCTOU guard).
+					if s.addrToRoom[k] != nil {
+						// Find which room this key belongs to now
+						room := s.addrToRoom[k]
+						room.mu.RLock()
+						stillStale := room.addrMap[k] == nil
+						room.mu.RUnlock()
+						if stillStale {
+							delete(s.addrToRoom, k)
+						}
+					}
 				}
 				s.roomMu.Unlock()
 			}

@@ -287,8 +287,10 @@ func (r *Room) handleAuthResponse(payload []byte, from *net.UDPAddr) {
 		// If c == nil, the entry was already cleaned up (e.g. by CleanupStale
 		// which already rolled back ipConnCount). Don't double-decrement.
 		// Only rollback if c exists but has wrong auth state (genuine anomaly).
+		// Use c.PublicAddr (original registration address) for decrement,
+		// matching the increment in handleRegister.
 		if c != nil {
-			r.decrementIPConnCount(addrToConnIPKey(from))
+			r.decrementIPConnCount(addrToConnIPKey(c.PublicAddr))
 		}
 		r.mu.Unlock()
 		r.sendKick(from, t.KickAuthAbnormal)

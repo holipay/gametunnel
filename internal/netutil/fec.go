@@ -153,6 +153,7 @@ type fecGroup struct {
 	received map[byte][]byte // index → data (only received packets)
 	parity   []byte          // parity packet data
 	parityOK bool            // true if parity packet received
+	created  time.Time       // when this group was created (for age-based cleanup)
 }
 
 // NewFECDecoder creates a new decoder with the given group size.
@@ -170,13 +171,13 @@ func NewFECDecoder(groupSize int) *FECDecoder {
 	return d
 }
 
-// processDataPacket processes a received data packet.
+// ProcessDataPacket processes a received data packet.
 // seq is the packet's sequence number within its FEC group.
 // groupID is the FEC group this packet belongs to.
 // data is the packet payload (the part that was XOR'd by the encoder).
 //
 // Returns recovered packets (if any) after this packet fills a gap.
-func (d *FECDecoder) processDataPacket(groupID uint32, seq byte, data []byte) [][]byte {
+func (d *FECDecoder) ProcessDataPacket(groupID uint32, seq byte, data []byte) [][]byte {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
@@ -212,6 +213,7 @@ func (d *FECDecoder) getOrCreateGroup(groupID uint32) *fecGroup {
 			id:       groupID,
 			size:     d.groupSize,
 			received: make(map[byte][]byte),
+			created:  time.Now(),
 		}
 		d.groups[groupID] = g
 	}
@@ -280,8 +282,12 @@ func (d *FECDecoder) cleanupLoop() {
 			return
 		case <-d.cleanTick.C:
 			d.mu.Lock()
+			now := time.Now()
 			for id, g := range d.groups {
-				// Remove groups older than 10 seconds
+				if now.Sub(g.created) < 10*time.Second {
+					continue // group is still active
+				}
+				// Group expired — count as dropped if incomplete
 				if len(g.received) < g.size {
 					d.dropped.Add(1)
 				}

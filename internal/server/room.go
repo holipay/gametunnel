@@ -78,6 +78,7 @@ type Room struct {
 	regBuf      [2]map[connIPKey]int
 	regTick     *time.Ticker
 	done        chan struct{}
+	stopOnce    sync.Once
 	maxRegPerIP int
 
 	// Per-IP connection count (per-room)
@@ -233,10 +234,12 @@ func (r *Room) regRateLimitLoop() {
 	}
 }
 
-// Stop shuts down per-room background goroutines.
+// Stop shuts down per-room background goroutines. Safe to call multiple times.
 func (r *Room) Stop() {
-	close(r.done)
-	r.regTick.Stop()
+	r.stopOnce.Do(func() {
+		close(r.done)
+		r.regTick.Stop()
+	})
 }
 
 // ── Auth ───────────────────────────────────────────────────────

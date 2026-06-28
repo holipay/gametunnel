@@ -73,7 +73,7 @@ func (np *NATProber) Probe(probeID byte, timeout time.Duration) (*NATProbeResult
 			return nil, fmt.Errorf("read probe response: %w", err)
 		}
 
-		msg, err := protocol.DecodeLenient(buf[:n])
+		msg, err := protocol.DecodeChecked(buf[:n])
 		if err != nil {
 			continue
 		}
