@@ -89,7 +89,7 @@ func UnmarshalAuthResponse(data []byte) (*AuthResponsePayload, error) {
 	off += userLen
 	hmacLen := int(binary.LittleEndian.Uint16(data[off:]))
 	off += 2
-	if len(data) < off+hmacLen {
+	if len(data) < off+hmacLen || hmacLen < 32 {
 		return nil, ErrPacketTooShort
 	}
 	hmacVal := make([]byte, hmacLen)

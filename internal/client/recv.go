@@ -95,11 +95,11 @@ func (t *Tunnel) receiveFromServer(ctx context.Context, conn *net.UDPConn) {
 			// packets (EncodeChecked appends CRC), but DecodeSkipCRC
 			// does not remove it.  Leaving the CRC in place corrupts
 			// UnmarshalDataPooled parsing for TypeData.
-			if encrypted && msg.Type == protocol.TypeData && len(msg.Payload) >= 4 {
-				msg.Payload = msg.Payload[:len(msg.Payload)-4]
+			if encrypted && msg.Type == protocol.TypeData && len(msg.Payload) >= protocol.ChecksumLen {
+				msg.Payload = msg.Payload[:len(msg.Payload)-protocol.ChecksumLen]
 			}
-			t.handleServerData(ctx, msg)
-		} else if from != nil && t.serverAddr.Load() != nil {
+		t.handleServerData(ctx, conn, msg)
+	} else if from != nil && t.serverAddr.Load() != nil {
 			// Direct P2P packet from a peer's public address
 			t.handleDirectData(ctx, from, msg)
 		}
@@ -107,7 +107,9 @@ func (t *Tunnel) receiveFromServer(ctx context.Context, conn *net.UDPConn) {
 }
 
 // handleServerData dispatches server-relayed protocol messages.
-func (t *Tunnel) handleServerData(ctx context.Context, msg *protocol.Message) {
+// conn is the UDP connection from receiveFromServer — used instead of t.conn
+// to avoid races with Connect() replacing t.conn after this goroutine started.
+func (t *Tunnel) handleServerData(ctx context.Context, conn *net.UDPConn, msg *protocol.Message) {
 	// Any data from the server confirms it's alive
 	t.markServerResponse()
 
@@ -141,8 +143,8 @@ func (t *Tunnel) handleServerData(ctx context.Context, msg *protocol.Message) {
 		if err == nil && isFatalKick(kick) {
 			t.cancelKicks.Store(true)
 		}
-		if t.conn != nil {
-			t.conn.Close()
+		if conn != nil {
+			conn.Close()
 		}
 	}
 }

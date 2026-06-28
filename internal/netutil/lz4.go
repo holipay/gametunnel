@@ -24,6 +24,11 @@ const (
 	// Below this, the overhead exceeds the benefit.
 	MinCompressSize = 64
 
+	// MaxUncompressedLen is the maximum allowed uncompressed payload size.
+	// origSize is stored as uint16, so 65535 is the theoretical max. This
+	// constant provides a defense-in-depth cap.
+	MaxUncompressedLen = 65535
+
 	// CompressFlag is set in the DataPayload flags byte when data is compressed.
 	CompressFlag byte = 0x01
 )
@@ -248,6 +253,9 @@ func (d *LZ4Decoder) Decompress(data []byte) ([]byte, error) {
 	origSize := int(binary.LittleEndian.Uint16(data[0:2]))
 	if origSize == 0 {
 		return nil, &FECError{"invalid compressed data: zero original size"}
+	}
+	if origSize > MaxUncompressedLen {
+		return nil, &FECError{"compressed data original size too large"}
 	}
 
 	compressed := data[2:]

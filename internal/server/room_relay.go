@@ -103,9 +103,13 @@ func (r *Room) handleHolePunch(payload []byte, from *net.UDPAddr) {
 	r.mu.RLock()
 	src, ok1 := r.addrMap[addrToRateKey(from)]
 	dst, ok2 := r.clients[ipKey(dstIP)]
+	var dstAddr *net.UDPAddr
+	if ok2 {
+		dstAddr = dst.PublicAddr
+	}
 	r.mu.RUnlock()
 
-	if !ok1 || !ok2 || dst.PublicAddr == nil {
+	if !ok1 || !ok2 || dstAddr == nil {
 		return
 	}
 
@@ -118,7 +122,7 @@ func (r *Room) handleHolePunch(payload []byte, from *net.UDPAddr) {
 	punchData := make([]byte, 0, 4+21) // 4 + typical "1.2.3.4:12345"
 	punchData = append(punchData, src.VirtualIP.To4()...)
 	punchData = appendAddr(punchData, from)
-	r.sendChecked(protocol.TypeHolePunch, punchData, dst.PublicAddr)
+	r.sendChecked(protocol.TypeHolePunch, punchData, dstAddr)
 }
 
 // ── Peer Info ──────────────────────────────────────────────────

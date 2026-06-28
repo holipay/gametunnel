@@ -179,12 +179,20 @@ func NewRoom(cfg RoomConfig) (*Room, error) {
 // ── IP Bitmap ──────────────────────────────────────────────────
 
 func (r *Room) markIPUsed(ip net.IP) {
-	octet := ip.To4()[3]
+	ip4 := ip.To4()
+	if ip4 == nil {
+		return
+	}
+	octet := ip4[3]
 	r.ipBitmap[octet/64] |= 1 << (octet % 64)
 }
 
 func (r *Room) markIPFree(ip net.IP) {
-	octet := ip.To4()[3]
+	ip4 := ip.To4()
+	if ip4 == nil {
+		return
+	}
+	octet := ip4[3]
 	r.ipBitmap[octet/64] &^= 1 << (octet % 64)
 }
 
@@ -323,16 +331,18 @@ func (r *Room) sendKickCode(to *net.UDPAddr, code protocol.KickCode, reason stri
 func (r *Room) sendAssignIP(vip net.IP, to *net.UDPAddr) {
 	r.mu.RLock()
 	c := r.clients[ipKey(vip)]
+	var sessionToken [16]byte
+	if c != nil {
+		sessionToken = c.SessionToken
+	}
 	r.mu.RUnlock()
 
 	assign := &protocol.AssignIPPayload{
-		VirtualIP:  vip,
-		SubnetMask: r.subnet.Mask,
-		ServerIP:   r.serverIP,
-		Version:    protocol.AppVersion,
-	}
-	if c != nil {
-		assign.SessionToken = c.SessionToken
+		VirtualIP:    vip,
+		SubnetMask:   r.subnet.Mask,
+		ServerIP:     r.serverIP,
+		Version:      protocol.AppVersion,
+		SessionToken: sessionToken,
 	}
 	r.sendChecked(protocol.TypeAssignIP, assign.Marshal(), to)
 }

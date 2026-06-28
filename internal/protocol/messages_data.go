@@ -105,7 +105,17 @@ func UnmarshalData(data []byte) (*DataPayload, error) {
 		if dp.Flags&DataFlagHasToken != 0 {
 			offset += 16
 		}
-		pktData := make([]byte, len(data)-offset)
+		if offset > len(data) {
+			return nil, ErrPacketTooShort
+		}
+		dataLen := len(data) - offset
+		if dp.Flags&DataFlagHasFEC != 0 {
+			if dataLen < FECHeaderSize {
+				return nil, ErrPacketTooShort
+			}
+			dataLen -= FECHeaderSize
+		}
+		pktData := make([]byte, dataLen)
 		copy(pktData, data[offset:])
 		dp.Data = pktData
 	} else {
@@ -130,7 +140,19 @@ func UnmarshalDataPooled(data []byte) (*DataPayload, error) {
 		if dp.Flags&DataFlagHasToken != 0 {
 			offset += 16
 		}
-		dp.Data = append(dp.Data[:0], data[offset:]...)
+		if offset > len(data) {
+			PutDataPayload(dp)
+			return nil, ErrPacketTooShort
+		}
+		rawData := data[offset:]
+		if dp.Flags&DataFlagHasFEC != 0 {
+			if len(rawData) < FECHeaderSize {
+				PutDataPayload(dp)
+				return nil, ErrPacketTooShort
+			}
+			rawData = rawData[:len(rawData)-FECHeaderSize]
+		}
+		dp.Data = append(dp.Data[:0], rawData...)
 	} else {
 		dp.Flags = 0
 		dp.Data = append(dp.Data[:0], data[8:]...)

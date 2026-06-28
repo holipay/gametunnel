@@ -31,6 +31,10 @@ const (
 
 	// FECHeaderSize is the fixed header size of an FEC parity packet.
 	FECHeaderSize = 8 // groupID(4) + groupSize(1) + pad(3)
+
+	// maxGroupSize is the maximum FEC group size allowed from the wire.
+	// The received array is [32][]byte, so groupSize > 32 would panic.
+	maxGroupSize = 32
 )
 
 // ── FEC Encoder (sender side) ──────────────────────────────────
@@ -205,7 +209,7 @@ func (d *FECDecoder) ProcessDataPacket(groupID uint32, seq byte, data []byte) []
 	defer d.mu.Unlock()
 
 	g := d.getOrCreateGroup(groupID)
-	if int(seq) >= len(g.received) || g.received[seq] != nil {
+	if int(seq) >= len(g.received) || int(seq) >= g.size || g.received[seq] != nil {
 		return nil // duplicate or out of range
 	}
 	g.received[seq] = copyBytes(data)
@@ -219,6 +223,11 @@ func (d *FECDecoder) ProcessDataPacket(groupID uint32, seq byte, data []byte) []
 func (d *FECDecoder) ProcessParityPacket(groupID uint32, groupSize int, parity []byte) [][]byte {
 	d.mu.Lock()
 	defer d.mu.Unlock()
+
+	if groupSize > maxGroupSize {
+		d.dropped.Add(1)
+		return nil
+	}
 
 	g := d.getOrCreateGroup(groupID)
 	g.size = groupSize
@@ -272,11 +281,11 @@ func (d *FECDecoder) tryRecover(g *fecGroup) [][]byte {
 
 		// Recover: lost = parity XOR all_received
 		parity := copyBytes(g.parity)
-		for j, pkt := range g.received {
+		for j := 0; j < g.size; j++ {
 			if byte(j) == idx {
 				continue
 			}
-			xorBytes(parity, pkt)
+			xorBytes(parity, g.received[j])
 		}
 
 		recovered = append(recovered, parity)
@@ -372,14 +381,14 @@ func releaseGroupBuffers(g *fecGroup) {
 	}
 }
 
-// IsFECPacket checks if data is an FEC parity packet by looking at
-// the groupSize field (byte 4). Valid group sizes are 2-32.
+// IsFECPacket checks if data is an FEC parity packet.
+// Heuristic: bytes 4 (groupSize ∈ [2,32]) and bytes 5-7 (padding, always 0).
 func IsFECPacket(data []byte) bool {
 	if len(data) < FECHeaderSize {
 		return false
 	}
 	gs := data[4]
-	return gs >= 2 && gs <= 32
+	return gs >= 2 && gs <= 32 && data[5] == 0 && data[6] == 0 && data[7] == 0
 }
 
 // ParseFECHeader extracts groupID and groupSize from an FEC parity packet.
