@@ -128,7 +128,7 @@ func (e *FECEncoder) Flush() []byte {
 // buildParityPacket builds the wire-format FEC parity packet.
 // Must be called with e.mu held.
 func (e *FECEncoder) buildParityPacket() []byte {
-	gid := e.groupID.Add(1)
+	gid := e.groupID.Load()
 	buf := make([]byte, FECHeaderSize+e.maxPktLen)
 	binary.LittleEndian.PutUint32(buf[0:4], gid)
 	buf[4] = byte(e.groupSize)
@@ -142,6 +142,7 @@ func (e *FECEncoder) buildParityPacket() []byte {
 // resetGroup resets the encoder for a new group.
 // Must be called with e.mu held.
 func (e *FECEncoder) resetGroup() {
+	e.groupID.Add(1)
 	e.pktCount = 0
 	e.maxPktLen = 0
 	PktBufPut(e.parity)

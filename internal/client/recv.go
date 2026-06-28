@@ -270,8 +270,19 @@ func (t *Tunnel) handleDirectData(ctx context.Context, from *net.UDPAddr, msg *p
 			recovered := fecDec.ProcessDataPacket(groupID, seq, rawData)
 			for _, pkt := range recovered {
 				if len(pkt) >= 20 {
-					if _, werr := dev.Write(pkt); werr != nil {
+					out := pkt
+					decompressed := false
+					if protocol.IsCompressed(dp.Flags) && lz4Dec != nil {
+						if d, err := lz4Dec.Decompress(pkt); err == nil {
+							out = d
+							decompressed = true
+						}
+					}
+					if _, werr := dev.Write(out); werr != nil {
 						log.Printf("[fec] recovered packet write error: %v", werr)
+					}
+					if decompressed {
+						lz4Dec.PutBuffer(out)
 					}
 				}
 			}
@@ -339,6 +350,7 @@ func (t *Tunnel) handleDirectHolePunch(ctx context.Context, from *net.UDPAddr, m
 func (t *Tunnel) handleFECPacket(data []byte) {
 	t.mu.RLock()
 	fecDec := t.fecDecoder
+	lz4Dec := t.lz4Decoder
 	dev := t.tunDev
 	fecEnabled := t.fecEnabled()
 	t.mu.RUnlock()
@@ -359,9 +371,19 @@ func (t *Tunnel) handleFECPacket(data []byte) {
 	recovered := fecDec.ProcessParityPacket(groupID, groupSize, parity)
 	for _, pkt := range recovered {
 		if len(pkt) >= 20 {
-			// Write recovered packet to TUN
-			if _, err := dev.Write(pkt); err != nil {
+			out := pkt
+			decompressed := false
+			if lz4Dec != nil {
+				if d, err := lz4Dec.Decompress(pkt); err == nil {
+					out = d
+					decompressed = true
+				}
+			}
+			if _, err := dev.Write(out); err != nil {
 				log.Printf("[fec] recovered packet write error: %v", err)
+			}
+			if decompressed {
+				lz4Dec.PutBuffer(out)
 			}
 		}
 	}
@@ -467,6 +489,7 @@ func (t *Tunnel) handleDataFromServer(payload []byte) {
 	decCipher := t.decCipher
 	_, known := t.peers[srcKey]
 	fecDec := t.fecDecoder
+	lz4Dec := t.lz4Decoder
 	dev := t.tunDev
 	t.mu.RUnlock()
 
@@ -490,8 +513,19 @@ func (t *Tunnel) handleDataFromServer(payload []byte) {
 			recovered := fecDec.ProcessDataPacket(groupID, seq, rawData)
 			for _, pkt := range recovered {
 				if len(pkt) >= 20 {
-					if _, werr := dev.Write(pkt); werr != nil {
+					out := pkt
+					decompressed := false
+					if protocol.IsCompressed(dp.Flags) && lz4Dec != nil {
+						if d, err := lz4Dec.Decompress(pkt); err == nil {
+							out = d
+							decompressed = true
+						}
+					}
+					if _, werr := dev.Write(out); werr != nil {
 						log.Printf("[fec] recovered packet write error: %v", werr)
+					}
+					if decompressed {
+						lz4Dec.PutBuffer(out)
 					}
 				}
 			}
