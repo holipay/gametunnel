@@ -67,6 +67,7 @@ func newTestServer() *Server {
 	return &Server{
 		defaultRoom: room,
 		rooms:       map[string]*Room{"default": room},
+		version:     "test",
 		startTime:   time.Now(),
 		metricsTS:   NewMetricsTimeSeries(),
 	}
