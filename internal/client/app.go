@@ -239,8 +239,14 @@ func (a *App) statusLoop(ctx context.Context) {
 // connectLoop handles connection with auto-reconnect.
 // After fastRetries (3) rapid attempts, it pauses and calls OnConnFailed
 // to let the user decide: retry, edit settings, or stop.
+//
+// Uses SmartBackoff to choose reconnect delay based on disconnect reason:
+//   - Network glitch (was connected, lost): 500ms fast retry → exponential
+//   - Server unreachable: 2s → 4s → 8s → ... → 60s exponential
+//   - DNS failure: 5s → 15s → 45s → 60s
+//   - Server full: 10s → 20s → 40s → 60s
+//   - Fatal (wrong password, version mismatch): stop immediately
 func (a *App) connectLoop() {
-	// Capture config and generation under lock to avoid data race with Connect()
 	a.Mu.RLock()
 	cfg := a.Cfg
 	tun := a.Tunnel
@@ -248,21 +254,17 @@ func (a *App) connectLoop() {
 	gen := a.ConnectGen
 	a.Mu.RUnlock()
 
-	// Validate server address format before attempting connection
 	if err := ValidateServerAddr(cfg.ServerAddr); err != nil {
 		log.Printf("Invalid server address: %v", err)
 		return
 	}
 
-	// Start status polling for this connection session
 	pollCtx, pollCancel := context.WithCancel(ctx)
 	defer pollCancel()
 	go a.statusLoop(pollCtx)
 
 	defer func() {
 		a.Mu.Lock()
-		// Only reset connecting if this is still the current generation.
-		// A newer Connect() call would have incremented gen.
 		if a.ConnectGen == gen {
 			a.Connecting = false
 		}
@@ -270,10 +272,30 @@ func (a *App) connectLoop() {
 	}()
 
 	const fastRetries = 3
+	backoff := NewSmartBackoff(DisconnectReasonUnknown, false)
 
 	for attempt := 0; ; attempt++ {
 		if attempt > 0 {
-			delay := computeBackoff(attempt)
+			delay := backoff.Next()
+			if delay < 0 {
+				log.Printf("reconnect: giving up after %d attempts", attempt)
+				return
+			}
+
+			// Network availability check (skip for fast retries)
+			if attempt > fastRetries && !IsNetworkAvailable(cfg.ServerAddr) {
+				log.Printf("reconnect: network unavailable, waiting...")
+				// Wait a bit and re-check
+				select {
+				case <-ctx.Done():
+					return
+				case <-time.After(5 * time.Second):
+				}
+				if !IsNetworkAvailable(cfg.ServerAddr) {
+					log.Printf("reconnect: network still unavailable, retrying anyway")
+				}
+			}
+
 			select {
 			case <-ctx.Done():
 				return
@@ -286,7 +308,7 @@ func (a *App) connectLoop() {
 			return
 		}
 
-		// Check if server sent a fatal kick (wrong password, version mismatch)
+		// Fatal kick — stop immediately
 		if tun.cancelKicks.Load() {
 			a.Mu.Lock()
 			a.LastErr = "kicked by server (non-recoverable)"
@@ -297,25 +319,48 @@ func (a *App) connectLoop() {
 		}
 
 		if err != nil {
-			shouldRetry, resetAttempt := a.handleConnectError(err, attempt, fastRetries)
-			if !shouldRetry {
+			a.Mu.Lock()
+			a.LastErr = err.Error()
+			a.Connected = false
+			a.Mu.Unlock()
+			log.Printf("%s", i18n.Format(i18n.T().AppDisconnectErr, err))
+
+			// Classify error and set appropriate backoff strategy
+			reason := ClassifyError(err)
+			if reason == DisconnectReasonFatal {
+				log.Printf("reconnect: fatal error, stopping")
 				return
 			}
-			if resetAttempt {
-				attempt = -1
+			if reason == DisconnectReasonServerFull {
+				log.Printf("reconnect: server full, backing off")
 			}
-		} else {
-			a.Mu.Lock()
-			a.Connected = false
-			a.LastErr = ""
-			a.Mu.Unlock()
-			log.Printf("%s", i18n.T().AppDisconnected)
-			attempt = -1
+			backoff = NewSmartBackoff(reason, false)
+
+			if attempt+1 >= fastRetries {
+				a.Mu.RLock()
+				cb := a.OnConnFailed
+				a.Mu.RUnlock()
+				if cb != nil && !cb(err.Error()) {
+					return
+				}
+			}
+	} else {
+			// Was connected, now disconnected — fast reconnect
+		a.Mu.Lock()
+		a.Connected = false
+		a.LastErr = ""
+		a.Mu.Unlock()
+		log.Printf("%s", i18n.T().AppDisconnected)
+
+			// Use network glitch strategy for fast reconnect
+			backoff = NewSmartBackoff(DisconnectReasonNetworkGlitch, true)
+			attempt = -1 // reset attempt counter for fast reconnect phase
 		}
 	}
 }
 
 // computeBackoff returns a delay with linear backoff and ±10% jitter.
+// Deprecated: use SmartBackoff for smarter reconnection.
 func computeBackoff(attempt int) time.Duration {
 	const (
 		baseDelay = 2 * time.Second
