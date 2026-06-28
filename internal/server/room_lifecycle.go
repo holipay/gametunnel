@@ -28,6 +28,7 @@ func (r *Room) handleDisconnect(from *net.UDPAddr) {
 		return
 	}
 	log.Printf(i18n.T().LogPlayerLeave, c.Username, c.VirtualIP)
+	r.lastActivity.Store(time.Now().UnixNano())
 	if c.auth == authChallengeSent {
 		if r.pendingAuth > 0 {
 			r.pendingAuth--

@@ -21,10 +21,48 @@ import (
 	"github.com/holipay/gametunnel/internal/netutil"
 )
 
-// pktPool reuses byte buffers for incoming packets to reduce GC pressure.
-// Buffers are returned to the pool after each worker finishes processing.
-var pktPool = sync.Pool{
-	New: func() interface{} { return make([]byte, 65535) },
+// pktPools is a set of graded byte buffer pools for incoming packets.
+// Size classes: 512B (most game packets), 2KB, 16KB, 65535B (max UDP).
+// This reduces memory waste: a 100-byte game packet no longer consumes a
+// 65535-byte buffer.
+var pktPools = [4]*sync.Pool{
+	{New: func() interface{} { b := make([]byte, 512); return &b }},
+	{New: func() interface{} { b := make([]byte, 2048); return &b }},
+	{New: func() interface{} { b := make([]byte, 16384); return &b }},
+	{New: func() interface{} { b := make([]byte, 65535); return &b }},
+}
+
+func pktPoolGet(n int) []byte {
+	var idx int
+	switch {
+	case n <= 512:
+		idx = 0
+	case n <= 2048:
+		idx = 1
+	case n <= 16384:
+		idx = 2
+	default:
+		idx = 3
+	}
+	bp := pktPools[idx].Get().(*[]byte)
+	return (*bp)[:cap(*bp)]
+}
+
+func pktPoolPut(buf []byte) {
+	if buf == nil {
+		return
+	}
+	c := cap(buf)
+	switch c {
+	case 512:
+		pktPools[0].Put(&buf)
+	case 2048:
+		pktPools[1].Put(&buf)
+	case 16384:
+		pktPools[2].Put(&buf)
+	case 65535:
+		pktPools[3].Put(&buf)
+	}
 }
 
 // ── Auth State ─────────────────────────────────────────────────
@@ -141,10 +179,9 @@ type Server struct {
 	workers int
 	pktCh   chan pktJob
 
-	// Rate limiting: per-client packet count per window
-	rateMu    sync.Mutex
-	rateBuf   [2]map[rateKey]int // double-buffer: [0]=active, [1]=stale
-	rateTick  *time.Ticker
+	// Rate limiting: per-client packet count per window (sharded for low contention)
+	rateShards *rateShardsArray
+	rateTick   *time.Ticker
 
 	// Time-series metrics
 	metricsTS    *MetricsTimeSeries
@@ -261,7 +298,7 @@ func New(cfg Config) (*Server, error) {
 		startTime:   time.Now(),
 		workers:     workers,
 		pktCh:       make(chan pktJob, chanBuf),
-		rateBuf:     [2]map[rateKey]int{make(map[rateKey]int), make(map[rateKey]int)},
+		rateShards:  newRateShardsArray(),
 		metricsTS:   NewMetricsTimeSeries(),
 		rooms:       make(map[string]*Room),
 		addrToRoom:  make(map[rateKey]*Room),
@@ -349,14 +386,14 @@ func (s *Server) Run(ctx context.Context) {
 			continue
 		}
 
-		pkt := pktPool.Get().([]byte)
+		pkt := pktPoolGet(n)
 		n2 := copy(pkt, buf[:n])
 
 		select {
 		case s.pktCh <- pktJob{data: pkt[:n2], addr: remoteAddr}:
 		default:
 			// channel full — drop (backpressure), return buffer to pool
-			pktPool.Put(pkt)
+			pktPoolPut(pkt)
 			s.totalPacketsDropped.Add(1)
 		}
 	}
@@ -384,9 +421,8 @@ func (s *Server) worker(ctx context.Context) {
 			return
 		case job := <-s.pktCh:
 			s.handlePacket(job.data, job.addr)
-			// Return buffer to pool. Slice to full capacity so the next
-			// Get() gets a usable 65535-byte buffer.
-			pktPool.Put(job.data[:cap(job.data)])
+			// Return buffer to pool with its original capacity.
+			pktPoolPut(job.data[:cap(job.data)])
 		}
 	}
 }
@@ -677,6 +713,27 @@ func (s *Server) keepaliveLoop(ctx context.Context) {
 				}
 				s.roomMu.Unlock()
 			}
+
+			// Clean up empty rooms that have been idle beyond the timeout.
+			// This prevents goroutine leaks from transient rooms (players join
+			// then leave, leaving peerInfoLoop and pingLoop running forever).
+			s.roomMu.Lock()
+			now := time.Now()
+			for roomID, room := range s.rooms {
+				if roomID == "default" {
+					continue // never delete the default room
+				}
+				if room.ClientCount() > 0 {
+					continue // room still has players
+				}
+				lastAct := time.Unix(0, room.lastActivity.Load())
+				if now.Sub(lastAct) > roomIdleTimeout {
+					room.Stop()
+					delete(s.rooms, roomID)
+					log.Printf("[room] cleaned up idle room %q (idle for %v)", roomID, now.Sub(lastAct))
+				}
+			}
+			s.roomMu.Unlock()
 		}
 	}
 }

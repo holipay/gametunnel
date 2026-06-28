@@ -116,7 +116,7 @@ func TestRateLimit(t *testing.T) {
 	// Create a minimal server for rate limiting
 	_, subnet, _ := net.ParseCIDR("10.10.0.0/24")
 	s := &Server{
-		rateBuf: [2]map[rateKey]int{make(map[rateKey]int), make(map[rateKey]int)},
+		rateShards: newRateShardsArray(),
 	}
 	_ = subnet
 

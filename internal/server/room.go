@@ -29,6 +29,11 @@ const (
 	// maxInlineTargets is the number of peer addresses we can hold on the stack
 	// without heap allocation. For rooms ≤ 32 players this covers the common case.
 	maxInlineTargets = 32
+
+	// roomIdleTimeout is how long an empty multi-room can exist before being
+	// cleaned up. Prevents goroutine leaks from transient rooms (players join
+	// then leave, leaving peerInfoLoop and pingLoop running forever).
+	roomIdleTimeout = 5 * time.Minute
 )
 
 // connIPKey is a fixed-size key for per-IP connection counting.
@@ -104,7 +109,8 @@ type Room struct {
 	onDirty func() // called when room state changes (for persistence)
 
 	// Timestamps
-	createdAt time.Time
+	createdAt    time.Time
+	lastActivity atomic.Int64 // unix nano, updated on client join/leave
 }
 
 // RoomConfig holds configuration for creating a new room.
@@ -155,6 +161,7 @@ func NewRoom(cfg RoomConfig) (*Room, error) {
 		done:        make(chan struct{}),
 		createdAt:   time.Now(),
 	}
+	r.lastActivity.Store(time.Now().UnixNano())
 
 	// Reserve network, server, and broadcast addresses
 	r.markIPUsed(net.IPv4(serverIP[0], serverIP[1], serverIP[2], 0))
