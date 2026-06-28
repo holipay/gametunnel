@@ -471,6 +471,9 @@ func (t *Tunnel) handlePeerInfo(ctx context.Context, payload []byte) {
 // handleDataFromServer writes server-relayed data to the TUN device.
 // Note: this path is ALWAYS server-relayed — direct P2P packets are handled
 // by handleDirectData instead. Do NOT mark DirectReach here.
+// Decryption MUST happen before FEC processing: the FEC header is inside
+// the encrypted payload and operating on ciphertext reads garbage as
+// groupID/seq and corrupts AEAD by truncation.
 func (t *Tunnel) handleDataFromServer(payload []byte) {
 	dp, err := protocol.UnmarshalDataPooled(payload)
 	if err != nil {
@@ -495,21 +498,38 @@ func (t *Tunnel) handleDataFromServer(payload []byte) {
 
 	// Allow traffic from the server's virtual IP (relay path) or known peers.
 	if srcKey != serverIPKey && !known {
-		// Unknown srcIP — drop to prevent injection.
 		protocol.PutDataPayload(dp)
 		return
 	}
 
-	// FEC: extract header from end of data, feed raw IP to decoder.
-	// Recovered packets are raw IP and written directly to TUN.
-	if protocol.IsFECEnabled(dp.Flags) && len(dp.Data) >= protocol.FECHeaderSize && t.fecEnabled() {
-		off := len(dp.Data) - protocol.FECHeaderSize
-		groupID := binary.LittleEndian.Uint32(dp.Data[off:])
-		seq := dp.Data[off+4]
-		rawData := dp.Data[:off]
-		dp.Data = rawData
+	if dev == nil {
+		protocol.PutDataPayload(dp)
+		return
+	}
 
-		if fecDec != nil && dev != nil {
+	// ── Step 1: Decrypt (if encrypted) ──
+	outData := dp.Data
+	if decCipher != nil && crypto.IsEncrypted(dp.Data) {
+		decBuf := netutil.PktBufGet(len(dp.Data))
+		var decErr error
+		outData, decErr = decCipher.DecryptInto(decBuf[:0], dp.Data)
+		if decErr != nil {
+			netutil.PktBufPut(decBuf)
+			protocol.PutDataPayload(dp)
+			return
+		}
+		defer netutil.PktBufPut(decBuf)
+	}
+
+	// ── Step 2: FEC recovery (operates on plaintext data) ──
+	if protocol.IsFECEnabled(dp.Flags) && len(outData) >= protocol.FECHeaderSize && t.fecEnabled() {
+		off := len(outData) - protocol.FECHeaderSize
+		groupID := binary.LittleEndian.Uint32(outData[off:])
+		seq := outData[off+4]
+		rawData := outData[:off]
+		outData = rawData
+
+		if fecDec != nil {
 			recovered := fecDec.ProcessDataPacket(groupID, seq, rawData)
 			for _, pkt := range recovered {
 				if len(pkt) >= 20 {
@@ -532,8 +552,23 @@ func (t *Tunnel) handleDataFromServer(payload []byte) {
 		}
 	}
 
-	// Decrypt (relay uses decCipher) and write to TUN
-	t.decryptWriteAndRelease(dp, decCipher)
+	// ── Step 3: Decompress (if compressed) ──
+	if protocol.IsCompressed(dp.Flags) && lz4Dec != nil {
+		decompressed, decErr := lz4Dec.Decompress(outData)
+		if decErr != nil {
+			log.Printf("[lz4] decompress error: %v", decErr)
+			protocol.PutDataPayload(dp)
+			return
+		}
+		outData = decompressed
+		defer lz4Dec.PutBuffer(decompressed)
+	}
+
+	// ── Step 4: Write to TUN ──
+	if _, werr := dev.Write(outData); werr != nil {
+		log.Printf(i18n.T().LogTUNWriteFail, werr)
+	}
+	protocol.PutDataPayload(dp)
 }
 
 // receiveFromTUN reads IP packets from the TUN device and dispatches them
