@@ -274,7 +274,7 @@ func TestIPv6_HandleDirectHolePunch_FromIPv6Addr(t *testing.T) {
 		Payload: holePunchPayload,
 	}
 
-	tunnel.handleDirectHolePunch(peerAddr, msg)
+	tunnel.handleDirectHolePunch(context.Background(), peerAddr, msg)
 
 	// DirectReach should be confirmed
 	tunnel.mu.RLock()
@@ -305,7 +305,7 @@ func TestIPv6_HandleDirectHolePunch_SpoofedAddrRejected(t *testing.T) {
 		Payload: holePunchPayload,
 	}
 
-	tunnel.handleDirectHolePunch(spoofedAddr, msg)
+	tunnel.handleDirectHolePunch(context.Background(), spoofedAddr, msg)
 
 	// DirectReach should NOT be confirmed
 	tunnel.mu.RLock()
@@ -346,7 +346,7 @@ func TestIPv6_HandleDirectData_FromIPv6Peer(t *testing.T) {
 	}
 
 	// Simulate receiving from the peer's IPv6 public address
-	tunnel.handleDirectData(peerAddr, msg)
+	tunnel.handleDirectData(context.Background(), peerAddr, msg)
 
 	// Data should be written to TUN
 	if len(mock.writeBuf) != len(payloadData) {
@@ -388,7 +388,7 @@ func TestIPv6_HandleDirectData_WrongIPv6AddrRejected(t *testing.T) {
 	msg := &protocol.Message{Type: protocol.TypeData, Payload: dp.Marshal()}
 
 	// Send from wrong IPv6 address
-	tunnel.handleDirectData(wrongAddr, msg)
+	tunnel.handleDirectData(context.Background(), wrongAddr, msg)
 
 	if len(mock.writeBuf) != 0 {
 		t.Error("data from wrong IPv6 addr should be rejected")
@@ -420,7 +420,7 @@ func TestIPv6_HandleDirectData_WrongPortRejected(t *testing.T) {
 	}
 	msg := &protocol.Message{Type: protocol.TypeData, Payload: dp.Marshal()}
 
-	tunnel.handleDirectData(wrongPort, msg)
+	tunnel.handleDirectData(context.Background(), wrongPort, msg)
 
 	if len(mock.writeBuf) != 0 {
 		t.Error("data from wrong port should be rejected")
@@ -1173,7 +1173,7 @@ func TestIPv6_HolePunch_GlobalUnicastPeer(t *testing.T) {
 	msg := &protocol.Message{Type: protocol.TypeData, Payload: dp.Marshal()}
 
 	// Direct data from peer's IPv6 address
-	tunnel.handleDirectData(peerAddr, msg)
+	tunnel.handleDirectData(context.Background(), peerAddr, msg)
 
 	// Verify data was written to TUN
 	if len(mock.writeBuf) == 0 {

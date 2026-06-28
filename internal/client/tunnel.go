@@ -333,7 +333,7 @@ func (t *Tunnel) Connect(ctx context.Context, serverAddr string, mtu int, newTUN
 		onGoroutineExit("sendLoop")
 	}()
 	go func() {
-		t.receiveFromServer(runCtx)
+		t.receiveFromServer(runCtx, conn)
 		onGoroutineExit("receiveFromServer")
 	}()
 	go func() {
