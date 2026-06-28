@@ -1722,7 +1722,7 @@ func TestHandleServerData_Ping(t *testing.T) {
 		Payload: ping.Marshal(),
 	}
 
-	tunnel.handleServerData(context.Background(), msg)
+	tunnel.handleServerData(context.Background(), tunnel.conn, msg)
 
 	// Should have sent a pong
 	pkt := readUDPWithTimeout(serverConn, 100*time.Millisecond)
@@ -1744,7 +1744,7 @@ func TestHandleServerData_MarkServerResponse(t *testing.T) {
 		Payload: (&protocol.PingPayload{Timestamp: time.Now().UnixNano()}).Marshal(),
 	}
 
-	tunnel.handleServerData(context.Background(), msg)
+	tunnel.handleServerData(context.Background(), tunnel.conn, msg)
 
 	// Should have marked server response
 	if tunnel.lastServerResponse.Load() == 0 {

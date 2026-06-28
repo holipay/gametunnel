@@ -331,16 +331,18 @@ func (r *Room) sendKickCode(to *net.UDPAddr, code protocol.KickCode, reason stri
 func (r *Room) sendAssignIP(vip net.IP, to *net.UDPAddr) {
 	r.mu.RLock()
 	c := r.clients[ipKey(vip)]
+	var sessionToken [16]byte
+	if c != nil {
+		sessionToken = c.SessionToken
+	}
 	r.mu.RUnlock()
 
 	assign := &protocol.AssignIPPayload{
-		VirtualIP:  vip,
-		SubnetMask: r.subnet.Mask,
-		ServerIP:   r.serverIP,
-		Version:    protocol.AppVersion,
-	}
-	if c != nil {
-		assign.SessionToken = c.SessionToken
+		VirtualIP:    vip,
+		SubnetMask:   r.subnet.Mask,
+		ServerIP:     r.serverIP,
+		Version:      protocol.AppVersion,
+		SessionToken: sessionToken,
 	}
 	r.sendChecked(protocol.TypeAssignIP, assign.Marshal(), to)
 }

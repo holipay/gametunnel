@@ -413,6 +413,13 @@ func (r *Room) handleAuthResponse(payload []byte, from *net.UDPAddr) {
 	}
 
 	log.Printf(t.LogAuthPass, resp.Username, from)
+
+	// Check room capacity BEFORE mutating addrMap so a rejection
+	// doesn't leave state partially modified.
+	if r.checkRoomCapacityAndDuplicate(resp.Username, resp.RoomID, from) {
+		return
+	}
+
 	deleteKey := fromKey
 	if foundByScan {
 		deleteKey = oldKey
@@ -426,10 +433,6 @@ func (r *Room) handleAuthResponse(payload []byte, from *net.UDPAddr) {
 	if foundByScan {
 		c.PublicAddr = from
 		r.addrMap[fromKey] = c
-	}
-
-	if r.checkRoomCapacityAndDuplicate(resp.Username, resp.RoomID, from) {
-		return
 	}
 
 	// Initiate ECDH key exchange for forward secrecy (v1.7+ clients only).

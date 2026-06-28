@@ -223,6 +223,12 @@ func (s *Server) handleRebind(payload []byte, from *net.UDPAddr) {
 	username := foundClient.Username
 
 	foundRoom.mu.Lock()
+	// Re-check that the client is still present (TOCTOU guard).
+	if _, stillThere := foundRoom.clients[vipKey]; !stillThere {
+		foundRoom.mu.Unlock()
+		s.sendRebindAck(from, false)
+		return
+	}
 	// Remove old addrMap entry if client had a prior address (may be nil
 	// for restored/persisted clients that never completed registration).
 	if clientPublicAddr != nil {

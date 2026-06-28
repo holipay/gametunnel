@@ -31,6 +31,10 @@ const (
 
 	// FECHeaderSize is the fixed header size of an FEC parity packet.
 	FECHeaderSize = 8 // groupID(4) + groupSize(1) + pad(3)
+
+	// maxGroupSize is the maximum FEC group size allowed from the wire.
+	// The received array is [32][]byte, so groupSize > 32 would panic.
+	maxGroupSize = 32
 )
 
 // ── FEC Encoder (sender side) ──────────────────────────────────
@@ -205,7 +209,7 @@ func (d *FECDecoder) ProcessDataPacket(groupID uint32, seq byte, data []byte) []
 	defer d.mu.Unlock()
 
 	g := d.getOrCreateGroup(groupID)
-	if int(seq) >= len(g.received) || g.received[seq] != nil {
+	if int(seq) >= len(g.received) || int(seq) >= g.size || g.received[seq] != nil {
 		return nil // duplicate or out of range
 	}
 	g.received[seq] = copyBytes(data)
@@ -219,6 +223,11 @@ func (d *FECDecoder) ProcessDataPacket(groupID uint32, seq byte, data []byte) []
 func (d *FECDecoder) ProcessParityPacket(groupID uint32, groupSize int, parity []byte) [][]byte {
 	d.mu.Lock()
 	defer d.mu.Unlock()
+
+	if groupSize > maxGroupSize {
+		d.dropped.Add(1)
+		return nil
+	}
 
 	g := d.getOrCreateGroup(groupID)
 	g.size = groupSize

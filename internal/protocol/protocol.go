@@ -198,11 +198,14 @@ func VersionMinor(v uint16) uint16 { return v & 0xFF }
 //   - Major version must match (breaking wire-format change)
 //   - Client minor version must be ≤ server minor version (server supports older clients)
 //   - Version 0 means "unknown" (old client/server without version field) — always compatible
+//   - The ECDH flag (0x8000) is stripped before comparison — it is not a version component.
 func IsCompatible(clientVer, serverVer uint16) bool {
 	// Old clients/servers that don't send version are always allowed
 	if clientVer == 0 || serverVer == 0 {
 		return true
 	}
+	clientVer &^= versionECDHFlag
+	serverVer &^= versionECDHFlag
 	if VersionMajor(clientVer) != VersionMajor(serverVer) {
 		return false
 	}

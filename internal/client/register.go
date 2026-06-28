@@ -31,8 +31,9 @@ func (t *Tunnel) register(ctx context.Context) error {
 	const maxAuthRounds = 3
 	retries := 0
 	authRounds := 0
+	pendingPacket := packet
 
-	t.writeUDP(t.conn, packet, t.serverAddr.Load())
+	t.writeUDP(t.conn, pendingPacket, t.serverAddr.Load())
 
 	// Pre-allocate buffer for all readResponse calls during registration
 	respBuf := make([]byte, 1500)
@@ -53,12 +54,14 @@ func (t *Tunnel) register(ctx context.Context) error {
 					return fmt.Errorf("%s", i18n.Format(i18n.T().LogRegFailed, maxRetries))
 				}
 				log.Printf("%s", i18n.Format(i18n.T().LogRegTimeout, retries, maxRetries))
-				t.writeUDP(t.conn, packet, t.serverAddr.Load())
+				t.writeUDP(t.conn, pendingPacket, t.serverAddr.Load())
 				t.conn.SetReadDeadline(time.Now().Add(deadline))
 				continue
 			}
 			return err
 		}
+
+		retries = 0
 
 		switch msg.Type {
 		case protocol.TypeAssignIP:

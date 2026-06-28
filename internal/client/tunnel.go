@@ -176,6 +176,7 @@ type Tunnel struct {
 	// Connect lifecycle — ensures old goroutines exit before new ones start
 	runCancel context.CancelFunc
 	runDone  chan struct{}
+	runWg    sync.WaitGroup
 }
 
 // sendChanSize is the buffer size for the UDP send channel.
@@ -344,6 +345,7 @@ func (t *Tunnel) Connect(ctx context.Context, serverAddr string, mtu int, newTUN
 	runCtx, runCancel := context.WithCancel(ctx)
 	t.runCancel = runCancel
 	t.runDone = make(chan struct{})
+	t.runWg = sync.WaitGroup{}
 
 	var once sync.Once
 	onGoroutineExit := func(name string) {
@@ -353,51 +355,44 @@ func (t *Tunnel) Connect(ctx context.Context, serverAddr string, mtu int, newTUN
 		})
 	}
 
-	go func() {
-		t.sendLoop(runCtx, conn)
-		onGoroutineExit("sendLoop")
-	}()
-	go func() {
-		t.receiveFromServer(runCtx, conn)
-		onGoroutineExit("receiveFromServer")
-	}()
-	go func() {
-		t.receiveFromTUN(runCtx)
-		onGoroutineExit("receiveFromTUN")
-	}()
-	for i := 0; i < tunWorkers; i++ {
+	startGoroutine := func(name string, fn func()) {
+		t.runWg.Add(1)
 		go func() {
-			t.tunWorker(runCtx)
-			onGoroutineExit("tunWorker")
+			defer t.runWg.Done()
+			fn()
+			onGoroutineExit(name)
 		}()
 	}
-	go func() {
-		t.keepaliveLoop(runCtx, runCancel)
-		onGoroutineExit("keepaliveLoop")
-	}()
-	go func() {
-		t.peerDiscoveryLoop(runCtx)
-		onGoroutineExit("peerDiscoveryLoop")
-	}()
-	go func() {
-		t.stalePeerCleanupLoop(runCtx)
-		onGoroutineExit("stalePeerCleanupLoop")
-	}()
-	go func() {
-		t.holePunchRetryLoop(runCtx)
-		onGoroutineExit("holePunchRetryLoop")
-	}()
-	go func() {
-		t.p2pKeepaliveLoop(runCtx)
-		onGoroutineExit("p2pKeepaliveLoop")
-	}()
+
+	startGoroutine("sendLoop", func() { t.sendLoop(runCtx, conn) })
+	startGoroutine("receiveFromServer", func() { t.receiveFromServer(runCtx, conn) })
+	startGoroutine("receiveFromTUN", func() { t.receiveFromTUN(runCtx) })
+	for i := 0; i < tunWorkers; i++ {
+		startGoroutine("tunWorker", func() { t.tunWorker(runCtx) })
+	}
+	startGoroutine("keepaliveLoop", func() { t.keepaliveLoop(runCtx, runCancel) })
+	startGoroutine("peerDiscoveryLoop", func() { t.peerDiscoveryLoop(runCtx) })
+	startGoroutine("stalePeerCleanupLoop", func() { t.stalePeerCleanupLoop(runCtx) })
+	startGoroutine("holePunchRetryLoop", func() { t.holePunchRetryLoop(runCtx) })
+	startGoroutine("p2pKeepaliveLoop", func() { t.p2pKeepaliveLoop(runCtx) })
 
 	<-runCtx.Done()
 
 	// Wait for all goroutines to finish before returning, so the next
 	// Connect call doesn't start new goroutines while old ones are
 	// still running.
-	close(t.runDone)
+	go func() {
+		t.runWg.Wait()
+		close(t.runDone)
+	}()
+
+	timer := time.NewTimer(5 * time.Second)
+	select {
+	case <-t.runDone:
+		timer.Stop()
+	case <-timer.C:
+		log.Printf("[tunnel] old goroutines did not exit within 5s, proceeding anyway")
+	}
 
 	log.Printf("%s", i18n.T().LogTunnelDisconnect)
 	return nil

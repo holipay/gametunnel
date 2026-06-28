@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
+	"sync"
 	"sync/atomic"
 
 	"golang.org/x/crypto/chacha20poly1305"
@@ -64,8 +65,9 @@ type Cipher struct {
 	// Packets with counters outside this window (too old or too far ahead) are rejected.
 	// This prevents replay attacks without requiring strict in-order delivery,
 	// which is important for UDP where packets may arrive slightly out of order.
-	highestCounter atomic.Uint64 // highest counter value seen in decrypted packets
-	replayBitmap   atomic.Uint64 // bitmap of received counters relative to highestCounter
+	replayMu       sync.Mutex
+	highestCounter uint64 // highest counter value seen, protected by replayMu
+	replayBitmap   uint64 // bitmap of received counters relative to highestCounter
 }
 
 // NewCipher creates a new Cipher with the given key and direction.
@@ -195,64 +197,32 @@ func (c *Cipher) DecryptInto(dst, data []byte) ([]byte, error) {
 // Returns true if the counter is valid (not a replay), false if it's a duplicate or too old.
 // Uses a bitmap-based sliding window: tracks counters in range [highest-counterWindowSize+1, highest].
 func (c *Cipher) checkReplayWindow(ctr uint64) bool {
-	highest := c.highestCounter.Load()
+	c.replayMu.Lock()
+	defer c.replayMu.Unlock()
+
+	highest := c.highestCounter
 
 	if ctr > highest {
-		// New highest — atomically advance the window using CAS loop
-		for {
-			oldHighest := c.highestCounter.Load()
-			if ctr <= oldHighest {
-				// Another goroutine already advanced past us
-				break
-			}
-			shift := ctr - oldHighest
-			var newBitmap uint64
-			if shift < replayWindowSize {
-				oldBitmap := c.replayBitmap.Load()
-				newBitmap = (oldBitmap << shift) | 1
-			} else {
-				newBitmap = 1
-			}
-			if c.highestCounter.CompareAndSwap(oldHighest, ctr) {
-				// Use CAS loop to avoid wiping out bits set concurrently
-				// by checkReplayWindowRecheck between our bitmap load and Store.
-				for {
-					cur := c.replayBitmap.Load()
-					if c.replayBitmap.CompareAndSwap(cur, cur|newBitmap) {
-						return true
-					}
-				}
-			}
-			// CAS failed — retry
+		shift := ctr - highest
+		if shift < replayWindowSize {
+			c.replayBitmap = (c.replayBitmap << shift) | 1
+		} else {
+			c.replayBitmap = 1
 		}
-		// Re-check after another goroutine advanced
-		return c.checkReplayWindowRecheck(ctr)
+		c.highestCounter = ctr
+		return true
 	}
 
-	return c.checkReplayWindowRecheck(ctr)
-}
-
-// checkReplayWindowRecheck checks if ctr is within the current window.
-func (c *Cipher) checkReplayWindowRecheck(ctr uint64) bool {
-	highest := c.highestCounter.Load()
-
-	// Check if within window
 	diff := highest - ctr
 	if diff >= replayWindowSize {
-		return false // too old
+		return false
 	}
-
-	// Check if already seen (bit is set)
 	bit := uint64(1) << diff
-	for {
-		old := c.replayBitmap.Load()
-		if old&bit != 0 {
-			return false // already seen — replay!
-		}
-		if c.replayBitmap.CompareAndSwap(old, old|bit) {
-			return true
-		}
+	if c.replayBitmap&bit != 0 {
+		return false
 	}
+	c.replayBitmap |= bit
+	return true
 }
 
 // IsEncrypted checks if data starts with the encryption version byte.

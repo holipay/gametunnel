@@ -12,10 +12,10 @@ import (
 
 // buildDataPacket constructs a wire-format data packet:
 // header(2) + srcIP(4) + dstIP(4) + flags(1) + [token(16)] + data(N) + CRC32(4).
-// If token is non-nil and non-zero, DataFlagHasToken is set and token is included.
-func buildDataPacket(srcIP, dstIP net.IP, data []byte, flags byte, token *[16]byte) []byte {
+// If token is non-zero, DataFlagHasToken is set and token is included.
+func buildDataPacket(srcIP, dstIP net.IP, data []byte, flags byte, token [16]byte) []byte {
 	tokenLen := 0
-	if token != nil && *token != [16]byte{} {
+	if token != [16]byte{} {
 		flags |= protocol.DataFlagHasToken
 		tokenLen = 16
 	}
@@ -81,9 +81,9 @@ func (t *Tunnel) routePacket(pkt []byte, srcIP, dstIP net.IP) {
 	encCipher := t.encCipher
 	p2pCipher := t.p2pCipher
 	serverVersion := t.serverVersion
-	var token *[16]byte
+	var token [16]byte
 	if serverVersion >= 0x0107 {
-		token = &t.sessionToken
+		token = t.sessionToken
 	}
 	peer, ok := t.peers[dstKey]
 	var peerAddr *net.UDPAddr
@@ -136,7 +136,7 @@ func (t *Tunnel) routePacket(pkt []byte, srcIP, dstIP net.IP) {
 		if p2pCipher != nil {
 			packet = buildEncryptedDataPacket(srcIP, dstIP, sendData, p2pCipher, flags)
 		} else {
-			packet = buildDataPacket(srcIP, dstIP, sendData, flags, nil)
+			packet = buildDataPacket(srcIP, dstIP, sendData, flags, [16]byte{})
 		}
 		t.sendUDP(packet, peerAddr)
 		// Generate FEC parity for P2P path — use raw IP data without FEC header
@@ -152,7 +152,7 @@ func (t *Tunnel) routePacket(pkt []byte, srcIP, dstIP net.IP) {
 // rawForFEC is the raw IP data without FEC header, used for FEC encoding.
 // serverAddr is passed explicitly (snapshotted under lock) to avoid data races
 // with Connect() reassigning t.serverAddr.
-func (t *Tunnel) sendToServerFEC(data, rawForFEC []byte, srcIP, dstIP net.IP, cipher *crypto.Cipher, flags byte, fecEnc *netutil.FECEncoder, token *[16]byte, serverAddr *net.UDPAddr) {
+func (t *Tunnel) sendToServerFEC(data, rawForFEC []byte, srcIP, dstIP net.IP, cipher *crypto.Cipher, flags byte, fecEnc *netutil.FECEncoder, token [16]byte, serverAddr *net.UDPAddr) {
 	var packet []byte
 	if cipher != nil {
 		packet = buildEncryptedDataPacket(srcIP, dstIP, data, cipher, flags)

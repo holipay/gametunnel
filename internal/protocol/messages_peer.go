@@ -123,6 +123,9 @@ func UnmarshalPeerInfo(data []byte) (*PeerInfoPayload, error) {
 		return nil, ErrPacketTooShort
 	}
 	count := int(binary.LittleEndian.Uint16(data[0:2]))
+	if count > 256 {
+		return nil, ErrPacketTooShort
+	}
 	off := 2
 	payload := &PeerInfoPayload{Peers: make([]PeerInfoEntry, 0, count)}
 	for i := 0; i < count; i++ {
