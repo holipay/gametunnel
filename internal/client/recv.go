@@ -104,6 +104,8 @@ func (t *Tunnel) handleServerData(ctx context.Context, msg *protocol.Message) {
 		t.handleHolePunchReceived(ctx, msg.Payload)
 	case protocol.TypeNATResponse:
 		// NAT probe response — handled by ProbeNATType via direct read, ignore here
+	case protocol.TypeRebindAck:
+		// Rebind ack — handled by tryRebind via direct read, ignore here
 	case protocol.TypeKick:
 		kick, err := protocol.UnmarshalKick(msg.Payload)
 		if err == nil {
