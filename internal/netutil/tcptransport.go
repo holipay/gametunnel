@@ -202,5 +202,8 @@ func (b *UDPTCPBridge) Send(data []byte) error {
 // Stop signals the bridge to stop.
 func (b *UDPTCPBridge) Stop() {
 	b.tcp.Close()
-	<-b.done
+	select {
+	case <-b.done:
+	case <-time.After(5 * time.Second):
+	}
 }

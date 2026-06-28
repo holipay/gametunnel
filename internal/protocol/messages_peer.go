@@ -43,7 +43,7 @@ func PutPeerInfoPayload(p *PeerInfoPayload) {
 func AddrStrLen(addr *net.UDPAddr) int {
 	if addr.IP.To4() != nil {
 		// IPv4: "1.2.3.4:12345" = 4+3+1+1 = up to 21 bytes
-		n := 4 + 1 + 1 // ip dots + ":" + min port
+		n := 4 + 3 + 1 // ip bytes + 3 dots + ":" + min port
 		p := addr.Port
 		if p >= 10 { n++ }
 		if p >= 100 { n++ }

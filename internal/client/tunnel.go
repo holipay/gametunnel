@@ -149,10 +149,18 @@ type Tunnel struct {
 	// TCP fallback transport (nil when using UDP)
 	tcpTransport *netutil.TCPTransport // TCP connection for when UDP is blocked
 
+	// Rebind acknowledgment channel — receiveFromServer sends RebindAck here,
+	// tryRebind receives from it. Avoids concurrent ReadFromUDP on t.conn.
+	rebindAckCh chan *protocol.RebindAckPayload
+
 	// TUN reuse state — persists across Connect() calls
 	lastAssignedIP net.IP                             // virtual IP from last registration
 	lastMTU        int                                // MTU from last connection
 	newTUNFunc     func(TunConfig) (TunDevice, error) // cached factory
+
+	// Connect lifecycle — ensures old goroutines exit before new ones start
+	runCancel context.CancelFunc
+	runDone  chan struct{}
 }
 
 // sendChanSize is the buffer size for the UDP send channel.
@@ -166,13 +174,14 @@ const ctrlChanSize = 256
 // New creates a new Tunnel. Call Connect to start it.
 func New(cfg *Config) *Tunnel {
 	t := &Tunnel{
-		username: cfg.PlayerName,
-		roomID:   cfg.RoomID,
-		roomPass: cfg.RoomPassword,
-		peers:    make(map[[16]byte]*Peer),
-		sendCh:   make(chan sendJob, sendChanSize),
-		ctrlCh:   make(chan sendJob, ctrlChanSize),
-		tunCh:    make(chan tunJob, tunChanSize),
+		username:    cfg.PlayerName,
+		roomID:      cfg.RoomID,
+		roomPass:    cfg.RoomPassword,
+		peers:       make(map[[16]byte]*Peer),
+		sendCh:      make(chan sendJob, sendChanSize),
+		ctrlCh:      make(chan sendJob, ctrlChanSize),
+		tunCh:       make(chan tunJob, tunChanSize),
+		rebindAckCh: make(chan *protocol.RebindAckPayload, 1),
 		// Default: 50 Mbps client send limit, 512 KB burst
 		sendLimiter: newClientSendLimiter(50*1024*1024/8, 512*1024),
 		// FEC: 8 packets per group (12.5% overhead)
@@ -210,6 +219,16 @@ func (t *Tunnel) Connect(ctx context.Context, serverAddr string, mtu int, newTUN
 
 	// Reset disconnectOnce so Disconnect() can send leave packet on each attempt.
 	t.disconnectOnce.Store(&sync.Once{})
+
+	// Cancel previous Connect's goroutines and wait for them to exit
+	// before starting new ones. This prevents duplicate packet processing
+	// when Connect is called rapidly (e.g. quick reconnect).
+	if t.runCancel != nil {
+		t.runCancel()
+	}
+	if t.runDone != nil {
+		<-t.runDone
+	}
 
 	// Close old conn to release the file descriptor and unblock
 	// the old receiveFromServer goroutine before creating a new one.
@@ -257,9 +276,22 @@ func (t *Tunnel) Connect(ctx context.Context, serverAddr string, mtu int, newTUN
 	}
 
 	// ── NAT type probe (background, non-blocking) ─────────────────
-	if t.tcpTransport == nil { // only probe over UDP
+	// Skip if already probed in a previous session — avoids wasting
+	// a probe when reconnecting with the same server.
+	t.mu.RLock()
+	alreadyProbed := t.natProbeResult != nil
+	t.mu.RUnlock()
+	if t.tcpTransport == nil && !alreadyProbed {
 		go func() {
-			result, err := netutil.ProbeNATType(conn, sAddr)
+			// Use t.conn snapshot to avoid referencing a stale connection
+			// if Connect is called again before the probe finishes.
+			t.mu.RLock()
+			c := t.conn
+			t.mu.RUnlock()
+			if c == nil {
+				return
+			}
+			result, err := netutil.ProbeNATType(c, sAddr)
 			if err != nil {
 				log.Printf("[nat-probe] probe failed: %v", err)
 			} else {
@@ -276,12 +308,17 @@ func (t *Tunnel) Connect(ctx context.Context, serverAddr string, mtu int, newTUN
 	// ── TUN device: reuse or create ─────────────────────────────────
 	if err := t.ensureTUN(mtu); err != nil {
 		conn.Close()
+		if t.tcpTransport != nil {
+			t.tcpTransport.Close()
+			t.tcpTransport = nil
+		}
 		return err
 	}
 
 	// ── Start relay goroutines ──────────────────────────────────────
 	runCtx, runCancel := context.WithCancel(ctx)
-	defer runCancel()
+	t.runCancel = runCancel
+	t.runDone = make(chan struct{})
 
 	var once sync.Once
 	onGoroutineExit := func(name string) {
@@ -331,6 +368,11 @@ func (t *Tunnel) Connect(ctx context.Context, serverAddr string, mtu int, newTUN
 	}()
 
 	<-runCtx.Done()
+
+	// Wait for all goroutines to finish before returning, so the next
+	// Connect call doesn't start new goroutines while old ones are
+	// still running.
+	close(t.runDone)
 
 	log.Printf("%s", i18n.T().LogTunnelDisconnect)
 	return nil
@@ -396,6 +438,10 @@ func (t *Tunnel) Disconnect() {
 			}
 			if t.conn != nil {
 				t.conn.Close()
+			}
+			if t.tcpTransport != nil {
+				t.tcpTransport.Close()
+				t.tcpTransport = nil
 			}
 		})
 	}

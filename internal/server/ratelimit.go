@@ -84,7 +84,6 @@ func (s *Server) checkRate(addr *net.UDPAddr) bool {
 // using a double-buffer swap per shard: swap pointers under lock (O(1)), then
 // clear the stale buffer to reuse its memory allocation.
 func (s *Server) rateLimitLoop(ctx context.Context) {
-	s.rateTick = time.NewTicker(rateInterval)
 	defer s.rateTick.Stop()
 	for {
 		select {

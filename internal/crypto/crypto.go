@@ -207,8 +207,14 @@ func (c *Cipher) checkReplayWindow(ctr uint64) bool {
 				newBitmap = 1
 			}
 			if c.highestCounter.CompareAndSwap(oldHighest, ctr) {
-				c.replayBitmap.Store(newBitmap)
-				return true
+				// Use CAS loop to avoid wiping out bits set concurrently
+				// by checkReplayWindowRecheck between our bitmap load and Store.
+				for {
+					cur := c.replayBitmap.Load()
+					if c.replayBitmap.CompareAndSwap(cur, cur|newBitmap) {
+						return true
+					}
+				}
 			}
 			// CAS failed — retry
 		}
