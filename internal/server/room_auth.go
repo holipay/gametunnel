@@ -5,6 +5,7 @@ import (
 	"log"
 	"net"
 	"time"
+	"unicode/utf8"
 
 	"github.com/holipay/gametunnel/internal/auth"
 	"github.com/holipay/gametunnel/internal/i18n"
@@ -13,15 +14,15 @@ import (
 
 // ── Auth Key ───────────────────────────────────────────────────
 
-func (r *Room) getAuthKey(roomID string) ([]byte, error) {
+func (r *Room) getAuthKey(roomID string) []byte {
 	if v, ok := r.authKeys.Load(roomID); ok {
-		return v.([]byte), nil
+		return v.([]byte)
 	}
 	key := auth.DeriveKey(r.roomPass, roomID)
 	if key != nil {
 		r.authKeys.Store(roomID, key)
 	}
-	return key, nil
+	return key
 }
 
 // ── Register ───────────────────────────────────────────────────
@@ -90,7 +91,7 @@ func (r *Room) handleRegister(payload []byte, from *net.UDPAddr) {
 		return
 	}
 
-	if len(reg.Username) == 0 || len(reg.Username) > maxUsernameLen {
+	if utf8.RuneCountInString(reg.Username) == 0 || utf8.RuneCountInString(reg.Username) > maxUsernameLen {
 		r.sendKick(from, t.KickInvalidName)
 		return
 	}
@@ -273,8 +274,8 @@ func (r *Room) handleECDHConfirm(payload []byte, from *net.UDPAddr) {
 	}
 
 	// Verify HMAC over both public keys (prevents MITM)
-	authKey, err := r.getAuthKey(c.authRoomID)
-	if err != nil || authKey == nil {
+	authKey := r.getAuthKey(c.authRoomID)
+	if authKey == nil {
 		r.mu.Unlock()
 		r.sendKick(from, t.KickInternalError)
 		return
@@ -390,8 +391,8 @@ func (r *Room) handleAuthResponse(payload []byte, from *net.UDPAddr) {
 		return
 	}
 
-	authKey, err := r.getAuthKey(c.authRoomID)
-	if err != nil || authKey == nil {
+	authKey := r.getAuthKey(c.authRoomID)
+	if authKey == nil {
 		r.cleanupPendingAuth(fromKey, oldKey, foundByScan, c)
 		r.sendKick(from, t.KickInternalError)
 		return

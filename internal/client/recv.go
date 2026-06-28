@@ -494,7 +494,8 @@ func (t *Tunnel) receiveFromTUN(ctx context.Context) {
 		select {
 		case t.tunCh <- tunJob{data: pkt, srcIP: srcIP, dstIP: dstIP}:
 		default:
-			// Worker channel full — drop packet (backpressure)
+			// Worker channel full — drop packet and return buffer to pool
+			netutil.PktBufPut(pkt)
 		}
 	}
 }

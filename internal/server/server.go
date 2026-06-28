@@ -312,9 +312,6 @@ func (s *Server) Close() error {
 	}
 	s.roomMu.RUnlock()
 
-	// Stop rate limiter ticker
-	s.rateTick.Stop()
-
 	// Close TCP fallback listener (if enabled)
 	if s.tcpListener != nil {
 		s.tcpListener.Close()

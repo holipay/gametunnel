@@ -268,8 +268,19 @@ func (t *Tunnel) handleECDHExchange(payload []byte) error {
 		return fmt.Errorf("ECDH shared secret: %w", err)
 	}
 
+	// Zero out private key material after shared secret derivation
+	privBytes := priv.Bytes()
+	for i := range privBytes {
+		privBytes[i] = 0
+	}
+
 	// Derive session key
 	sessionKey := auth.DeriveSessionKey(shared, t.roomID)
+
+	// Zero out shared secret after key derivation
+	for i := range shared {
+		shared[i] = 0
+	}
 	if sessionKey == nil {
 		return fmt.Errorf("derive session key failed")
 	}
@@ -316,6 +327,9 @@ func (t *Tunnel) registerTCP(ctx context.Context) error {
 	timer := time.NewTimer(deadline)
 	defer timer.Stop()
 
+	const maxAuthRounds = 3
+	authRounds := 0
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -339,6 +353,10 @@ func (t *Tunnel) registerTCP(ctx context.Context) error {
 		case protocol.TypeAssignIP:
 			return t.handleAssignIP(msg.Payload)
 		case protocol.TypeAuthChallenge:
+			authRounds++
+			if authRounds > maxAuthRounds {
+				return fmt.Errorf("%s", i18n.T().ErrTooManyAuth)
+			}
 			if err := t.handleAuthChallenge(msg.Payload); err != nil {
 				return err
 			}
