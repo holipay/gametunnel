@@ -366,7 +366,6 @@ func (s *Server) Run(ctx context.Context) {
 	go s.persistLoop(ctx)
 	go s.metricsLoop(ctx)
 	go s.bwCleanupLoop(ctx)
-	go s.keyCacheCleanupLoop(ctx)
 	go s.sendQueue.run(ctx) // priority send queue
 
 	// Start room-specific loops
@@ -914,13 +913,13 @@ func (s *Server) handleRebind(payload []byte, from *net.UDPAddr) {
 			s.sendRebindAck(from, false)
 			return
 		}
-		key, err := auth.DeriveKey(foundRoom.roomPass, foundClient.authRoomID)
-		if err != nil || key == nil {
+		key := auth.DeriveKey(foundRoom.roomPass, foundClient.authRoomID)
+		if key == nil {
 			s.sendRebindAck(from, false)
 			return
 		}
-		// Verify HMAC(key, virtualIP)
-		expected := auth.ComputeHMAC(key, nil, foundClient.authRoomID, foundClient.Username, from)
+		// Verify HMAC — no address binding (rebind changes the address)
+		expected := auth.ComputeHMAC(key, nil, foundClient.authRoomID, foundClient.Username, nil)
 		if !hmac.Equal(req.HMAC, expected) {
 			s.sendRebindAck(from, false)
 			return
@@ -955,7 +954,7 @@ func (s *Server) handleRebind(payload []byte, from *net.UDPAddr) {
 		s.roomMu.Unlock()
 	}
 
-	log.Printf("[rebind] %s migrated: %s → %s", foundClient.Username, oldKey, from)
+	log.Printf("[rebind] %s migrated: %v → %s", foundClient.Username, oldKey, from)
 	s.sendRebindAck(from, true)
 
 	// Send current peer info to the client on new address
@@ -1002,16 +1001,4 @@ func (s *Server) bwCleanupLoop(ctx context.Context) {
 	}
 }
 
-// keyCacheCleanupLoop periodically evicts expired Argon2 derived key entries.
-func (s *Server) keyCacheCleanupLoop(ctx context.Context) {
-	ticker := time.NewTicker(5 * time.Minute)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			auth.CleanupKeyCache()
-		}
-	}
-}
+
