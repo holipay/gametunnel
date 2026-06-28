@@ -115,7 +115,14 @@ func (t *Tunnel) handleServerData(ctx context.Context, msg *protocol.Message) {
 	case protocol.TypeNATResponse:
 		// NAT probe response — handled by ProbeNATType via direct read, ignore here
 	case protocol.TypeRebindAck:
-		// Rebind ack — handled by tryRebind via direct read, ignore here
+		ack, err := protocol.UnmarshalRebindAck(msg.Payload)
+		if err == nil {
+			// Non-blocking send — if tryRebind isn't waiting, drop it
+			select {
+			case t.rebindAckCh <- ack:
+			default:
+			}
+		}
 	case protocol.TypeKick:
 		kick, err := protocol.UnmarshalKick(msg.Payload)
 		if err == nil {
@@ -193,12 +200,14 @@ func (t *Tunnel) handleDirectData(from *net.UDPAddr, msg *protocol.Message) {
 	srcKey := ipKey(dp.SrcIP)
 	t.mu.RLock()
 	peer, known := t.peers[srcKey]
-	peerAddr := peer.PublicAddr // snapshot under lock
 	t.mu.RUnlock()
 	if !known {
 		protocol.PutDataPayload(dp)
 		return
 	}
+	t.mu.RLock()
+	peerAddr := peer.PublicAddr
+	t.mu.RUnlock()
 
 	// Verify the packet actually came from this peer's public address (IP + port)
 	if peerAddr == nil || !from.IP.Equal(peerAddr.IP) || from.Port != peerAddr.Port {

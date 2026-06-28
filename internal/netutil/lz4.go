@@ -154,12 +154,15 @@ func (e *LZ4Encoder) lz4Compress(src []byte) []byte {
 		buf = append(buf, byte(tokenLit<<4|tokenMatch))
 
 		// Extended literal length (LZ4 spec: each 0xFF adds 255, final byte is remainder)
-		remaining := litLen - 15
-		for remaining >= 255 {
-			buf = append(buf, 0xFF)
-			remaining -= 255
+		// Only emit extension bytes when the 4-bit value in the token is exactly 15.
+		if tokenLit == 15 {
+			remaining := litLen - 15
+			for remaining >= 255 {
+				buf = append(buf, 0xFF)
+				remaining -= 255
+			}
+			buf = append(buf, byte(remaining))
 		}
-		buf = append(buf, byte(remaining))
 
 		// Literals
 		buf = append(buf, src[anchor:ip]...)
@@ -168,12 +171,15 @@ func (e *LZ4Encoder) lz4Compress(src []byte) []byte {
 		buf = append(buf, byte(offset), byte(offset>>8))
 
 		// Extended match length (LZ4 spec: each 0xFF adds 255, final byte is remainder)
-		extRemaining := matchLen - minMatch - 15
-		for extRemaining >= 255 {
-			buf = append(buf, 0xFF)
-			extRemaining -= 255
+		// Only emit extension bytes when the 4-bit value in the token is exactly 15.
+		if tokenMatch == 15 {
+			extRemaining := matchLen - minMatch - 15
+			for extRemaining >= 255 {
+				buf = append(buf, 0xFF)
+				extRemaining -= 255
+			}
+			buf = append(buf, byte(extRemaining))
 		}
-		buf = append(buf, byte(extRemaining))
 
 		ip += matchLen
 		anchor = ip
@@ -190,12 +196,14 @@ func (e *LZ4Encoder) lz4Compress(src []byte) []byte {
 		tokenLit = 15
 	}
 	buf = append(buf, byte(tokenLit<<4))
-	remaining := litLen - 15
-	for remaining >= 255 {
-		buf = append(buf, 0xFF)
-		remaining -= 255
+	if tokenLit == 15 {
+		remaining := litLen - 15
+		for remaining >= 255 {
+			buf = append(buf, 0xFF)
+			remaining -= 255
+		}
+		buf = append(buf, byte(remaining))
 	}
-	buf = append(buf, byte(remaining))
 	buf = append(buf, src[anchor:srcLen]...)
 
 	return buf
@@ -205,7 +213,7 @@ func hash4(b []byte) int {
 	if len(b) < 4 {
 		return 0
 	}
-	return int(b[0]) | int(b[1])<<8 | int(b[2])<<16 | int(b[3])<<24
+	return int(uint32(b[0]) | uint32(b[1])<<8 | uint32(b[2])<<16 | uint32(b[3])<<24)
 }
 
 // ── Decoder ────────────────────────────────────────────────────

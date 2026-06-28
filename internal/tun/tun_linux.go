@@ -27,8 +27,8 @@ func New(cfg Config) (*Device, error) {
 	if cfg.MTU <= 0 {
 		cfg.MTU = DefaultMTU
 	}
-	if cfg.VirtualIP == nil {
-		return nil, fmt.Errorf("virtual IP is required")
+	if cfg.VirtualIP.To4() == nil {
+		return nil, fmt.Errorf("virtual IP must be an IPv4 address")
 	}
 
 	tunDev, err := tun.CreateTUN("gt0", cfg.MTU)

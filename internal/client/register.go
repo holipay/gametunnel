@@ -74,7 +74,10 @@ func (t *Tunnel) register(ctx context.Context) error {
 			t.conn.SetReadDeadline(time.Now().Add(deadline))
 			continue
 		case protocol.TypeKick:
-			kick, _ := protocol.UnmarshalKick(msg.Payload)
+			kick, err := protocol.UnmarshalKick(msg.Payload)
+			if err != nil || kick == nil {
+				return fmt.Errorf("%s", i18n.T().ErrRejected)
+			}
 			return fmt.Errorf("%s", i18n.Format(i18n.T().ErrRejected, kick.Reason))
 		}
 	}
@@ -267,7 +270,10 @@ func (t *Tunnel) registerTCP(ctx context.Context) error {
 			timer.Reset(deadline)
 			continue
 		case protocol.TypeKick:
-			kick, _ := protocol.UnmarshalKick(msg.Payload)
+			kick, err := protocol.UnmarshalKick(msg.Payload)
+			if err != nil || kick == nil {
+				return fmt.Errorf("%s", i18n.T().ErrRejected)
+			}
 			return fmt.Errorf("%s", i18n.Format(i18n.T().ErrRejected, kick.Reason))
 		}
 	}

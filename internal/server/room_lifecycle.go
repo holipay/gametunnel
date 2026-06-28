@@ -62,23 +62,35 @@ func (r *Room) CleanupStale() bool {
 
 	r.mu.RLock()
 	type staleClient struct {
-		key [16]byte
-		c   *Client
+		key    [16]byte
+		aKey   rateKey
+		connKey connIPKey
+		c      *Client
 	}
 	type staleAuth struct {
-		key rateKey
-		c   *Client
+		key     rateKey
+		connKey connIPKey
+		c       *Client
 	}
 	var staleClients []staleClient
 	var staleAuths []staleAuth
 	for key, c := range r.clients {
 		if now.Sub(c.GetLastSeen()) > 30*time.Second {
-			staleClients = append(staleClients, staleClient{key: key, c: c})
+			sc := staleClient{key: key, c: c}
+			if c.PublicAddr != nil {
+				sc.aKey = addrToRateKey(c.PublicAddr)
+				sc.connKey = addrToConnIPKey(c.PublicAddr)
+			}
+			staleClients = append(staleClients, sc)
 		}
 	}
 	for addrKey, c := range r.addrMap {
 		if c.auth == authChallengeSent && now.Sub(c.challengeAt) > 30*time.Second {
-			staleAuths = append(staleAuths, staleAuth{key: addrKey, c: c})
+			sa := staleAuth{key: addrKey, c: c}
+			if c.PublicAddr != nil {
+				sa.connKey = addrToConnIPKey(c.PublicAddr)
+			}
+			staleAuths = append(staleAuths, sa)
 		}
 	}
 	r.mu.RUnlock()
@@ -91,12 +103,15 @@ func (r *Room) CleanupStale() bool {
 	changed := false
 	for _, sc := range staleClients {
 		if cur, ok := r.clients[sc.key]; ok && cur == sc.c {
+			if time.Since(cur.GetLastSeen()) <= 30*time.Second {
+				continue // no longer stale — received keepalive while we held RUnlock
+			}
 			log.Printf("%s", i18n.Format(i18n.T().ServerPeerLeave, sc.c.Username, sc.c.VirtualIP))
 			r.markIPFree(sc.c.VirtualIP)
 			delete(r.clients, sc.key)
 			if sc.c.PublicAddr != nil {
-				delete(r.addrMap, addrToRateKey(sc.c.PublicAddr))
-				r.decrementIPConnCount(addrToConnIPKey(sc.c.PublicAddr))
+				delete(r.addrMap, sc.aKey)
+				r.decrementIPConnCount(sc.connKey)
 			}
 			changed = true
 		}
@@ -108,7 +123,7 @@ func (r *Room) CleanupStale() bool {
 				r.pendingAuth--
 			}
 			if sa.c.PublicAddr != nil {
-				r.decrementIPConnCount(addrToConnIPKey(sa.c.PublicAddr))
+				r.decrementIPConnCount(sa.connKey)
 			}
 		}
 	}
