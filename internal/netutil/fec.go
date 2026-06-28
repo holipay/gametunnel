@@ -141,6 +141,7 @@ type FECDecoder struct {
 	groups    map[uint32]*fecGroup // active groups by groupID
 	cleanTick *time.Ticker
 	done      chan struct{}
+	wg        sync.WaitGroup // tracks cleanupLoop goroutine
 
 	// Stats
 	recovered atomic.Uint64 // packets recovered via FEC
@@ -167,6 +168,7 @@ func NewFECDecoder(groupSize int) *FECDecoder {
 		cleanTick: time.NewTicker(5 * time.Second),
 		done:      make(chan struct{}),
 	}
+	d.wg.Add(1)
 	go d.cleanupLoop()
 	return d
 }
@@ -268,14 +270,16 @@ func (d *FECDecoder) Stats() (recovered, dropped uint64) {
 	return d.recovered.Load(), d.dropped.Load()
 }
 
-// Close stops the decoder's background cleanup.
+// Close stops the decoder's background cleanup and waits for it to exit.
 func (d *FECDecoder) Close() {
 	close(d.done)
 	d.cleanTick.Stop()
+	d.wg.Wait()
 }
 
 // cleanupLoop periodically removes stale groups.
 func (d *FECDecoder) cleanupLoop() {
+	defer d.wg.Done()
 	for {
 		select {
 		case <-d.done:

@@ -227,7 +227,11 @@ func (t *Tunnel) Connect(ctx context.Context, serverAddr string, mtu int, newTUN
 		t.runCancel()
 	}
 	if t.runDone != nil {
-		<-t.runDone
+		select {
+		case <-t.runDone:
+		case <-time.After(5 * time.Second):
+			log.Printf("[tunnel] old goroutines did not exit within 5s, proceeding anyway")
+		}
 	}
 
 	// Close old conn to release the file descriptor and unblock

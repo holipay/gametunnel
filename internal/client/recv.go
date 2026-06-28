@@ -94,7 +94,7 @@ func (t *Tunnel) receiveFromServer(ctx context.Context, conn *net.UDPConn) {
 			// packets (EncodeChecked appends CRC), but DecodeSkipCRC
 			// does not remove it.  Leaving the CRC in place corrupts
 			// UnmarshalDataPooled parsing for TypeData.
-			if encrypted && len(msg.Payload) >= 4 {
+			if encrypted && msg.Type == protocol.TypeData && len(msg.Payload) >= 4 {
 				msg.Payload = msg.Payload[:len(msg.Payload)-4]
 			}
 			t.handleServerData(ctx, msg)
@@ -203,20 +203,21 @@ func (t *Tunnel) handleDirectData(ctx context.Context, from *net.UDPAddr, msg *p
 		return
 	}
 
-	// Validate srcIP is a known peer (anti-spoofing)
+	// Snapshot all needed fields under a single read lock
 	srcKey := ipKey(dp.SrcIP)
 	t.mu.RLock()
 	peer, known := t.peers[srcKey]
+	p2pCipher := t.p2pCipher
 	t.mu.RUnlock()
+
+	// Validate srcIP is a known peer (anti-spoofing)
 	if !known {
 		protocol.PutDataPayload(dp)
 		return
 	}
-	t.mu.RLock()
-	peerAddr := peer.PublicAddr
-	t.mu.RUnlock()
 
 	// Verify the packet actually came from this peer's public address (IP + port)
+	peerAddr := peer.PublicAddr
 	if peerAddr == nil || !from.IP.Equal(peerAddr.IP) || from.Port != peerAddr.Port {
 		protocol.PutDataPayload(dp)
 		return
@@ -226,10 +227,7 @@ func (t *Tunnel) handleDirectData(ctx context.Context, from *net.UDPAddr, msg *p
 	peer.DirectReach.Store(true)
 
 	// Decrypt (P2P uses p2pCipher) and write to TUN
-	t.mu.RLock()
-	cipher := t.p2pCipher
-	t.mu.RUnlock()
-	t.decryptWriteAndRelease(dp, cipher)
+	t.decryptWriteAndRelease(dp, p2pCipher)
 }
 
 // handleDirectHolePunch processes a TypeHolePunch received directly from a peer.
@@ -395,22 +393,18 @@ func (t *Tunnel) handleDataFromServer(payload []byte) {
 
 	srcKey := ipKey(dp.SrcIP)
 
-	// Snapshot fields under read lock to avoid races with reconnect
+	// Snapshot all needed fields under a single read lock to avoid races with reconnect
 	t.mu.RLock()
 	serverIPKey := t.serverIPKey
 	decCipher := t.decCipher
+	_, known := t.peers[srcKey]
 	t.mu.RUnlock()
 
 	// Allow traffic from the server's virtual IP (relay path) or known peers.
-	if srcKey != serverIPKey {
-		t.mu.RLock()
-		_, known := t.peers[srcKey]
-		t.mu.RUnlock()
-		if !known {
-			// Unknown srcIP — drop to prevent injection.
-			protocol.PutDataPayload(dp)
-			return
-		}
+	if srcKey != serverIPKey && !known {
+		// Unknown srcIP — drop to prevent injection.
+		protocol.PutDataPayload(dp)
+		return
 	}
 
 	// Decrypt (relay uses decCipher) and write to TUN
