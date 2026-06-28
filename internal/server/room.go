@@ -265,6 +265,8 @@ func (r *Room) HandlePacket(msgType byte, payload []byte, from *net.UDPAddr) {
 		r.handleDisconnect(from)
 	case protocol.TypePong:
 		r.handlePong(payload, from)
+	case protocol.TypeECDHConfirm:
+		r.handleECDHConfirm(payload, from)
 	}
 }
 
@@ -319,11 +321,18 @@ func (r *Room) sendKickCode(to *net.UDPAddr, code protocol.KickCode, reason stri
 }
 
 func (r *Room) sendAssignIP(vip net.IP, to *net.UDPAddr) {
+	r.mu.RLock()
+	c := r.clients[ipKey(vip)]
+	r.mu.RUnlock()
+
 	assign := &protocol.AssignIPPayload{
 		VirtualIP:  vip,
 		SubnetMask: r.subnet.Mask,
 		ServerIP:   r.serverIP,
 		Version:    protocol.AppVersion,
+	}
+	if c != nil {
+		assign.SessionToken = c.SessionToken
 	}
 	r.sendChecked(protocol.TypeAssignIP, assign.Marshal(), to)
 }

@@ -19,8 +19,8 @@ const ProtocolVersion byte = 1
 
 // AppVersion is the application version encoded as (major << 8 | minor).
 // Used for client-server compatibility negotiation during handshake.
-// v1.3 = 0x0103 = 259, v1.4 = 0x0104 = 260, v1.5 = 0x0105 = 261, v1.6 = 0x0106 = 262
-const AppVersion uint16 = 0x0106
+// v1.3 = 0x0103 = 259, v1.4 = 0x0104 = 260, v1.5 = 0x0105 = 261, v1.6 = 0x0106 = 262, v1.7 = 0x0107 = 263
+const AppVersion uint16 = 0x0107
 
 // HeaderLen is the fixed header size: version(1) + type(1).
 const HeaderLen = 2
@@ -55,6 +55,10 @@ const (
 	// Connection migration
 	TypeRebind    byte = 0x10 // client → server: request address migration (WiFi↔4G)
 	TypeRebindAck byte = 0x11 // server → client: migration confirmed
+
+	// Forward secrecy: X25519 ECDH key exchange
+	TypeECDHExchange byte = 0x12 // server → client: server's ephemeral public key
+	TypeECDHConfirm  byte = 0x13 // client → server: client's ephemeral public key + HMAC
 )
 
 // ── Common Errors ──────────────────────────────────────────────

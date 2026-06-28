@@ -11,9 +11,15 @@ import (
 )
 
 // buildDataPacket constructs a wire-format data packet:
-// header(2) + DataPayload(9+len) + CRC32(4).
-func buildDataPacket(srcIP, dstIP net.IP, data []byte, flags byte) []byte {
-	size := protocol.HeaderLen + 9 + len(data) + protocol.ChecksumLen
+// header(2) + srcIP(4) + dstIP(4) + flags(1) + [token(16)] + data(N) + CRC32(4).
+// If token is non-nil and non-zero, DataFlagHasToken is set and token is included.
+func buildDataPacket(srcIP, dstIP net.IP, data []byte, flags byte, token *[16]byte) []byte {
+	tokenLen := 0
+	if token != nil && *token != [16]byte{} {
+		flags |= protocol.DataFlagHasToken
+		tokenLen = 16
+	}
+	size := protocol.HeaderLen + 9 + tokenLen + len(data) + protocol.ChecksumLen
 	dst := make([]byte, size)
 	off := 0
 	dst[off] = protocol.ProtocolVersion
@@ -24,6 +30,10 @@ func buildDataPacket(srcIP, dstIP net.IP, data []byte, flags byte) []byte {
 	off += 8
 	dst[off] = flags
 	off++
+	if tokenLen > 0 {
+		copy(dst[off:], token[:])
+		off += 16
+	}
 	copy(dst[off:], data)
 	off += len(data)
 	crc := crc32.ChecksumIEEE(dst[:off])
@@ -71,6 +81,11 @@ func (t *Tunnel) routePacket(pkt []byte, srcIP, dstIP net.IP) {
 	cachedSubnet := t.cachedSubnet
 	encCipher := t.encCipher
 	p2pCipher := t.p2pCipher
+	serverVersion := t.serverVersion
+	var token *[16]byte
+	if serverVersion >= 0x0107 {
+		token = &t.sessionToken
+	}
 	peer, ok := t.peers[dstKey]
 	var peerAddr *net.UDPAddr
 	var peerDirect bool
@@ -94,13 +109,13 @@ func (t *Tunnel) routePacket(pkt []byte, srcIP, dstIP net.IP) {
 
 	// Fast path: check server destination first (most common for relay)
 	if dstKey == serverIPKey {
-		t.sendToServerFEC(sendData, srcIP, dstIP, encCipher, flags, fecEnc)
+		t.sendToServerFEC(sendData, srcIP, dstIP, encCipher, flags, fecEnc, token)
 		return
 	}
 
 	// Broadcast/multicast: relay to all peers via server
 	if cachedSubnet != nil && netutil.IsRelayTarget(dstIP, cachedSubnet) {
-		t.sendToServerFEC(sendData, srcIP, dstIP, encCipher, flags, fecEnc)
+		t.sendToServerFEC(sendData, srcIP, dstIP, encCipher, flags, fecEnc, token)
 		return
 	}
 
@@ -110,24 +125,24 @@ func (t *Tunnel) routePacket(pkt []byte, srcIP, dstIP net.IP) {
 		if p2pCipher != nil {
 			packet = buildEncryptedDataPacket(srcIP, dstIP, sendData, p2pCipher, flags)
 		} else {
-			packet = buildDataPacket(srcIP, dstIP, sendData, flags)
+			packet = buildDataPacket(srcIP, dstIP, sendData, flags, nil)
 		}
 		t.sendUDP(packet, peerAddr)
 		// Generate FEC parity for P2P path
 		t.feedFEC(packet, peerAddr, fecEnc)
 	} else {
 		// Fallback: relay through server.
-		t.sendToServerFEC(sendData, srcIP, dstIP, encCipher, flags, fecEnc)
+		t.sendToServerFEC(sendData, srcIP, dstIP, encCipher, flags, fecEnc, token)
 	}
 }
 
 // sendToServerFEC sends a packet via server relay and generates FEC parity.
-func (t *Tunnel) sendToServerFEC(pkt []byte, srcIP, dstIP net.IP, cipher *crypto.Cipher, flags byte, fecEnc *netutil.FECEncoder) {
+func (t *Tunnel) sendToServerFEC(pkt []byte, srcIP, dstIP net.IP, cipher *crypto.Cipher, flags byte, fecEnc *netutil.FECEncoder, token *[16]byte) {
 	var packet []byte
 	if cipher != nil {
 		packet = buildEncryptedDataPacket(srcIP, dstIP, pkt, cipher, flags)
 	} else {
-		packet = buildDataPacket(srcIP, dstIP, pkt, flags)
+		packet = buildDataPacket(srcIP, dstIP, pkt, flags, token)
 	}
 	t.sendUDP(packet, t.serverAddr)
 	t.feedFEC(packet, t.serverAddr, fecEnc)

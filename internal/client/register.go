@@ -73,6 +73,12 @@ func (t *Tunnel) register(ctx context.Context) error {
 			}
 			t.conn.SetReadDeadline(time.Now().Add(deadline))
 			continue
+		case protocol.TypeECDHExchange:
+			if err := t.handleECDHExchange(msg.Payload); err != nil {
+				return err
+			}
+			t.conn.SetReadDeadline(time.Now().Add(deadline))
+			continue
 		case protocol.TypeKick:
 			kick, err := protocol.UnmarshalKick(msg.Payload)
 			if err != nil || kick == nil {
@@ -133,7 +139,17 @@ func (t *Tunnel) handleAssignIP(payload []byte) error {
 	// Initialize end-to-end encryption if password is set
 	var encCipher, decCipher, p2pCipher *crypto.Cipher
 	if t.roomPass != "" {
-		key := auth.DeriveKey(t.roomPass, t.roomID)
+		// Use ECDH session key if negotiated, otherwise fall back to password-derived key
+		var key []byte
+		t.mu.RLock()
+		if protocol.IsECDHNegotiated(assign.Version) && t.ecdhSessionKey != nil {
+			key = t.ecdhSessionKey
+		}
+		t.mu.RUnlock()
+
+		if key == nil {
+			key = auth.DeriveKey(t.roomPass, t.roomID)
+		}
 		if key == nil {
 			return fmt.Errorf("%s", i18n.T().ErrDeriveKeyFailed)
 		}
@@ -146,7 +162,11 @@ func (t *Tunnel) handleAssignIP(payload []byte) error {
 		if p2pCipher, err = crypto.NewCipher(key, crypto.DirClientToClient); err != nil {
 			return fmt.Errorf("init p2p cipher: %w", err)
 		}
-		log.Printf("[tunnel] encryption enabled (ChaCha20-Poly1305)")
+		if protocol.IsECDHNegotiated(assign.Version) {
+			log.Printf("[tunnel] encryption enabled (ChaCha20-Poly1305 + ECDH forward secrecy)")
+		} else {
+			log.Printf("[tunnel] encryption enabled (ChaCha20-Poly1305)")
+		}
 	}
 
 	// Cache subnet and serverIPKey for hot-path lookups
@@ -165,13 +185,16 @@ func (t *Tunnel) handleAssignIP(payload []byte) error {
 	t.virtualIP = assign.VirtualIP
 	t.serverIP = assign.ServerIP
 	t.subnetMask = net.IPMask(assign.SubnetMask)
-	t.serverVersion = assign.Version
+	t.serverVersion = protocol.ClearECDHFlag(assign.Version)
+	t.sessionToken = assign.SessionToken
 	t.cachedSubnet = cachedSubnet
 	t.serverIPKey = serverIPKey
 	t.cachedPunchPacket = cachedPunchPacket
 	t.encCipher = encCipher
 	t.decCipher = decCipher
 	t.p2pCipher = p2pCipher
+	// Clear ECDH session key after use (prevent reuse)
+	t.ecdhSessionKey = nil
 	// Clear stale peers from previous session — they will be repopulated
 	// by the next PeerInfo message from the server.
 	t.peers = make(map[[16]byte]*Peer)
@@ -221,6 +244,58 @@ func (t *Tunnel) handleAuthChallenge(payload []byte) error {
 	return nil
 }
 
+// handleECDHExchange processes the server's ephemeral X25519 public key.
+// Generates a client keypair, derives the shared secret, and sends ECDHConfirm.
+func (t *Tunnel) handleECDHExchange(payload []byte) error {
+	if t.roomPass == "" {
+		return fmt.Errorf("ECDH exchange without password")
+	}
+
+	ecdhPkt, err := protocol.UnmarshalECDHExchange(payload)
+	if err != nil {
+		return fmt.Errorf("parse ECDH exchange: %w", err)
+	}
+
+	// Generate client's ephemeral keypair
+	priv, clientPub, err := auth.GenerateECDHKeyPair()
+	if err != nil {
+		return fmt.Errorf("generate ECDH key: %w", err)
+	}
+
+	// Compute shared secret
+	shared, err := auth.ComputeECDHSharedSecret(priv, ecdhPkt.PublicKey[:])
+	if err != nil {
+		return fmt.Errorf("ECDH shared secret: %w", err)
+	}
+
+	// Derive session key
+	sessionKey := auth.DeriveSessionKey(shared, t.roomID)
+	if sessionKey == nil {
+		return fmt.Errorf("derive session key failed")
+	}
+
+	// Compute HMAC over both public keys using password-derived key
+	// (prevents MITM: attacker can't forge HMAC without password)
+	passwordKey := auth.DeriveKey(t.roomPass, t.roomID)
+	ecdhHMAC := auth.ComputeECDHMAC(passwordKey, ecdhPkt.PublicKey[:], clientPub)
+
+	// Send ECDHConfirm
+	confirm := &protocol.ECDHConfirmPayload{}
+	copy(confirm.PublicKey[:], clientPub)
+	copy(confirm.HMAC[:], ecdhHMAC)
+
+	packet := protocol.EncodeChecked(protocol.TypeECDHConfirm, confirm.Marshal())
+	t.writeUDP(t.conn, packet, t.serverAddr)
+
+	// Store session key for cipher creation in handleAssignIP
+	t.mu.Lock()
+	t.ecdhSessionKey = sessionKey
+	t.mu.Unlock()
+
+	log.Printf("[ecdh] session key negotiated")
+	return nil
+}
+
 // registerTCP performs registration over TCP transport.
 // Used when UDP is blocked (e.g. strict firewalls).
 // The protocol is identical to UDP registration but uses TCP framing.
@@ -265,6 +340,12 @@ func (t *Tunnel) registerTCP(ctx context.Context) error {
 			return t.handleAssignIP(msg.Payload)
 		case protocol.TypeAuthChallenge:
 			if err := t.handleAuthChallenge(msg.Payload); err != nil {
+				return err
+			}
+			timer.Reset(deadline)
+			continue
+		case protocol.TypeECDHExchange:
+			if err := t.handleECDHExchange(msg.Payload); err != nil {
 				return err
 			}
 			timer.Reset(deadline)

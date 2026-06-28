@@ -124,6 +124,7 @@ func (r *Room) handleRegister(payload []byte, from *net.UDPAddr) {
 
 	if existing := r.addrMap[fromKey]; existing != nil {
 		existing.SetLastSeen(time.Now())
+		existing.clientVersion = reg.Version
 		selfIP := existing.VirtualIP
 		r.mu.Unlock()
 		r.sendAssignIP(selfIP, from)
@@ -206,12 +207,14 @@ func (r *Room) doRegisterClient(reg *protocol.RegisterPayload, from *net.UDPAddr
 	r.markIPUsed(vip)
 
 	c := &Client{
-		Username:   reg.Username,
-		VirtualIP:  vip,
-		PublicAddr: from,
-		auth:       authNone,
-		authRoomID: reg.RoomID,
+		Username:      reg.Username,
+		VirtualIP:     vip,
+		PublicAddr:    from,
+		auth:          authNone,
+		authRoomID:    reg.RoomID,
+		clientVersion: reg.Version,
 	}
+	c.GenerateSessionToken()
 	c.SetLastSeen(time.Now())
 	r.clients[ipKey(vip)] = c
 	r.addrMap[addrToRateKey(from)] = c
@@ -237,12 +240,13 @@ func (r *Room) doSendAuthChallenge(reg *protocol.RegisterPayload, from *net.UDPA
 	}
 
 	c := &Client{
-		Username:    reg.Username,
-		PublicAddr:  from,
-		auth:        authChallengeSent,
-		challenge:   challenge,
-		challengeAt: time.Now(),
-		authRoomID:  reg.RoomID,
+		Username:      reg.Username,
+		PublicAddr:    from,
+		auth:          authChallengeSent,
+		challenge:     challenge,
+		challengeAt:   time.Now(),
+		authRoomID:    reg.RoomID,
+		clientVersion: reg.Version,
 	}
 	c.SetLastSeen(time.Now())
 	r.addrMap[addrToRateKey(from)] = c
@@ -250,7 +254,90 @@ func (r *Room) doSendAuthChallenge(reg *protocol.RegisterPayload, from *net.UDPA
 	return challenge, true
 }
 
-// ── Auth Response ──────────────────────────────────────────────
+// ── ECDH Key Exchange ─────────────────────────────────────────
+
+func (r *Room) handleECDHConfirm(payload []byte, from *net.UDPAddr) {
+	confirm, err := protocol.UnmarshalECDHConfirm(payload)
+	if err != nil {
+		return
+	}
+
+	t := i18n.T()
+	r.mu.Lock()
+	fromKey := addrToRateKey(from)
+	c := r.addrMap[fromKey]
+
+	if c == nil || !c.ecdhPending || c.ecdhPriv == nil {
+		r.mu.Unlock()
+		return
+	}
+
+	// Verify HMAC over both public keys (prevents MITM)
+	authKey, err := r.getAuthKey(c.authRoomID)
+	if err != nil || authKey == nil {
+		r.mu.Unlock()
+		r.sendKick(from, t.KickInternalError)
+		return
+	}
+
+	if !auth.VerifyECDHMAC(authKey, confirm.HMAC[:], c.ecdhPub, confirm.PublicKey[:]) {
+		r.mu.Unlock()
+		log.Printf("[ecdh] HMAC verification failed for %s", c.Username)
+		r.sendKickCode(from, protocol.KickCodeWrongPassword, t.KickWrongPassword)
+		return
+	}
+
+	// Compute shared secret
+	shared, err := auth.ComputeECDHSharedSecret(c.ecdhPriv, confirm.PublicKey[:])
+	if err != nil {
+		r.mu.Unlock()
+		log.Printf("[ecdh] shared secret computation failed: %v", err)
+		r.sendKick(from, t.KickInternalError)
+		return
+	}
+
+	// Derive session key
+	sessionKey := auth.DeriveSessionKey(shared, c.authRoomID)
+	if sessionKey == nil {
+		r.mu.Unlock()
+		r.sendKick(from, t.KickInternalError)
+		return
+	}
+
+	// Store session key for later use (will be used to create cipher)
+	// For now, clear ECDH state and proceed with registration
+	c.ecdhPriv = nil
+	c.ecdhPub = nil
+	c.ecdhPending = false
+
+	// Complete registration
+	reg := &protocol.RegisterPayload{RoomID: c.authRoomID, Username: c.Username, Version: c.clientVersion}
+	vip, ok := r.doRegisterClient(reg, from)
+	if !ok {
+		r.mu.Unlock()
+		r.sendKick(from, t.KickIPExhausted)
+		return
+	}
+
+	// Store session key in client for cipher creation
+	c.SessionKey = sessionKey
+	r.mu.Unlock()
+
+	// Send AssignIP with ECDH flag
+	assign := &protocol.AssignIPPayload{
+		VirtualIP:  vip,
+		SubnetMask: r.subnet.Mask,
+		ServerIP:   r.serverIP,
+		Version:    protocol.SetECDHFlag(protocol.AppVersion),
+	}
+	if c != nil {
+		assign.SessionToken = c.SessionToken
+	}
+	r.sendChecked(protocol.TypeAssignIP, assign.Marshal(), from)
+	r.sendPeerInfoToClient(from)
+	r.invalidatePeerInfoCache()
+	r.markDirty()
+}
 
 func (r *Room) handleAuthResponse(payload []byte, from *net.UDPAddr) {
 	resp, err := protocol.UnmarshalAuthResponse(payload)
@@ -341,7 +428,29 @@ func (r *Room) handleAuthResponse(payload []byte, from *net.UDPAddr) {
 		return
 	}
 
-	reg := &protocol.RegisterPayload{RoomID: resp.RoomID, Username: resp.Username}
+	// Initiate ECDH key exchange for forward secrecy (v1.7+ clients only).
+	// Old clients don't understand ECDHExchange, so skip for them.
+	if c.clientVersion >= 0x0107 {
+		priv, pub, err := auth.GenerateECDHKeyPair()
+		if err != nil {
+			log.Printf("[ecdh] failed to generate keypair: %v", err)
+			r.sendKick(from, t.KickInternalError)
+			return
+		}
+		c.ecdhPriv = priv
+		c.ecdhPub = pub
+		c.ecdhPending = true
+		r.addrMap[fromKey] = c
+		r.mu.Unlock()
+
+		ecdhPkt := &protocol.ECDHExchangePayload{}
+		copy(ecdhPkt.PublicKey[:], pub)
+		r.sendChecked(protocol.TypeECDHExchange, ecdhPkt.Marshal(), from)
+		return
+	}
+
+	// Old client (pre-v1.7): skip ECDH, register directly
+	reg := &protocol.RegisterPayload{RoomID: c.authRoomID, Username: c.Username, Version: c.clientVersion}
 	vip, ok := r.doRegisterClient(reg, from)
 	r.mu.Unlock()
 	if !ok {

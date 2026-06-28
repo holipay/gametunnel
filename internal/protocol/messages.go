@@ -62,10 +62,11 @@ func UnmarshalRegister(data []byte) (*RegisterPayload, error) {
 
 // AssignIPPayload is sent by the server to assign a virtual IP to a client.
 type AssignIPPayload struct {
-	VirtualIP  net.IP
-	SubnetMask net.IPMask
-	ServerIP   net.IP
-	Version    uint16 // server protocol version (0 = old server without version)
+	VirtualIP    net.IP
+	SubnetMask   net.IPMask
+	ServerIP     net.IP
+	Version      uint16 // server protocol version (0 = old server without version)
+	SessionToken [16]byte // v1.7+: random token for anti-spoofing (zero = no token)
 }
 
 func (a *AssignIPPayload) Marshal() []byte {
@@ -75,11 +76,13 @@ func (a *AssignIPPayload) Marshal() []byte {
 	if vip == nil || mask == nil || srv == nil {
 		return nil
 	}
-	buf := make([]byte, 14)
+	// Base: 14 bytes. v1.7+: append 16-byte SessionToken.
+	buf := make([]byte, 14+16)
 	copy(buf[0:4], vip)
 	copy(buf[4:8], mask)
 	copy(buf[8:12], srv)
 	binary.LittleEndian.PutUint16(buf[12:14], a.Version)
+	copy(buf[14:30], a.SessionToken[:])
 	return buf
 }
 
@@ -95,6 +98,10 @@ func UnmarshalAssignIP(data []byte) (*AssignIPPayload, error) {
 	// Version is appended at the end (backward compatible: old servers don't send it)
 	if len(data) >= 14 {
 		result.Version = binary.LittleEndian.Uint16(data[12:14])
+	}
+	// SessionToken is appended after Version (v1.7+: old clients ignore trailing bytes)
+	if len(data) >= 30 {
+		copy(result.SessionToken[:], data[14:30])
 	}
 	return result, nil
 }

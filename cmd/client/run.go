@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"syscall"
 
+	"github.com/holipay/gametunnel/internal/auth"
 	"github.com/holipay/gametunnel/internal/client"
 	"github.com/holipay/gametunnel/internal/i18n"
 )
@@ -38,6 +39,13 @@ func run(cfg *client.Config, tunFactory func(client.TunConfig) (client.TunDevice
 	defer cleanup()
 
 	fmt.Printf("GameTunnel Client %s (commit: %s, built: %s)\n", Version, Commit, BuildTime)
+
+	// Password strength warning
+	if _, warnings := auth.CheckPasswordStrength(cfg.RoomPassword); len(warnings) > 0 {
+		for _, w := range warnings {
+			fmt.Printf("[auth] %s\n", w)
+		}
+	}
 
 	if cfg.ServerAddr == "" {
 		fmt.Println("No server configured. Edit config.ini and set server=address:port")

@@ -1,6 +1,8 @@
 package server
 
 import (
+	"crypto/ecdh"
+	"crypto/rand"
 	"net"
 	"sync/atomic"
 	"time"
@@ -29,6 +31,10 @@ type Client struct {
 	lastSeen   atomic.Int64 // unix nano, use GetLastSeen/SetLastSeen
 	RTT        time.Duration // latest round-trip latency
 
+	// Session token (v1.7+): 16-byte random token for anti-spoofing.
+	// Clients with version >= 0x0107 include this in relay packets.
+	SessionToken [16]byte
+
 	// Ping quality stats (ring buffer of recent RTTs, 0 = missed)
 	pingHistory  [pingHistorySize]time.Duration
 	pingIdx      int       // next write position in pingHistory
@@ -41,6 +47,19 @@ type Client struct {
 	challenge   []byte    // 16-byte nonce
 	challengeAt time.Time // for expiry
 	authRoomID  string    // room ID from register request (for key derivation)
+
+	// Client version from Register (0 = old client without version)
+	clientVersion uint16
+
+	// ECDH state (forward secrecy): ephemeral keypair for session key negotiation.
+	// Populated after HMAC auth success, used during ECDH handshake.
+	ecdhPriv    *ecdh.PrivateKey // server's ephemeral private key
+	ecdhPub     []byte           // server's ephemeral public key (32 bytes)
+	ecdhPending bool             // true if waiting for client's ECDHConfirm
+
+	// Session key derived from ECDH shared secret (nil if ECDH not used).
+	// Used to create encryption ciphers for this client's session.
+	SessionKey []byte
 }
 
 func (c *Client) GetLastSeen() time.Time {
@@ -49,6 +68,21 @@ func (c *Client) GetLastSeen() time.Time {
 
 func (c *Client) SetLastSeen(t time.Time) {
 	c.lastSeen.Store(t.UnixNano())
+}
+
+// GenerateSessionToken fills the client's SessionToken with 16 random bytes.
+func (c *Client) GenerateSessionToken() {
+	rand.Read(c.SessionToken[:])
+}
+
+// HasSessionToken returns true if the client has a non-zero session token.
+func (c *Client) HasSessionToken() bool {
+	return c.SessionToken != [16]byte{}
+}
+
+// ValidateSessionToken checks if the given token matches the client's stored token.
+func (c *Client) ValidateSessionToken(token []byte) bool {
+	return len(token) == 16 && c.SessionToken == [16]byte(token)
 }
 
 // PingStats returns loss rate (0.0-1.0) and jitter from recent ping history.
