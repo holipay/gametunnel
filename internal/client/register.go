@@ -130,22 +130,20 @@ func (t *Tunnel) handleAssignIP(payload []byte) error {
 	// Initialize end-to-end encryption if password is set
 	var encCipher, decCipher, p2pCipher *crypto.Cipher
 	if t.roomPass != "" {
-		key, err := auth.DeriveKey(t.roomPass, t.roomID)
-		if err != nil {
-			return fmt.Errorf("derive key: %w", err)
+		key := auth.DeriveKey(t.roomPass, t.roomID)
+		if key == nil {
+			return fmt.Errorf("%s", i18n.T().ErrDeriveKeyFailed)
 		}
-		if key != nil {
-			if encCipher, err = crypto.NewCipher(key, crypto.DirClientToServer); err != nil {
-				return fmt.Errorf("init encrypt cipher: %w", err)
-			}
-			if decCipher, err = crypto.NewCipher(key, crypto.DirServerToClient); err != nil {
-				return fmt.Errorf("init decrypt cipher: %w", err)
-			}
-			if p2pCipher, err = crypto.NewCipher(key, crypto.DirClientToClient); err != nil {
-				return fmt.Errorf("init p2p cipher: %w", err)
-			}
-			log.Printf("[tunnel] encryption enabled (ChaCha20-Poly1305)")
+		if encCipher, err = crypto.NewCipher(key, crypto.DirClientToServer); err != nil {
+			return fmt.Errorf("init encrypt cipher: %w", err)
 		}
+		if decCipher, err = crypto.NewCipher(key, crypto.DirServerToClient); err != nil {
+			return fmt.Errorf("init decrypt cipher: %w", err)
+		}
+		if p2pCipher, err = crypto.NewCipher(key, crypto.DirClientToClient); err != nil {
+			return fmt.Errorf("init p2p cipher: %w", err)
+		}
+		log.Printf("[tunnel] encryption enabled (ChaCha20-Poly1305)")
 	}
 
 	// Cache subnet and serverIPKey for hot-path lookups
@@ -190,10 +188,7 @@ func (t *Tunnel) handleAuthChallenge(payload []byte) error {
 		return fmt.Errorf("%s", i18n.Format(i18n.T().ErrParseAuthFailed, err))
 	}
 
-	key, err := auth.DeriveKey(t.roomPass, t.roomID)
-	if err != nil {
-		return fmt.Errorf("derive key: %w", err)
-	}
+	key := auth.DeriveKey(t.roomPass, t.roomID)
 	if key == nil {
 		return fmt.Errorf("%s", i18n.T().ErrDeriveKeyFailed)
 	}

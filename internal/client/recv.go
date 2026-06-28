@@ -271,7 +271,7 @@ func (t *Tunnel) handleFECPacket(data []byte) {
 		return
 	}
 
-	recovered := fecDec.processParityPacket(groupID, groupSize, parity)
+	recovered := fecDec.ProcessParityPacket(groupID, groupSize, parity)
 	for _, pkt := range recovered {
 		if len(pkt) >= 20 {
 			// Write recovered packet to TUN

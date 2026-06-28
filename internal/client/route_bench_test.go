@@ -13,7 +13,7 @@ func BenchmarkBuildDataPacket(b *testing.B) {
 	data := make([]byte, 600)
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		buildDataPacket(srcIP, dstIP, data)
+		buildDataPacket(srcIP, dstIP, data, 0)
 	}
 }
 
@@ -25,7 +25,7 @@ func BenchmarkBuildEncryptedDataPacket(b *testing.B) {
 	cipher, _ := crypto.NewCipher(key, crypto.DirClientToServer)
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		buildEncryptedDataPacket(srcIP, dstIP, data, cipher)
+		buildEncryptedDataPacket(srcIP, dstIP, data, cipher, 0)
 	}
 }
 
@@ -38,7 +38,7 @@ func BenchmarkEncryptThenBuild(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		encrypted := cipher.Encrypt(data)
-		buildDataPacket(srcIP, dstIP, encrypted)
+		buildDataPacket(srcIP, dstIP, encrypted, 0)
 	}
 }
 
