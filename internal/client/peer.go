@@ -58,7 +58,7 @@ func (t *Tunnel) cleanStalePeers() {
 	var stalePeers []*Peer
 	for key, peer := range t.peers {
 		lastSeen := peer.lastSeen.Load()
-		if lastSeen != nil && now.Sub(*lastSeen) > stalePeerGracePeriod {
+		if lastSeen != 0 && now.UnixNano()-lastSeen > int64(stalePeerGracePeriod) {
 			staleKeys = append(staleKeys, key)
 			stalePeers = append(stalePeers, peer)
 		}

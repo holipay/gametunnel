@@ -43,16 +43,12 @@ func buildDataPacket(srcIP, dstIP net.IP, data []byte, flags byte, token *[16]by
 
 // buildEncryptedDataPacket encrypts pkt and wraps it in a data packet:
 // header(2) + srcIP(4) + dstIP(4) + flags(1) + encrypted.
+// The flags byte is kept in cleartext so that UnmarshalDataPooled can
+// correctly parse it — the encrypted blob (EncVersion + nonce + AEAD)
+// follows after offset 9 and IsEncrypted reads the EncVersion prefix.
 func buildEncryptedDataPacket(srcIP, dstIP net.IP, pkt []byte, cipher *crypto.Cipher, flags byte) []byte {
-	// Include flags byte in the plaintext to be encrypted.
-	// Use stack buffer for typical game packets (≤1500 bytes) to avoid heap allocation.
-	var stackBuf [1501]byte
-	plaintext := stackBuf[:1+len(pkt)]
-	plaintext[0] = flags
-	copy(plaintext[1:], pkt)
-
-	encMax := crypto.Overhead + len(plaintext)
-	size := protocol.HeaderLen + 8 + encMax
+	encMax := crypto.Overhead + len(pkt)
+	size := protocol.HeaderLen + 9 + encMax
 	dst := make([]byte, size)
 
 	off := 0
@@ -62,9 +58,11 @@ func buildEncryptedDataPacket(srcIP, dstIP net.IP, pkt []byte, cipher *crypto.Ci
 	copy(dst[off:off+4], srcIP.To4())
 	copy(dst[off+4:off+8], dstIP.To4())
 	off += 8
+	dst[off] = flags
+	off++
 
 	dst = dst[:off]
-	dst = cipher.EncryptTo(dst, plaintext)
+	dst = cipher.EncryptTo(dst, pkt)
 	return dst[:len(dst)]
 }
 

@@ -55,7 +55,7 @@ type Peer struct {
 	PublicAddr    *net.UDPAddr
 	Username      string
 	DirectReach   atomic.Bool               // true if P2P direct path has been confirmed
-	lastSeen      atomic.Pointer[time.Time] // last time server reported this peer
+	lastSeen      atomic.Int64 // last time server reported this peer (UnixNano)
 	lastPunchBack atomic.Pointer[time.Time] // rate limit for hole punch responses
 }
 
@@ -236,12 +236,18 @@ func (t *Tunnel) Connect(ctx context.Context, serverAddr string, mtu int, newTUN
 		t.runCancel()
 	}
 	if t.runDone != nil {
+		timer := time.NewTimer(5 * time.Second)
 		select {
 		case <-t.runDone:
-		case <-time.After(5 * time.Second):
+			timer.Stop()
+		case <-timer.C:
 			log.Printf("[tunnel] old goroutines did not exit within 5s, proceeding anyway")
 		}
 	}
+
+	// Close old FEC decoder goroutine before creating a new one
+	t.fecDecoder.Close()
+	t.fecDecoder = netutil.NewFECDecoder(0)
 
 	// Close old conn to release the file descriptor and unblock
 	// the old receiveFromServer goroutine before creating a new one.

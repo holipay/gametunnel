@@ -353,7 +353,7 @@ func (t *Tunnel) handlePeerInfo(ctx context.Context, payload []byte) {
 			}
 			existing.PublicAddr = pubAddr
 			existing.Username = entry.Username
-			existing.lastSeen.Store(&now)
+			existing.lastSeen.Store(now.UnixNano())
 			t.peers[key] = existing
 		} else {
 			p := &Peer{
@@ -361,7 +361,7 @@ func (t *Tunnel) handlePeerInfo(ctx context.Context, payload []byte) {
 				PublicAddr: pubAddr,
 				Username:   entry.Username,
 			}
-			p.lastSeen.Store(&now)
+			p.lastSeen.Store(now.UnixNano())
 			t.peers[key] = p
 			log.Printf(i18n.T().LogNewPeer, entry.Username, entry.VirtualIP)
 			newPeerIPs = append(newPeerIPs, entry.VirtualIP)

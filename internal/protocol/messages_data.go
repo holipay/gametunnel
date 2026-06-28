@@ -90,13 +90,14 @@ func UnmarshalData(data []byte) (*DataPayload, error) {
 		SrcIP: net.IP(append([]byte(nil), data[0:4]...)),
 		DstIP: net.IP(append([]byte(nil), data[4:8]...)),
 	}
-	// Backward compatibility: detect old format (8+N) vs new format (9+N).
-	// Old packets: byte[8] is the first byte of an IPv4 packet → 0x45-0x4F.
-	// New packets: byte[8] is flags → 0x00 or 0x01.
 	if len(data) > 8 && isNewFormat(data[8]) {
 		dp.Flags = data[8]
-		pktData := make([]byte, len(data)-9)
-		copy(pktData, data[9:])
+		offset := 9
+		if dp.Flags&DataFlagHasToken != 0 {
+			offset += 16
+		}
+		pktData := make([]byte, len(data)-offset)
+		copy(pktData, data[offset:])
 		dp.Data = pktData
 	} else {
 		pktData := make([]byte, len(data)-8)
@@ -116,7 +117,11 @@ func UnmarshalDataPooled(data []byte) (*DataPayload, error) {
 	dp.DstIP = append(dp.DstIP[:0], data[4:8]...)
 	if len(data) > 8 && isNewFormat(data[8]) {
 		dp.Flags = data[8]
-		dp.Data = append(dp.Data[:0], data[9:]...)
+		offset := 9
+		if dp.Flags&DataFlagHasToken != 0 {
+			offset += 16
+		}
+		dp.Data = append(dp.Data[:0], data[offset:]...)
 	} else {
 		dp.Flags = 0
 		dp.Data = append(dp.Data[:0], data[8:]...)

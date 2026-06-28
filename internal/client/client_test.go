@@ -1011,7 +1011,7 @@ func TestCleanStalePeers(t *testing.T) {
 		PublicAddr: &net.UDPAddr{IP: net.IPv4(1, 2, 3, 4), Port: 12345},
 		Username:   "stale",
 	}
-	peer.lastSeen.Store(&oldTime)
+	peer.lastSeen.Store(oldTime.UnixNano())
 
 	tunnel.mu.Lock()
 	tunnel.peers[ipKey(peerIP)] = peer
@@ -1038,7 +1038,7 @@ func TestCleanStalePeers_KeepsRecent(t *testing.T) {
 		PublicAddr: &net.UDPAddr{IP: net.IPv4(1, 2, 3, 4), Port: 12345},
 		Username:   "recent",
 	}
-	peer.lastSeen.Store(&recentTime)
+	peer.lastSeen.Store(recentTime.UnixNano())
 
 	tunnel.mu.Lock()
 	tunnel.peers[ipKey(peerIP)] = peer
