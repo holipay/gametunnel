@@ -12,7 +12,6 @@ import (
 	"errors"
 	"fmt"
 	"hash/crc32"
-	"sync"
 )
 
 // Protocol version. Bump on breaking wire-format changes.
@@ -129,16 +128,19 @@ func DecodeChecked(data []byte) (*Message, error) {
 	return Decode(body)
 }
 
-// DecodeLenient tries DecodeChecked first. If the CRC32 check fails,
-// it falls back to Decode (skipping checksum verification). This supports
-// encrypted packets that omit CRC32 since ChaCha20-Poly1305 AEAD already
-// provides integrity. Old packets with CRC32 still work transparently.
-func DecodeLenient(data []byte) (*Message, error) {
+// DecodeLenient tries DecodeChecked first. If allowCRCFallback is true
+// and the CRC32 check fails, it falls back to Decode (skipping checksum
+// verification). This supports encrypted packets that omit CRC32 since
+// ChaCha20-Poly1305 AEAD already provides integrity. Old packets with
+// CRC32 still work transparently.
+//
+// For unencrypted rooms, pass allowCRCFallback=false to reject corrupted packets.
+func DecodeLenient(data []byte, allowCRCFallback bool) (*Message, error) {
 	msg, err := DecodeChecked(data)
 	if err == nil {
 		return msg, nil
 	}
-	if errors.Is(err, ErrChecksumMismatch) {
+	if allowCRCFallback && errors.Is(err, ErrChecksumMismatch) {
 		return Decode(data)
 	}
 	return nil, err
@@ -158,61 +160,6 @@ func EncodeChecked(typ byte, payload []byte) []byte {
 	buf = append(buf, payload...)
 	crc := crc32.ChecksumIEEE(buf)
 	return binary.LittleEndian.AppendUint32(buf, crc)
-}
-
-// encodeBufPool reuses buffers for common packet sizes to reduce GC pressure.
-// The pool is indexed by capacity class: 256, 1024, 4096, 15000.
-var encodeBufPool = [4]*sync.Pool{
-	{New: func() interface{} { b := make([]byte, 0, 256); return &b }},
-	{New: func() interface{} { b := make([]byte, 0, 1024); return &b }},
-	{New: func() interface{} { b := make([]byte, 0, 4096); return &b }},
-	{New: func() interface{} { b := make([]byte, 0, 15000); return &b }},
-}
-
-func poolIndex(size int) int {
-	switch {
-	case size <= 256:
-		return 0
-	case size <= 1024:
-		return 1
-	case size <= 4096:
-		return 2
-	default:
-		return 3
-	}
-}
-
-// EncodeCheckedPooled encodes a packet using a pooled buffer.
-// The returned buffer MUST be released via PutEncodeBuf when done.
-// This avoids per-packet allocation on the hot relay path.
-func EncodeCheckedPooled(typ byte, payload []byte) []byte {
-	needed := HeaderLen + len(payload) + ChecksumLen
-	idx := poolIndex(needed)
-	bp := encodeBufPool[idx].Get().(*[]byte)
-	buf := (*bp)[:0]
-	buf = append(buf, ProtocolVersion, typ)
-	buf = append(buf, payload...)
-	crc := crc32.ChecksumIEEE(buf)
-	return binary.LittleEndian.AppendUint32(buf, crc)
-}
-
-// PutEncodeBuf returns a pooled buffer. The buf must have been obtained
-// from EncodeCheckedPooled. No-op if buf is nil or too small for any pool.
-func PutEncodeBuf(buf []byte) {
-	if buf == nil {
-		return
-	}
-	c := cap(buf)
-	switch {
-	case c <= 256:
-		encodeBufPool[0].Put(&buf)
-	case c <= 1024:
-		encodeBufPool[1].Put(&buf)
-	case c <= 4096:
-		encodeBufPool[2].Put(&buf)
-	case c <= 15000:
-		encodeBufPool[3].Put(&buf)
-	}
 }
 
 // AppendEncodeChecked encodes a packet into dst (appending), avoiding allocation.

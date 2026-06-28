@@ -4,16 +4,25 @@ package main
 
 import (
 	"fmt"
+	"log"
 	"os"
 	"runtime/debug"
 
 	"github.com/holipay/gametunnel/internal/client"
 	"github.com/holipay/gametunnel/internal/i18n"
+	"github.com/holipay/gametunnel/internal/singleinstance"
 	"github.com/holipay/gametunnel/internal/tun"
 )
 
 func main() {
 	defer writeCrashLog()
+
+	// Prevent multiple instances
+	if _, err := singleinstance.Acquire("GameTunnel-Client"); err != nil {
+		log.Printf("single instance check: %v", err)
+		fmt.Println("GameTunnel is already running.")
+		os.Exit(0)
+	}
 
 	cfg := client.LoadConfig()
 

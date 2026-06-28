@@ -97,7 +97,7 @@ func (t *Tunnel) routePacket(pkt []byte, srcIP, dstIP net.IP) {
 	}
 
 	// Broadcast/multicast: relay to all peers via server
-	if cachedSubnet != nil && protocol.IsRelayTarget(dstIP, cachedSubnet) {
+	if cachedSubnet != nil && netutil.IsRelayTarget(dstIP, cachedSubnet) {
 		t.sendToServerFEC(sendData, srcIP, dstIP, encCipher, flags, fecEnc)
 		return
 	}

@@ -11,7 +11,7 @@ func TestSendQueue_PriorityOrder(t *testing.T) {
 	conn, _ := net.ListenUDP("udp", &net.UDPAddr{})
 	defer conn.Close()
 
-	sq := newSendQueue(conn, 10)
+	sq := newSendQueue(conn, 10, nil)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -36,7 +36,7 @@ func TestSendQueue_LowPriorityDroppedWhenFull(t *testing.T) {
 	conn, _ := net.ListenUDP("udp", &net.UDPAddr{})
 	defer conn.Close()
 
-	sq := newSendQueue(conn, 2) // very small queue
+	sq := newSendQueue(conn, 2, nil) // very small queue
 	addr := &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 9999}
 
 	// Fill queue
@@ -53,7 +53,7 @@ func TestSendQueue_HighPriorityWaitsForSpace(t *testing.T) {
 	conn, _ := net.ListenUDP("udp", &net.UDPAddr{})
 	defer conn.Close()
 
-	sq := newSendQueue(conn, 1) // very small queue
+	sq := newSendQueue(conn, 1, nil) // very small queue
 
 	// Don't start run loop - we want to test queue behavior directly
 	addr := &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 9999}
@@ -83,7 +83,7 @@ func TestSendQueue_DrainOnContextCancel(t *testing.T) {
 	conn, _ := net.ListenUDP("udp", &net.UDPAddr{})
 	defer conn.Close()
 
-	sq := newSendQueue(conn, 10)
+	sq := newSendQueue(conn, 10, nil)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -107,7 +107,7 @@ func TestRateLimitedQueue_ControlBypassesBandwidthLimit(t *testing.T) {
 	defer conn.Close()
 
 	limiter := NewBandwidthLimiter(1) // 1 byte/sec = very restrictive
-	rlq := newRateLimitedQueue(conn, limiter)
+	rlq := newRateLimitedQueue(conn, limiter, nil)
 
 	addr := &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 9999}
 
@@ -135,7 +135,7 @@ func TestRoomSendQueue_PriorityInheritance(t *testing.T) {
 	conn, _ := net.ListenUDP("udp", &net.UDPAddr{})
 	defer conn.Close()
 	r.conn = conn
-	r.sendQueue = newRateLimitedQueue(conn, nil)
+	r.sendQueue = newRateLimitedQueue(conn, nil, nil)
 	close(r.done)
 
 	addr := &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 9999}

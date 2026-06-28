@@ -1,0 +1,61 @@
+package client
+
+import (
+	"context"
+	"net"
+	"time"
+)
+
+// p2pKeepaliveInterval is how often we send a keepalive packet to peers
+// with confirmed DirectReach. Keeps NAT mappings alive so the P2P path
+// doesn't silently expire and fall back to relay.
+const p2pKeepaliveInterval = 15 * time.Second
+
+// p2pKeepaliveLoop sends periodic keepalive packets to peers with confirmed
+// DirectReach to prevent NAT mappings from expiring. Without this, UDP NAT
+// entries typically expire in 30-120 seconds, causing P2P paths to silently
+// fail and fall back to server relay.
+//
+// Uses the existing hole punch packet — the peer's rate limiter (5s backoff)
+// prevents amplification, so the extra traffic is minimal (~4 packets/min/peer).
+func (t *Tunnel) p2pKeepaliveLoop(ctx context.Context) {
+	ticker := time.NewTicker(p2pKeepaliveInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			t.sendP2PKeepalives()
+		}
+	}
+}
+
+// sendP2PKeepalives sends a keepalive to each peer with DirectReach=true.
+func (t *Tunnel) sendP2PKeepalives() {
+	t.mu.RLock()
+	type peerAddr struct {
+		addr *net.UDPAddr
+	}
+	var addrs []peerAddr
+	for _, peer := range t.peers {
+		if peer.DirectReach.Load() && peer.PublicAddr != nil {
+			addrs = append(addrs, peerAddr{addr: peer.PublicAddr})
+		}
+	}
+	t.mu.RUnlock()
+
+	if len(addrs) == 0 {
+		return
+	}
+
+	// Reuse cached hole punch packet — built once in handleAssignIP.
+	t.mu.RLock()
+	packet := t.cachedPunchPacket
+	t.mu.RUnlock()
+
+	for _, pa := range addrs {
+		t.sendCtrl(packet, pa.addr)
+	}
+}

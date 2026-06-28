@@ -7,7 +7,6 @@ package server
 
 import (
 	"context"
-	"crypto/hmac"
 	"errors"
 	"fmt"
 	"log"
@@ -16,146 +15,10 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/holipay/gametunnel/internal/auth"
 	"github.com/holipay/gametunnel/internal/netutil"
 	"github.com/holipay/gametunnel/internal/protocol"
 	"github.com/holipay/gametunnel/internal/i18n"
 )
-
-// pktPools is a set of graded byte buffer pools for incoming packets.
-// Size classes: 512B (most game packets), 2KB, 16KB, 65535B (max UDP).
-// This reduces memory waste: a 100-byte game packet no longer consumes a
-// 65535-byte buffer.
-var pktPools = [4]*sync.Pool{
-	{New: func() interface{} { b := make([]byte, 512); return &b }},
-	{New: func() interface{} { b := make([]byte, 2048); return &b }},
-	{New: func() interface{} { b := make([]byte, 16384); return &b }},
-	{New: func() interface{} { b := make([]byte, 65535); return &b }},
-}
-
-func pktPoolGet(n int) []byte {
-	var idx int
-	switch {
-	case n <= 512:
-		idx = 0
-	case n <= 2048:
-		idx = 1
-	case n <= 16384:
-		idx = 2
-	default:
-		idx = 3
-	}
-	bp := pktPools[idx].Get().(*[]byte)
-	return (*bp)[:cap(*bp)]
-}
-
-func pktPoolPut(buf []byte) {
-	if buf == nil {
-		return
-	}
-	c := cap(buf)
-	switch c {
-	case 512:
-		pktPools[0].Put(&buf)
-	case 2048:
-		pktPools[1].Put(&buf)
-	case 16384:
-		pktPools[2].Put(&buf)
-	case 65535:
-		pktPools[3].Put(&buf)
-	}
-}
-
-// ── Auth State ─────────────────────────────────────────────────
-
-type authState int
-
-const (
-	authNone          authState = iota // no password required, or already authenticated
-	authChallengeSent                  // challenge sent, waiting for response
-)
-
-// ── Client State ───────────────────────────────────────────────
-
-// pingHistorySize is the number of recent ping results kept per client
-// for loss rate and jitter calculation.
-const pingHistorySize = 12
-
-// Client represents a connected player.
-type Client struct {
-	Username   string
-	VirtualIP  net.IP
-	PublicAddr *net.UDPAddr
-	lastSeen   atomic.Int64 // unix nano, use GetLastSeen/SetLastSeen
-	RTT        time.Duration // latest round-trip latency
-
-	// Ping quality stats (ring buffer of recent RTTs, 0 = missed)
-	pingHistory  [pingHistorySize]time.Duration
-	pingIdx      int       // next write position in pingHistory
-	pingSeq      uint32    // monotonic ping sequence (for timeout detection)
-	lastPingSent time.Time // when the last ping was sent
-	lastPingSeq  uint32    // sequence of the last ping sent
-
-	// Auth state (only used when server has a room password)
-	auth        authState
-	challenge   []byte    // 16-byte nonce
-	challengeAt time.Time // for expiry
-	authRoomID  string    // room ID from register request (for key derivation)
-}
-
-func (c *Client) GetLastSeen() time.Time {
-	return time.Unix(0, c.lastSeen.Load())
-}
-
-func (c *Client) SetLastSeen(t time.Time) {
-	c.lastSeen.Store(t.UnixNano())
-}
-
-// PingStats returns loss rate (0.0-1.0) and jitter from recent ping history.
-func (c *Client) PingStats() (lossRate float64, jitter time.Duration) {
-	total := c.pingIdx
-	if total == 0 {
-		return 0, 0
-	}
-	n := total
-	if n > pingHistorySize {
-		n = pingHistorySize
-	}
-
-	var received int
-	var prevRTT time.Duration
-	var jitterSum time.Duration
-	var jitterCount int
-
-	// Read from the ring buffer in chronological order: oldest entry first.
-	// When pingIdx >= pingHistorySize, the oldest entry is at pingIdx % pingHistorySize.
-	start := 0
-	if total > pingHistorySize {
-		start = total % pingHistorySize
-	}
-	for i := 0; i < n; i++ {
-		rtt := c.pingHistory[(start+i)%pingHistorySize]
-		if rtt == 0 {
-			continue // missed
-		}
-		received++
-		if prevRTT > 0 {
-			diff := rtt - prevRTT
-			if diff < 0 {
-				diff = -diff
-			}
-			jitterSum += diff
-			jitterCount++
-		}
-		prevRTT = rtt
-	}
-
-	lossRate = 1.0 - float64(received)/float64(n)
-	if jitterCount > 0 {
-		jitter = jitterSum / time.Duration(jitterCount)
-	}
-	return
-}
 
 // ipKey converts an IP address to a [16]byte map key.
 // Delegates to netutil.IPKey for shared implementation.
@@ -215,6 +78,10 @@ type Server struct {
 
 	// TCP fallback listener for clients behind strict firewalls
 	tcpListener *netutil.TCPListener // nil when TCP is disabled
+
+	// TCP bridge routing
+	tcpPortCounter atomic.Uint32    // unique port assignment for TCP clients
+	tcpBridges     sync.Map         // rateKey → *UDPTCPBridge
 }
 
 // pktJob represents a packet to be processed by the worker pool.
@@ -282,7 +149,7 @@ func New(cfg Config) (*Server, error) {
 	}
 
 	// Tune UDP socket buffers (ignoring error on non-Linux platforms)
-	if err := setSocketBuffers(conn); err != nil {
+	if err := netutil.SetSocketBuffers(conn); err != nil {
 		log.Printf("[server] set socket buffers: %v (using OS defaults)", err)
 	}
 
@@ -295,7 +162,6 @@ func New(cfg Config) (*Server, error) {
 
 	s := &Server{
 		conn:        conn,
-		sendQueue:   newRateLimitedQueue(conn, bwLimiter),
 		statusAddr:  cfg.StatusAddr,
 		statusToken: cfg.StatusToken,
 		version:     cfg.Version,
@@ -304,6 +170,7 @@ func New(cfg Config) (*Server, error) {
 		workers:     workers,
 		pktCh:       make(chan pktJob, chanBuf),
 		rateShards:  newRateShardsArray(),
+		rateTick:    time.NewTicker(rateInterval),
 		metricsTS:   NewMetricsTimeSeries(),
 		rooms:       make(map[string]*Room),
 		addrToRoom:  make(map[rateKey]*Room),
@@ -311,6 +178,21 @@ func New(cfg Config) (*Server, error) {
 		stateDir:    cfg.StateDir,
 		bwLimiter:   bwLimiter,
 	}
+
+	// Wire TCP bridge routing into the send queue (must happen after s is
+	// created so the closure can reference s.tcpBridges).
+	tcpWrite := func(addr *net.UDPAddr, data []byte) bool {
+		key := addrToRateKey(addr)
+		if b, ok := s.tcpBridges.Load(key); ok {
+			bridge := b.(*netutil.UDPTCPBridge)
+			if err := bridge.Send(data); err != nil {
+				log.Printf("[server] tcp bridge send error: %v", err)
+			}
+			return true
+		}
+		return false
+	}
+	s.sendQueue = newRateLimitedQueue(conn, bwLimiter, tcpWrite)
 
 	// Create default room for single-room mode
 	if !cfg.MultiRoom {
@@ -429,6 +311,15 @@ func (s *Server) Close() error {
 		room.Stop()
 	}
 	s.roomMu.RUnlock()
+
+	// Stop rate limiter ticker
+	s.rateTick.Stop()
+
+	// Close TCP fallback listener (if enabled)
+	if s.tcpListener != nil {
+		s.tcpListener.Close()
+	}
+
 	return s.conn.Close()
 }
 
@@ -452,9 +343,20 @@ func (s *Server) worker(ctx context.Context) {
 func (s *Server) handlePacket(data []byte, from *net.UDPAddr) {
 	// Fast path: encrypted packets have no CRC32 — skip the wasted
 	// CRC compute by decoding directly. AEAD provides integrity.
+	// Pre-auth packets (Register, NATProbe, AuthResponse, Rebind) are
+	// always unencrypted — verify their CRC before processing.
 	if s.defaultRoom != nil && s.defaultRoom.roomPass != "" {
 		msg, _ := protocol.DecodeSkipCRC(data)
 		if msg != nil {
+			// Pre-auth packet types are always unencrypted — verify CRC
+			if msg.Type == protocol.TypeRegister ||
+				msg.Type == protocol.TypeNATProbe ||
+				msg.Type == protocol.TypeAuthResponse ||
+				msg.Type == protocol.TypeRebind {
+				if _, err := protocol.VerifyChecksum(data); err != nil {
+					return
+				}
+			}
 			// NAT probes are unencrypted (sent pre-registration) — handle directly
 			if msg.Type == protocol.TypeNATProbe {
 				s.handleNATProbe(msg.Payload, from)
@@ -474,7 +376,8 @@ func (s *Server) handlePacket(data []byte, from *net.UDPAddr) {
 		}
 	}
 
-	msg, err := protocol.DecodeLenient(data)
+	encrypted := s.defaultRoom != nil && s.defaultRoom.roomPass != ""
+	msg, err := protocol.DecodeLenient(data, encrypted)
 	if err != nil {
 		if errors.Is(err, protocol.ErrUnsupportedVersion) {
 			s.sendKickCode(from, protocol.KickCodeVersionMismatch, fmt.Sprintf(
@@ -596,95 +499,6 @@ func (s *Server) handleRegisterMultiRoom(payload []byte, from *net.UDPAddr) {
 	}
 }
 
-// allocateSubnet finds an unused /24 subnet for a new room.
-// Uses 10.10.{room_index}.0/24 starting from 10.10.2.0.
-// Skips subnets that overlap with any local network interface.
-func (s *Server) allocateSubnet() *net.IPNet {
-	// Derive room subnets from the base subnet prefix.
-	// e.g. server -subnet 192.168.1.0/24 → rooms get 192.168.2.0/24, 192.168.3.0/24, ...
-	var baseIP net.IP
-	if s.defaultRoom != nil {
-		baseIP = s.defaultRoom.subnet.IP.To4()
-	} else if s.baseSubnet != nil {
-		baseIP = s.baseSubnet.IP.To4()
-	}
-	if baseIP == nil {
-		return nil
-	}
-
-	// Collect local interface subnets to avoid conflicts
-	localSubnets := s.getLocalSubnets()
-
-	// Find the highest used 3rd octet
-	maxIdx := int(baseIP[2])
-	if maxIdx < 1 {
-		maxIdx = 1
-	}
-	for _, room := range s.rooms {
-		octet := int(room.subnet.IP.To4()[2])
-		if octet > maxIdx {
-			maxIdx = octet
-		}
-	}
-
-	// Scan for the next available subnet, skipping those that overlap
-	// with local interfaces or already-used room subnets.
-	for nextIdx := maxIdx + 1; nextIdx <= 254; nextIdx++ {
-		candidate := &net.IPNet{
-			IP:   net.IPv4(baseIP[0], baseIP[1], byte(nextIdx), 0),
-			Mask: net.CIDRMask(24, 32),
-		}
-		if s.subnetOverlapsAny(candidate, localSubnets) {
-			continue
-		}
-		return candidate
-	}
-	return nil // no more subnets
-}
-
-// getLocalSubnets returns all /24+ subnets assigned to local network interfaces.
-func (s *Server) getLocalSubnets() []*net.IPNet {
-	ifaces, err := net.Interfaces()
-	if err != nil {
-		return nil
-	}
-	var subnets []*net.IPNet
-	for _, iface := range ifaces {
-		if iface.Flags&net.FlagUp == 0 || iface.Flags&net.FlagLoopback != 0 {
-			continue
-		}
-		addrs, err := iface.Addrs()
-		if err != nil {
-			continue
-		}
-		for _, addr := range addrs {
-			ipNet, ok := addr.(*net.IPNet)
-			if !ok {
-				continue
-			}
-			ones, bits := ipNet.Mask.Size()
-			if bits == 32 && ones >= 24 {
-				subnets = append(subnets, ipNet)
-			}
-		}
-	}
-	return subnets
-}
-
-// subnetOverlapsAny checks if candidate overlaps with any subnet in the list.
-func (s *Server) subnetOverlapsAny(candidate *net.IPNet, others []*net.IPNet) bool {
-	for _, other := range others {
-		if candidate.IP.Equal(other.IP) {
-			return true
-		}
-		// Check if either network contains the other's IP
-		if candidate.Contains(other.IP) || other.Contains(candidate.IP) {
-			return true
-		}
-	}
-	return false
-}
-
 // ── TCP Accept Loop ─────────────────────────────────────────────
 
 // tcpAcceptLoop accepts TCP connections and bridges them to the UDP
@@ -711,18 +525,27 @@ func (s *Server) tcpAcceptLoop(ctx context.Context) {
 
 		log.Printf("[server] TCP client connected: %s", tcp.RemoteAddr())
 
-		// Create a synthetic UDP address for this TCP client
-		// so it can be identified in the server's address maps.
+		// Assign a unique port for this TCP client so its synthetic
+		// address is distinct in rateKey/addrMap lookups.
+		port := int(s.tcpPortCounter.Add(1) % 65535)
+		if port == 0 {
+			port = 1
+		}
 		syntheticAddr := &net.UDPAddr{
 			IP:   net.IPv4(127, 0, 0, 254),
-			Port: 0, // will be assigned uniquely
+			Port: port,
 		}
 
 		bridge := netutil.NewUDPTCPBridge(tcp, syntheticAddr)
 
+		// Register bridge so outgoing packets are routed via TCP
+		key := addrToRateKey(syntheticAddr)
+		s.tcpBridges.Store(key, bridge)
+
 		// Handle TCP packets in a goroutine
 		go func() {
 			defer bridge.Stop()
+			defer s.tcpBridges.Delete(key)
 			bridge.ReceiveLoop(func(data []byte, addr *net.UDPAddr) {
 				if len(data) < protocol.HeaderLen+protocol.ChecksumLen {
 					return
@@ -742,247 +565,6 @@ func (s *Server) tcpAcceptLoop(ctx context.Context) {
 			})
 		}()
 	}
-}
-
-// ── Keepalive Loop ─────────────────────────────────────────────
-
-func (s *Server) keepaliveLoop(ctx context.Context) {
-	ticker := time.NewTicker(15 * time.Second)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-		}
-
-		// Clean up stale clients in all rooms
-		s.roomMu.RLock()
-		rooms := make([]*Room, 0, len(s.rooms))
-		for _, r := range s.rooms {
-			rooms = append(rooms, r)
-		}
-		s.roomMu.RUnlock()
-
-		for _, room := range rooms {
-			changed := room.CleanupStale()
-			if changed {
-				room.invalidatePeerInfoCache()
-			}
-		}
-
-		// Clean up stale addrToRoom entries in multi-room mode.
-		// When clients disconnect, the room removes from addrMap but
-		// addrToRoom is only cleaned here to avoid cross-package coupling.
-		if s.multiRoom {
-			// Snapshot addrToRoom under one lock, then check each room once.
-			s.roomMu.RLock()
-			type roomEntry struct {
-				key  rateKey
-				room *Room
-			}
-			entries := make([]roomEntry, 0, len(s.addrToRoom))
-			for k, room := range s.addrToRoom {
-				if room != nil {
-					entries = append(entries, roomEntry{key: k, room: room})
-				}
-			}
-			s.roomMu.RUnlock()
-
-			// Group by room to minimize lock acquisitions.
-			byRoom := make(map[*Room][]rateKey)
-			for _, e := range entries {
-				byRoom[e.room] = append(byRoom[e.room], e.key)
-			}
-
-			var stale []rateKey
-			for room, keys := range byRoom {
-				room.mu.RLock()
-				for _, k := range keys {
-					if room.addrMap[k] == nil {
-						stale = append(stale, k)
-					}
-				}
-				room.mu.RUnlock()
-			}
-
-			if len(stale) > 0 {
-				s.roomMu.Lock()
-				for _, k := range stale {
-					// Re-check under write lock: the entry may have been
-					// replaced by a valid new registration (TOCTOU guard).
-					if s.addrToRoom[k] != nil {
-						// Find which room this key belongs to now
-						room := s.addrToRoom[k]
-						room.mu.RLock()
-						stillStale := room.addrMap[k] == nil
-						room.mu.RUnlock()
-						if stillStale {
-							delete(s.addrToRoom, k)
-						}
-					}
-				}
-				s.roomMu.Unlock()
-			}
-
-			// Clean up empty rooms that have been idle beyond the timeout.
-			// This prevents goroutine leaks from transient rooms (players join
-			// then leave, leaving peerInfoLoop and pingLoop running forever).
-			s.roomMu.Lock()
-			now := time.Now()
-			for roomID, room := range s.rooms {
-				if roomID == "default" {
-					continue // never delete the default room
-				}
-				if room.ClientCount() > 0 {
-					continue // room still has players
-				}
-				lastAct := time.Unix(0, room.lastActivity.Load())
-				if now.Sub(lastAct) > roomIdleTimeout {
-					room.Stop()
-					delete(s.rooms, roomID)
-					log.Printf("[room] cleaned up idle room %q (idle for %v)", roomID, now.Sub(lastAct))
-				}
-			}
-			s.roomMu.Unlock()
-		}
-	}
-}
-
-// ── NAT Probe Handler ─────────────────────────────────────────────
-
-// handleNATProbe responds to a client's NAT type probe request.
-// The server includes the client's observed external address in the response,
-// which the client uses to determine its NAT type.
-//
-// For multi-probe detection: the client sends multiple probes and compares
-// the observed addresses. If they differ, it's a Symmetric NAT.
-func (s *Server) handleNATProbe(payload []byte, from *net.UDPAddr) {
-	probe, err := protocol.UnmarshalNATProbe(payload)
-	if err != nil {
-		return
-	}
-
-	// Build response with the client's observed address
-	resp := &protocol.NATResponsePayload{
-		ProbeID:      probe.ProbeID,
-		NATType:      protocol.NATTypeUnknown, // client determines this from multiple probes
-		ObservedAddr: from,
-		AltAddr:      nil, // TODO: respond from alt port for better detection
-	}
-
-	s.sendChecked(protocol.TypeNATResponse, resp.Marshal(), from)
-}
-
-// ── Rebind Handler (Connection Migration) ───────────────────────
-
-// handleRebind processes a client's address migration request.
-// When a client's network changes (WiFi↔4G, NAT rebinding), it sends
-// TypeRebind from the new address to reclaim its existing session.
-//
-// Security: if the room has a password, the client must provide a valid
-// HMAC over its virtual IP. Without a password, the server relies on
-// virtual IP matching + recent lastSeen (within 60s).
-func (s *Server) handleRebind(payload []byte, from *net.UDPAddr) {
-	req, err := protocol.UnmarshalRebind(payload)
-	if err != nil {
-		return
-	}
-	if req.VirtualIP.To4() == nil {
-		s.sendRebindAck(from, false)
-		return
-	}
-
-	vipKey := ipKey(req.VirtualIP)
-
-	// Search all rooms for the client with this virtual IP
-	var foundRoom *Room
-	var foundClient *Client
-	var clientAuthRoomID string
-	var clientUsername string
-	var clientLastSeen time.Time
-	var clientPublicAddr *net.UDPAddr
-
-	s.roomMu.RLock()
-	for _, room := range s.rooms {
-		room.mu.RLock()
-		if c, ok := room.clients[vipKey]; ok {
-			foundRoom = room
-			foundClient = c
-			clientAuthRoomID = c.authRoomID
-			clientUsername = c.Username
-			clientLastSeen = c.GetLastSeen()
-			clientPublicAddr = c.PublicAddr
-			room.mu.RUnlock()
-			break
-		}
-		room.mu.RUnlock()
-	}
-	s.roomMu.RUnlock()
-
-	if foundRoom == nil || foundClient == nil {
-		s.sendRebindAck(from, false)
-		return
-	}
-
-	// Verify HMAC if room has a password
-	if foundRoom.roomPass != "" {
-		if len(req.HMAC) == 0 {
-			s.sendRebindAck(from, false)
-			return
-		}
-		key := auth.DeriveKey(foundRoom.roomPass, clientAuthRoomID)
-		if key == nil {
-			s.sendRebindAck(from, false)
-			return
-		}
-		// Verify HMAC — no address binding (rebind changes the address)
-		expected := auth.ComputeHMAC(key, nil, clientAuthRoomID, clientUsername, nil)
-		if !hmac.Equal(req.HMAC, expected) {
-			s.sendRebindAck(from, false)
-			return
-		}
-	} else {
-		// No password — check that the client was recently active
-		if time.Since(clientLastSeen) > 60*time.Second {
-			s.sendRebindAck(from, false)
-			return
-		}
-	}
-
-	// Migration valid — update the client's address
-	oldKey := addrToRateKey(clientPublicAddr)
-	newKey := addrToRateKey(from)
-
-	foundRoom.mu.Lock()
-	// Remove old addrMap entry
-	delete(foundRoom.addrMap, oldKey)
-	// Update client address
-	foundClient.PublicAddr = from
-	foundClient.SetLastSeen(time.Now())
-	foundRoom.addrMap[newKey] = foundClient
-	foundRoom.lastActivity.Store(time.Now().UnixNano())
-	foundRoom.mu.Unlock()
-
-	// Update addrToRoom mapping in multi-room mode
-	if s.multiRoom {
-		s.roomMu.Lock()
-		delete(s.addrToRoom, oldKey)
-		s.addrToRoom[newKey] = foundRoom
-		s.roomMu.Unlock()
-	}
-
-	log.Printf("[rebind] %s migrated: %v → %s", foundClient.Username, oldKey, from)
-	s.sendRebindAck(from, true)
-
-	// Send current peer info to the client on new address
-	foundRoom.sendPeerInfoToClient(from)
-}
-
-func (s *Server) sendRebindAck(to *net.UDPAddr, success bool) {
-	ack := &protocol.RebindAckPayload{Success: success}
-	s.sendChecked(protocol.TypeRebindAck, ack.Marshal(), to)
 }
 
 // ── Send Helpers ───────────────────────────────────────────────
@@ -1019,5 +601,3 @@ func (s *Server) bwCleanupLoop(ctx context.Context) {
 		}
 	}
 }
-
-

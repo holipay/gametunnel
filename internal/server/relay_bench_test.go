@@ -13,7 +13,7 @@ func BenchmarkHandleRelay(b *testing.B) {
 	conn, _ := net.ListenUDP("udp", &net.UDPAddr{})
 	defer conn.Close()
 	r.conn = conn
-	r.sendQueue = newRateLimitedQueue(conn, nil)
+	r.sendQueue = newRateLimitedQueue(conn, nil, nil)
 
 	// Register two clients
 	addrA := &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 10001}

@@ -4,43 +4,26 @@ package main
 
 import (
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"runtime/debug"
-	"strings"
 	"syscall"
-	"unsafe"
 
 	"golang.org/x/sys/windows"
 
 	"github.com/holipay/gametunnel/internal/client"
 	"github.com/holipay/gametunnel/internal/i18n"
+	"github.com/holipay/gametunnel/internal/singleinstance"
 	"github.com/holipay/gametunnel/internal/tun"
 )
 
 var (
 	kernel32             = syscall.NewLazyDLL("kernel32.dll")
 	user32               = syscall.NewLazyDLL("user32.dll")
-	procCloseHandle      = kernel32.NewProc("CloseHandle")
-	procCreateToolhelp32 = kernel32.NewProc("CreateToolhelp32Snapshot")
-	procProcess32First   = kernel32.NewProc("Process32FirstW")
-	procProcess32Next    = kernel32.NewProc("Process32NextW")
 	procGetConsoleWindow = kernel32.NewProc("GetConsoleWindow")
 	procShowWindow       = user32.NewProc("ShowWindow")
 )
-
-type processEntry32 struct {
-	Size            uint32
-	Usage           uint32
-	ProcessID       uint32
-	DefaultHeapID   uintptr
-	ModuleID        uint32
-	Threads         uint32
-	ParentProcessID uint32
-	PriorityClass   int32
-	Flags           uint32
-	ExeFile         [260]uint16
-}
 
 func main() {
 	// Hide console window immediately to prevent flash during UAC elevation.
@@ -62,7 +45,11 @@ func main() {
 	windows.SetConsoleOutputCP(65001)
 
 	// Prevent multiple instances
-	checkSingleInstance()
+	if _, err := singleinstance.Acquire("GameTunnel-Client"); err != nil {
+		log.Printf("single instance check: %v", err)
+		fmt.Println("GameTunnel is already running.")
+		os.Exit(0)
+	}
 
 	// Load config
 	cfg := client.LoadConfig()
@@ -87,56 +74,6 @@ func main() {
 	}
 
 	run(cfg, tunFactory)
-}
-
-func checkSingleInstance() {
-	if !isAnotherInstanceRunning() {
-		return
-	}
-	fmt.Println("GameTunnel is already running.")
-	os.Exit(0)
-}
-
-func isAnotherInstanceRunning() bool {
-	selfExe, err := os.Executable()
-	if err != nil {
-		return false
-	}
-	selfName := strings.ToLower(filepath.Base(selfExe))
-
-	snapshot, _, _ := procCreateToolhelp32.Call(
-		uintptr(0x00000002), // TH32CS_SNAPPROCESS
-		0,
-	)
-	if snapshot == 0 || snapshot == uintptr(syscall.InvalidHandle) {
-		return false
-	}
-	defer procCloseHandle.Call(snapshot)
-
-	var entry processEntry32
-	entry.Size = uint32(unsafe.Sizeof(entry))
-
-	ret, _, _ := procProcess32First.Call(snapshot, uintptr(unsafe.Pointer(&entry)))
-	if ret == 0 {
-		return false
-	}
-
-	currentPID := uint32(os.Getpid())
-
-	for {
-		pid := entry.ProcessID
-		if pid != currentPID {
-			name := windows.UTF16PtrToString(&entry.ExeFile[0])
-			if strings.ToLower(name) == selfName {
-				return true
-			}
-		}
-		ret, _, _ = procProcess32Next.Call(snapshot, uintptr(unsafe.Pointer(&entry)))
-		if ret == 0 {
-			break
-		}
-	}
-	return false
 }
 
 func requestAdmin() {

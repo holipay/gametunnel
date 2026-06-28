@@ -36,14 +36,17 @@ type sendQueue struct {
 	conn    *net.UDPConn
 	ch      chan sendEntry
 	maxSize int
+	tcpWrite func(addr *net.UDPAddr, data []byte) bool // optional TCP bridge routing
 }
 
 // newSendQueue creates a send queue with the given capacity.
-func newSendQueue(conn *net.UDPConn, maxSize int) *sendQueue {
+// tcpWrite is an optional callback for routing packets to TCP bridge clients.
+func newSendQueue(conn *net.UDPConn, maxSize int, tcpWrite func(addr *net.UDPAddr, data []byte) bool) *sendQueue {
 	return &sendQueue{
-		conn:    conn,
-		ch:      make(chan sendEntry, maxSize),
-		maxSize: maxSize,
+		conn:     conn,
+		ch:       make(chan sendEntry, maxSize),
+		maxSize:  maxSize,
+		tcpWrite: tcpWrite,
 	}
 }
 
@@ -159,7 +162,11 @@ func (sq *sendQueue) run(ctx context.Context) {
 }
 
 // writeUDP sends a single UDP packet.
+// If the destination is a TCP bridge client, routes via TCP instead.
 func (sq *sendQueue) writeUDP(data []byte, addr *net.UDPAddr) {
+	if sq.tcpWrite != nil && sq.tcpWrite(addr, data) {
+		return
+	}
 	if _, err := sq.conn.WriteToUDP(data, addr); err != nil {
 		log.Printf("[server] send error: %v", err)
 	}
@@ -191,9 +198,9 @@ type rateLimitedQueue struct {
 	limiter *BandwidthLimiter
 }
 
-func newRateLimitedQueue(conn *net.UDPConn, limiter *BandwidthLimiter) *rateLimitedQueue {
+func newRateLimitedQueue(conn *net.UDPConn, limiter *BandwidthLimiter, tcpWrite func(addr *net.UDPAddr, data []byte) bool) *rateLimitedQueue {
 	return &rateLimitedQueue{
-		sq:      newSendQueue(conn, 8192),
+		sq:      newSendQueue(conn, 8192, tcpWrite),
 		limiter: limiter,
 	}
 }

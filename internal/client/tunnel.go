@@ -254,7 +254,7 @@ func (t *Tunnel) Connect(ctx context.Context, serverAddr string, mtu int, newTUN
 	t.serverAddr = sAddr
 	// Tune UDP socket buffers for high-throughput gaming.
 	// Ignoring errors — non-Linux platforms may not support this.
-	setClientSocketBuffers(conn)
+	netutil.SetSocketBuffers(conn)
 	t.conn = conn
 
 	if err := t.register(ctx); err != nil {
