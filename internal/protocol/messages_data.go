@@ -123,6 +123,9 @@ func UnmarshalDataPooled(data []byte) (*DataPayload, error) {
 // isNewFormat returns true if the byte looks like a flags byte (0x00 or 0x01)
 // rather than an IPv4 version nibble (0x45-0x4F).
 // This is the backward-compatibility heuristic for detecting old vs new format.
+// IMPORTANT: Only flags values 0x00 and 0x01 are valid. Values 0x02-0xFF are
+// reserved to avoid collision with old-format IPv4 headers (0x4x-0xFx).
+// Adding new flags must not use values in this range without a protocol version bump.
 func isNewFormat(b byte) bool {
 	return b <= 0x01
 }

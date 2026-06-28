@@ -899,6 +899,10 @@ func (s *Server) handleRebind(payload []byte, from *net.UDPAddr) {
 	// Search all rooms for the client with this virtual IP
 	var foundRoom *Room
 	var foundClient *Client
+	var clientAuthRoomID string
+	var clientUsername string
+	var clientLastSeen time.Time
+	var clientPublicAddr *net.UDPAddr
 
 	s.roomMu.RLock()
 	for _, room := range s.rooms {
@@ -906,6 +910,10 @@ func (s *Server) handleRebind(payload []byte, from *net.UDPAddr) {
 		if c, ok := room.clients[vipKey]; ok {
 			foundRoom = room
 			foundClient = c
+			clientAuthRoomID = c.authRoomID
+			clientUsername = c.Username
+			clientLastSeen = c.GetLastSeen()
+			clientPublicAddr = c.PublicAddr
 			room.mu.RUnlock()
 			break
 		}
@@ -924,27 +932,27 @@ func (s *Server) handleRebind(payload []byte, from *net.UDPAddr) {
 			s.sendRebindAck(from, false)
 			return
 		}
-		key := auth.DeriveKey(foundRoom.roomPass, foundClient.authRoomID)
+		key := auth.DeriveKey(foundRoom.roomPass, clientAuthRoomID)
 		if key == nil {
 			s.sendRebindAck(from, false)
 			return
 		}
 		// Verify HMAC — no address binding (rebind changes the address)
-		expected := auth.ComputeHMAC(key, nil, foundClient.authRoomID, foundClient.Username, nil)
+		expected := auth.ComputeHMAC(key, nil, clientAuthRoomID, clientUsername, nil)
 		if !hmac.Equal(req.HMAC, expected) {
 			s.sendRebindAck(from, false)
 			return
 		}
 	} else {
 		// No password — check that the client was recently active
-		if time.Since(foundClient.GetLastSeen()) > 60*time.Second {
+		if time.Since(clientLastSeen) > 60*time.Second {
 			s.sendRebindAck(from, false)
 			return
 		}
 	}
 
 	// Migration valid — update the client's address
-	oldKey := addrToRateKey(foundClient.PublicAddr)
+	oldKey := addrToRateKey(clientPublicAddr)
 	newKey := addrToRateKey(from)
 
 	foundRoom.mu.Lock()

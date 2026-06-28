@@ -182,7 +182,7 @@ func (s *Server) handleStatusHTML(w http.ResponseWriter, r *http.Request) {
 		T *i18n.Strings
 	}{StatusInfo: &info, T: t}
 
-	if err := getStatusTmpl(s.lang).Execute(w, tmplData); err != nil {
+	if err := getStatusTmpl().Execute(w, tmplData); err != nil {
 		log.Printf("%s", i18n.Format(i18n.T().ServerTmplFail, err))
 	}
 }
@@ -192,7 +192,7 @@ var (
 	statusTmpl     *template.Template
 )
 
-func getStatusTmpl(lang i18n.Lang) *template.Template {
+func getStatusTmpl() *template.Template {
 	statusTmplOnce.Do(func() {
 		statusTmpl = template.Must(template.New("status").Parse(statusHTML))
 	})
