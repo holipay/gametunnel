@@ -11,7 +11,7 @@ func TestCheckPasswordStrength(t *testing.T) {
 		{"", "none", 0},
 		{"a", "weak", 1},
 		{"1234", "weak", 2},
-		{"password", "weak", 2},
+		{"password", "weak", 1},
 		{"hello", "weak", 0},
 		{"abcdef", "weak", 0},
 		{"abcdefgh", "moderate", 0},

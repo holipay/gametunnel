@@ -17,17 +17,19 @@ func CheckPasswordStrength(password string) (level string, warnings []string) {
 
 	lower := strings.ToLower(password)
 	weak := []string{"1234", "password", "admin", "test", "abc", "1111", "pass", "root", "default"}
+	isWeakWord := false
 	for _, w := range weak {
 		if lower == w {
 			warnings = append(warnings, "password is commonly used and weak")
+			isWeakWord = true
 			break
 		}
 	}
 
 	switch {
-	case len(password) >= 12 && len(warnings) == 0:
+	case len(password) >= 12 && !isWeakWord && len(warnings) == 0:
 		level = "strong"
-	case len(password) >= 8:
+	case len(password) >= 8 && !isWeakWord:
 		level = "moderate"
 	default:
 		level = "weak"

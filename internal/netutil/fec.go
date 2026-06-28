@@ -263,7 +263,7 @@ func (d *FECDecoder) tryRecover(g *fecGroup) [][]byte {
 		// Recover: lost = parity XOR all_received
 		parity := copyBytes(g.parity)
 		for j, pkt := range g.received {
-			if j == idx {
+			if byte(j) == idx {
 				continue
 			}
 			xorBytes(parity, pkt)
