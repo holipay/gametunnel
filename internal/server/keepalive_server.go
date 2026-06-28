@@ -220,6 +220,9 @@ func (s *Server) handleRebind(payload []byte, from *net.UDPAddr) {
 	oldKey := addrToRateKey(clientPublicAddr)
 	newKey := addrToRateKey(from)
 
+	// Snapshot username before releasing lock to avoid data race
+	username := foundClient.Username
+
 	foundRoom.mu.Lock()
 	// Remove old addrMap entry
 	delete(foundRoom.addrMap, oldKey)
@@ -238,7 +241,7 @@ func (s *Server) handleRebind(payload []byte, from *net.UDPAddr) {
 		s.roomMu.Unlock()
 	}
 
-	log.Printf("[rebind] %s migrated: %v → %s", foundClient.Username, oldKey, from)
+	log.Printf("[rebind] %s migrated: %v → %s", username, oldKey, from)
 	s.sendRebindAck(from, true)
 
 	// Send current peer info to the client on new address

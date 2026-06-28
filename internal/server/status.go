@@ -243,6 +243,14 @@ func (s *Server) buildStatusInfo() StatusInfo {
 		subnet = s.defaultRoom.subnet.String()
 		serverIP = s.defaultRoom.serverIP.String()
 		hasAuth = s.defaultRoom.roomPass != ""
+	} else if len(roomInfos) > 0 {
+		// Multi-room mode: use first room's info as representative
+		for _, room := range rooms {
+			subnet = room.subnet.String()
+			serverIP = room.serverIP.String()
+			hasAuth = room.roomPass != ""
+			break
+		}
 	}
 
 	return StatusInfo{
