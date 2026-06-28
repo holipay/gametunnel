@@ -130,9 +130,11 @@ func (t *Tunnel) handleAssignIP(payload []byte) error {
 	// Initialize end-to-end encryption if password is set
 	var encCipher, decCipher, p2pCipher *crypto.Cipher
 	if t.roomPass != "" {
-		key := auth.DeriveKey(t.roomPass, t.roomID)
+		key, err := auth.DeriveKey(t.roomPass, t.roomID)
+		if err != nil {
+			return fmt.Errorf("derive key: %w", err)
+		}
 		if key != nil {
-			var err error
 			if encCipher, err = crypto.NewCipher(key, crypto.DirClientToServer); err != nil {
 				return fmt.Errorf("init encrypt cipher: %w", err)
 			}
@@ -188,7 +190,10 @@ func (t *Tunnel) handleAuthChallenge(payload []byte) error {
 		return fmt.Errorf("%s", i18n.Format(i18n.T().ErrParseAuthFailed, err))
 	}
 
-	key := auth.DeriveKey(t.roomPass, t.roomID)
+	key, err := auth.DeriveKey(t.roomPass, t.roomID)
+	if err != nil {
+		return fmt.Errorf("derive key: %w", err)
+	}
 	if key == nil {
 		return fmt.Errorf("%s", i18n.T().ErrDeriveKeyFailed)
 	}

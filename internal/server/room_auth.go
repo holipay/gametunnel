@@ -17,7 +17,10 @@ func (r *Room) getAuthKey(roomID string) ([]byte, error) {
 	if v, ok := r.authKeys.Load(roomID); ok {
 		return v.([]byte), nil
 	}
-	key := auth.DeriveKey(r.roomPass, roomID)
+	key, err := auth.DeriveKey(r.roomPass, roomID)
+	if err != nil {
+		return nil, err
+	}
 	if key != nil {
 		r.authKeys.Store(roomID, key)
 	}
