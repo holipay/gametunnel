@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/holipay/gametunnel/internal/i18n"
+	"github.com/holipay/gametunnel/internal/netutil"
 	"github.com/holipay/gametunnel/internal/protocol"
 )
 
@@ -75,6 +76,7 @@ func (t *Tunnel) sendHolePunchRelay(peerIP net.IP) {
 
 // startHolePunch initiates a multi-phase hole punch to a peer.
 // It runs until all phases complete or the context is cancelled.
+// Uses NAT type detection and port prediction for smarter strategies.
 func (t *Tunnel) startHolePunch(ctx context.Context, peerIP net.IP) {
 	t.mu.RLock()
 	peer, ok := t.peers[ipKey(peerIP)]
@@ -84,8 +86,46 @@ func (t *Tunnel) startHolePunch(ctx context.Context, peerIP net.IP) {
 	}
 	// Snapshot PublicAddr under lock to avoid data race with handlePeerInfo
 	peerAddr := peer.PublicAddr
+	natResult := t.natProbeResult
 	t.mu.RUnlock()
 
+	// Determine strategy based on NAT type
+	strategy := netutil.StrategyDirect
+	if natResult != nil {
+		// We know our NAT type; the peer's NAT type is unknown
+		// Use our type to decide strategy (conservative: assume peer is restricted)
+		switch natResult.Type {
+		case netutil.NATSymmetric:
+			// Symmetric NAT — try extended punch with port prediction
+			strategy = netutil.StrategyExtended
+		case netutil.NATFullCone, netutil.NATNoNAT:
+			// Full Cone or no NAT — direct punch is very likely to succeed
+			strategy = netutil.StrategyDirect
+		}
+	}
+
+	// If Symmetric NAT detected, try port prediction first
+	if strategy == netutil.StrategyExtended {
+		t.mu.RLock()
+		pp := t.portPredictor
+		t.mu.RUnlock()
+		if pp != nil {
+			if predictedPorts := pp.PredictPortsForPeer([]int{peerAddr.Port}); len(predictedPorts) > 0 {
+				log.Printf("[hole-punch] trying port prediction for %v: %d candidates", peerIP, len(predictedPorts))
+				for _, port := range predictedPorts {
+					predictedAddr := &net.UDPAddr{IP: peerAddr.IP, Port: port}
+					t.burstHolePunch(predictedAddr, 3, 50*time.Millisecond, ctx)
+				}
+				// If prediction worked, we're done
+				if t.hasDirectPeerTraffic(peerIP) {
+					log.Printf(i18n.T().LogP2PSuccess, 0, peerIP)
+					return
+				}
+			}
+		}
+	}
+
+	// Standard hole punch phases
 	for phase, interval := range holePunchIntervals {
 		t.burstHolePunch(peerAddr, holePunchBurstPerPhase, interval, ctx)
 		if ctx.Err() != nil {
@@ -93,14 +133,18 @@ func (t *Tunnel) startHolePunch(ctx context.Context, peerIP net.IP) {
 		}
 
 		// If peer is already reachable via P2P after this phase, stop early.
-		// This is checked by seeing if we've received any direct data from them.
 		if t.hasDirectPeerTraffic(peerIP) {
 			log.Printf(i18n.T().LogP2PSuccess, phase+1, peerIP)
 			return
 		}
 	}
 
-	log.Printf(i18n.T().LogP2PFailed, peerIP)
+	// If extended strategy failed, log with extra info
+	if strategy == netutil.StrategyExtended {
+		log.Printf("[hole-punch] P2P failed for %v (symmetric NAT, port prediction insufficient)", peerIP)
+	} else {
+		log.Printf(i18n.T().LogP2PFailed, peerIP)
+	}
 }
 
 // handleHolePunchReceived processes an incoming hole punch request (bidirectional).

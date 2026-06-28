@@ -222,3 +222,58 @@ func (t *Tunnel) handleAuthChallenge(payload []byte) error {
 	log.Printf("%s", i18n.T().LogAuthSent)
 	return nil
 }
+
+// registerTCP performs registration over TCP transport.
+// Used when UDP is blocked (e.g. strict firewalls).
+// The protocol is identical to UDP registration but uses TCP framing.
+func (t *Tunnel) registerTCP(ctx context.Context) error {
+	reg := &protocol.RegisterPayload{
+		RoomID:   t.roomID,
+		Username: t.username,
+		Version:  protocol.AppVersion,
+	}
+	packet := protocol.EncodeChecked(protocol.TypeRegister, reg.Marshal())
+
+	if err := t.tcpTransport.Send(packet); err != nil {
+		return fmt.Errorf("tcp send register: %w", err)
+	}
+
+	// Read response via TCP
+	deadline := 10 * time.Second
+	timer := time.NewTimer(deadline)
+	defer timer.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-timer.C:
+			return fmt.Errorf("TCP registration timeout")
+		default:
+		}
+
+		data, err := t.tcpTransport.Receive()
+		if err != nil {
+			return fmt.Errorf("tcp receive: %w", err)
+		}
+
+		msg, err := protocol.DecodeChecked(data)
+		if err != nil {
+			continue
+		}
+
+		switch msg.Type {
+		case protocol.TypeAssignIP:
+			return t.handleAssignIP(msg.Payload)
+		case protocol.TypeAuthChallenge:
+			if err := t.handleAuthChallenge(msg.Payload); err != nil {
+				return err
+			}
+			timer.Reset(deadline)
+			continue
+		case protocol.TypeKick:
+			kick, _ := protocol.UnmarshalKick(msg.Payload)
+			return fmt.Errorf("%s", i18n.Format(i18n.T().ErrRejected, kick.Reason))
+		}
+	}
+}

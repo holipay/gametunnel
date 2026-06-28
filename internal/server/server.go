@@ -211,6 +211,9 @@ type Server struct {
 
 	// Operational metrics (lifetime counters, never reset)
 	totalPacketsDropped atomic.Uint64 // packets dropped (rate limit, full channel, invalid)
+
+	// TCP fallback listener for clients behind strict firewalls
+	tcpListener *netutil.TCPListener // nil when TCP is disabled
 }
 
 // pktJob represents a packet to be processed by the worker pool.
@@ -233,6 +236,7 @@ type Config struct {
 	StateDir       string // directory for state persistence, empty = disabled
 	MultiRoom      bool   // enable multi-room mode
 	BandwidthLimit int    // per-client outbound bandwidth limit in bytes/sec (0 = default 10Mbps)
+	TCPAddr        string // TCP listen address for fallback (e.g. ":4700"), empty = disabled
 }
 
 // New creates a new Server. Call Run() to start it.
@@ -338,6 +342,17 @@ func New(cfg Config) (*Server, error) {
 		log.Printf("warning: failed to load state: %v", err)
 	}
 
+	// Start TCP fallback listener if configured
+	if cfg.TCPAddr != "" {
+		tcpLn, err := netutil.NewTCPListener(cfg.TCPAddr)
+		if err != nil {
+			log.Printf("[server] TCP listener failed to start: %v (TCP fallback disabled)", err)
+		} else {
+			s.tcpListener = tcpLn
+			log.Printf("[server] TCP fallback listener on %s", tcpLn.Addr())
+		}
+	}
+
 	return s, nil
 }
 
@@ -363,6 +378,11 @@ func (s *Server) Run(ctx context.Context) {
 
 	for i := 0; i < s.workers; i++ {
 		go s.worker(ctx)
+	}
+
+	// Start TCP accept loop if TCP listener is enabled
+	if s.tcpListener != nil {
+		go s.tcpAcceptLoop(ctx)
 	}
 
 	buf := make([]byte, 65535)
@@ -435,6 +455,11 @@ func (s *Server) handlePacket(data []byte, from *net.UDPAddr) {
 	if s.defaultRoom != nil && s.defaultRoom.roomPass != "" {
 		msg, _ := protocol.DecodeSkipCRC(data)
 		if msg != nil {
+			// NAT probes are unencrypted (sent pre-registration) — handle directly
+			if msg.Type == protocol.TypeNATProbe {
+				s.handleNATProbe(msg.Payload, from)
+				return
+			}
 			if s.multiRoom {
 				s.handlePacketMultiRoom(msg, from)
 			} else {
@@ -451,6 +476,12 @@ func (s *Server) handlePacket(data []byte, from *net.UDPAddr) {
 				"Protocol version mismatch: server=%d, please update your client",
 				protocol.ProtocolVersion))
 		}
+		return
+	}
+
+	// NAT probe — handle before room routing (probes happen pre-registration)
+	if msg.Type == protocol.TypeNATProbe {
+		s.handleNATProbe(msg.Payload, from)
 		return
 	}
 
@@ -643,6 +674,65 @@ func (s *Server) subnetOverlapsAny(candidate *net.IPNet, others []*net.IPNet) bo
 	return false
 }
 
+// ── TCP Accept Loop ─────────────────────────────────────────────
+
+// tcpAcceptLoop accepts TCP connections and bridges them to the UDP
+// processing pipeline. This allows clients behind strict firewalls
+// (that block UDP) to connect via TCP.
+func (s *Server) tcpAcceptLoop(ctx context.Context) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+
+		tcp, err := s.tcpListener.Accept()
+		if err != nil {
+			select {
+			case <-ctx.Done():
+				return
+			default:
+				log.Printf("[server] TCP accept error: %v", err)
+				continue
+			}
+		}
+
+		log.Printf("[server] TCP client connected: %s", tcp.RemoteAddr())
+
+		// Create a synthetic UDP address for this TCP client
+		// so it can be identified in the server's address maps.
+		syntheticAddr := &net.UDPAddr{
+			IP:   net.IPv4(127, 0, 0, 254),
+			Port: 0, // will be assigned uniquely
+		}
+
+		bridge := netutil.NewUDPTCPBridge(tcp, syntheticAddr)
+
+		// Handle TCP packets in a goroutine
+		go func() {
+			defer bridge.Stop()
+			bridge.ReceiveLoop(func(data []byte, addr *net.UDPAddr) {
+				if len(data) < protocol.HeaderLen+protocol.ChecksumLen {
+					return
+				}
+				if !s.checkRate(addr) {
+					s.totalPacketsDropped.Add(1)
+					return
+				}
+				pkt := pktPoolGet(len(data))
+				copy(pkt, data)
+				select {
+				case s.pktCh <- pktJob{data: pkt[:len(data)], addr: addr}:
+				default:
+					pktPoolPut(pkt)
+					s.totalPacketsDropped.Add(1)
+				}
+			})
+		}()
+	}
+}
+
 // ── Keepalive Loop ─────────────────────────────────────────────
 
 func (s *Server) keepaliveLoop(ctx context.Context) {
@@ -736,6 +826,31 @@ func (s *Server) keepaliveLoop(ctx context.Context) {
 			s.roomMu.Unlock()
 		}
 	}
+}
+
+// ── NAT Probe Handler ─────────────────────────────────────────────
+
+// handleNATProbe responds to a client's NAT type probe request.
+// The server includes the client's observed external address in the response,
+// which the client uses to determine its NAT type.
+//
+// For multi-probe detection: the client sends multiple probes and compares
+// the observed addresses. If they differ, it's a Symmetric NAT.
+func (s *Server) handleNATProbe(payload []byte, from *net.UDPAddr) {
+	probe, err := protocol.UnmarshalNATProbe(payload)
+	if err != nil {
+		return
+	}
+
+	// Build response with the client's observed address
+	resp := &protocol.NATResponsePayload{
+		ProbeID:      probe.ProbeID,
+		NATType:      protocol.NATTypeUnknown, // client determines this from multiple probes
+		ObservedAddr: from,
+		AltAddr:      nil, // TODO: respond from alt port for better detection
+	}
+
+	s.sendChecked(protocol.TypeNATResponse, resp.Marshal(), from)
 }
 
 // ── Send Helpers ───────────────────────────────────────────────
