@@ -210,8 +210,9 @@ func (s *Server) handleRebind(payload []byte, from *net.UDPAddr) {
 			return
 		}
 	} else {
-		// No password — check that the client was recently active
-		if time.Since(clientLastSeen) > 60*time.Second {
+		// No password — check that the client was recently active.
+		// Tightened from 60s to 30s to reduce the session hijacking window.
+		if time.Since(clientLastSeen) > 30*time.Second {
 			s.sendRebindAck(from, false)
 			return
 		}

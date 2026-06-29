@@ -64,6 +64,9 @@ type Server struct {
 	// Base subnet for multi-room mode (stored separately since defaultRoom is nil)
 	baseSubnet *net.IPNet
 
+	// Room password (propagated to auto-created rooms in multi-room mode)
+	roomPass string
+
 	// Bandwidth limiting
 	bwLimiter    *BandwidthLimiter // per-client outbound bandwidth limiter
 
@@ -188,6 +191,7 @@ func New(cfg Config) (*Server, error) {
 		maxRooms:    maxRooms,
 		stateDir:    cfg.StateDir,
 		bwLimiter:   bwLimiter,
+		roomPass:    cfg.RoomPass,
 	}
 
 	// Wire TCP bridge routing into the send queue (must happen after s is
@@ -356,11 +360,21 @@ func (s *Server) worker(ctx context.Context) {
 // ── Packet Dispatch ────────────────────────────────────────────
 
 func (s *Server) handlePacket(data []byte, from *net.UDPAddr) {
-	// Fast path: encrypted packets have no CRC32 — skip the wasted
-	// CRC compute by decoding directly. AEAD provides integrity.
-	// Pre-auth packets (Register, NATProbe, AuthResponse, Rebind) are
-	// always unencrypted — verify their CRC before processing.
+	// Determine if the packet is likely encrypted (AEAD provides integrity,
+	// so CRC32 is skipped). In single-room mode, check the default room's
+	// password. In multi-room mode, all rooms share the server password.
+	encrypted := false
 	if s.defaultRoom != nil && s.defaultRoom.roomPass != "" {
+		encrypted = true
+	} else if s.multiRoom && s.roomPass != "" {
+		encrypted = true
+	}
+
+	if encrypted {
+		// Fast path: encrypted packets have no CRC32 — skip the wasted
+		// CRC compute by decoding directly. AEAD provides integrity.
+		// Pre-auth packets (Register, NATProbe, AuthResponse, Rebind) are
+		// always unencrypted — verify their CRC before processing.
 		msg, _ := protocol.DecodeSkipCRC(data)
 		if msg != nil {
 			// Pre-auth packet types are always unencrypted — verify CRC
@@ -391,7 +405,7 @@ func (s *Server) handlePacket(data []byte, from *net.UDPAddr) {
 		}
 	}
 
-	encrypted := s.multiRoom || (s.defaultRoom != nil && s.defaultRoom.roomPass != "")
+
 	msg, err := protocol.DecodeLenient(data, encrypted)
 	if err != nil {
 		if errors.Is(err, protocol.ErrUnsupportedVersion) {
@@ -488,7 +502,7 @@ func (s *Server) handleRegisterMultiRoom(payload []byte, from *net.UDPAddr) {
 		var err error
 		room, err = NewRoom(RoomConfig{
 			RoomID:     reg.RoomID,
-			RoomPass:   "", // multi-room mode uses per-room auth (future)
+			RoomPass:   s.roomPass, // propagate server password to auto-created rooms
 			Subnet:     subnet,
 			MaxPlayers: 254, // default max for multi-room
 			MaxPerIP:   3,

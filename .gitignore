@@ -8,6 +8,6 @@ bin/
 *.out
 nul
 .mimocode/
-client
-server
+/client
+/server
 vendor/
