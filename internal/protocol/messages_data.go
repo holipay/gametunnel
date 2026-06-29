@@ -7,7 +7,8 @@ import (
 
 // ── Data (relay) ───────────────────────────────────────────────
 
-// DataFlagCompressed is set in Flags when Data is LZ4-compressed.
+// DataFlagCompressed was used for LZ4 compression (now removed).
+// Reserved for backward compatibility — receivers silently ignore this flag.
 const DataFlagCompressed byte = 0x01
 
 // DataFlagHasToken is set in Flags when a 16-byte session token follows the flags byte.
@@ -28,8 +29,8 @@ const FECHeaderSize = 5
 //
 // Flags:
 //
-//	0x01 = data is LZ4-compressed (decompress before writing to TUN)
 //	0x00 = data is uncompressed (legacy compatible)
+//	0x01 = reserved (was LZ4-compressed, now unused)
 //
 // Backward compatibility: old clients send 8+N bytes (no flags). The
 // Unmarshal functions detect this by checking if len(data) > 8 and the
@@ -195,11 +196,6 @@ func UnmarshalDataPooled(data []byte) (*DataPayload, error) {
 // avoid collision with old-format IPv4 headers (0x4x-0xFx).
 func isNewFormat(b byte) bool {
 	return b <= 0x07
-}
-
-// IsCompressed returns true if the data payload flags indicate LZ4 compression.
-func IsCompressed(flags byte) bool {
-	return flags&DataFlagCompressed != 0
 }
 
 // IsFECEnabled returns true if the data payload flags indicate FEC header is present.
