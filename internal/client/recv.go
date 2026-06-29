@@ -235,12 +235,12 @@ func (t *Tunnel) handleDirectData(ctx context.Context, from *net.UDPAddr, msg *p
 	// All clients in a room share the same token, distributed by the
 	// server during registration. Old servers (pre-v1.7) have zero tokens.
 	if p2pCipher == nil && sessionToken != [16]byte{} {
-		if len(msg.Payload) < 25 || msg.Payload[8]&protocol.DataFlagHasToken == 0 {
+		if len(msg.Payload) < 26 || msg.Payload[9]&protocol.DataFlagHasToken == 0 {
 			protocol.PutDataPayload(dp)
 			return
 		}
 		var pktToken [16]byte
-		copy(pktToken[:], msg.Payload[9:25])
+		copy(pktToken[:], msg.Payload[10:26])
 		if pktToken != sessionToken {
 			protocol.PutDataPayload(dp)
 			return
