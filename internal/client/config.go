@@ -9,6 +9,17 @@ import (
 	"strings"
 
 	"github.com/holipay/gametunnel/internal/i18n"
+	"github.com/holipay/gametunnel/internal/paths"
+	"github.com/holipay/gametunnel/internal/tun"
+)
+
+// DefaultMTU is the tunnel MTU if not configured.
+const DefaultMTU = tun.DefaultMTU
+
+// MinMTU/MaxMTU define the allowed MTU range.
+const (
+	MinMTU = 576
+	MaxMTU = 9000
 )
 
 // Config holds client configuration.
@@ -18,46 +29,48 @@ type Config struct {
 	RoomID       string
 	RoomPassword string
 	Lang         string // "zh" or "en", default "zh"
-	MTU          int    // tunnel MTU, default 1400
+	MTU          int    // tunnel MTU, default DefaultMTU
 }
 
-// exeDir returns the directory containing the executable.
-func exeDir() string {
-	exe, err := os.Executable()
-	if err != nil {
-		return "."
+// DefaultConfig returns a Config with default values.
+func DefaultConfig() *Config {
+	hostname, _ := os.Hostname()
+	return &Config{
+		PlayerName: hostname,
+		RoomID:     "default",
+		Lang:       "zh",
+		MTU:        DefaultMTU,
 	}
-	return filepath.Dir(exe)
+}
+
+// Validate checks the config for errors.
+func (c *Config) Validate() error {
+	if err := ValidateServerAddr(c.ServerAddr); err != nil {
+		return err
+	}
+	if len(c.RoomID) == 0 || len(c.RoomID) > 32 {
+		return fmt.Errorf("room ID must be 1-32 characters")
+	}
+	if c.MTU < MinMTU || c.MTU > MaxMTU {
+		return fmt.Errorf("MTU must be %d-%d, got %d", MinMTU, MaxMTU, c.MTU)
+	}
+	return nil
 }
 
 // PortableConfigPath returns the path to config.ini next to the exe.
 func PortableConfigPath() string {
-	return filepath.Join(exeDir(), "config.ini")
-}
-
-// appDataPath returns the AppData directory path.
-func appDataPath() string {
-	appData := os.Getenv("APPDATA")
-	if appData == "" {
-		appData = filepath.Join(os.Getenv("USERPROFILE"), "AppData", "Roaming")
-	}
-	return appData
+	return filepath.Join(paths.ExeDir(), "config.ini")
 }
 
 // LegacyConfigPath returns the path to the legacy JSON config file.
 func LegacyConfigPath() string {
-	return filepath.Join(appDataPath(), "GameTunnel", "config.json")
+	return filepath.Join(paths.AppDataDir(), "GameTunnel", "config.json")
 }
 
 // LoadConfig loads the config from disk.
 // Priority: config.ini next to exe > AppData/config.json > defaults.
 func LoadConfig() *Config {
-	hostname, _ := os.Hostname()
-	cfg := &Config{
-		PlayerName: hostname,
-		RoomID:     "default",
-		MTU:        1400,
-	}
+	cfg := DefaultConfig()
 
 	// Try portable config.ini first
 	if loadINI(PortableConfigPath(), cfg) {
@@ -142,7 +155,7 @@ func SaveConfig(cfg *Config) error {
 	fmt.Fprintf(&b, "password=%s\n", cfg.RoomPassword)
 	fmt.Fprintln(&b, "# Language (zh or en)")
 	fmt.Fprintf(&b, "lang=%s\n", cfg.Lang)
-	fmt.Fprintln(&b, "# Tunnel MTU (576-9000, default 1400)")
+	fmt.Fprintln(&b, "# Tunnel MTU (576-9000, default DefaultMTU)")
 	fmt.Fprintf(&b, "mtu=%d\n", cfg.MTU)
 	return os.WriteFile(path, []byte(b.String()), 0600)
 }
@@ -197,7 +210,7 @@ func loadINI(path string, cfg *Config) bool {
 			}
 		case "mtu":
 			var v int
-			if _, err := fmt.Sscanf(value, "%d", &v); err == nil && v >= 576 && v <= 9000 {
+			if _, err := fmt.Sscanf(value, "%d", &v); err == nil && v >= MinMTU && v <= MaxMTU {
 				cfg.MTU = v
 			}
 		}
@@ -251,7 +264,7 @@ func loadJSON(path string, cfg *Config) {
 		if r.Lang != "" {
 			cfg.Lang = r.Lang
 		}
-		if r.MTU >= 576 && r.MTU <= 9000 {
+		if r.MTU >= MinMTU && r.MTU <= MaxMTU {
 			cfg.MTU = r.MTU
 		}
 	}

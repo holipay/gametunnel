@@ -3,6 +3,7 @@
 package main
 
 import (
+	"github.com/holipay/gametunnel/internal/paths"
 	"fmt"
 	"log"
 	"os"
@@ -105,7 +106,7 @@ func writeCrashLog() {
 		return
 	}
 
-	logDir := filepath.Join(appDataPath(), "GameTunnel")
+	logDir := paths.GameTunnelDir()
 	os.MkdirAll(logDir, 0755)
 	f, err := os.OpenFile(filepath.Join(logDir, "crash.log"),
 		os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
