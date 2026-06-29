@@ -25,9 +25,6 @@ const AppVersion uint16 = 0x0107
 // MinTokenVersion is the minimum server version that supports session tokens.
 const MinTokenVersion uint16 = 0x0107
 
-// MinFECVersion is the minimum server version that supports FEC.
-const MinFECVersion uint16 = 0x0108
-
 // MinRelayNoCRCVersion is the minimum server version that does NOT append
 // a redundant CRC32 to relayed TypeData packets for encrypted rooms.
 // AEAD (ChaCha20-Poly1305) already provides integrity, making the CRC
