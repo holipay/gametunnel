@@ -61,6 +61,9 @@ func New(cfg Config) (*Device, error) {
 
 func (d *Device) Name() string { return d.name }
 
+// MTU returns the configured MTU of the TUN device.
+func (d *Device) MTU() int { return d.mtu }
+
 // ReadBatch reads up to batchSize packets from the TUN device in a single syscall.
 // Returns the number of packets read and per-packet sizes.
 func (d *Device) ReadBatch(bufs [][]byte, sizes []int) (int, error) {
