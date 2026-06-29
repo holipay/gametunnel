@@ -435,6 +435,9 @@ func (r *Room) handleAuthResponse(payload []byte, from *net.UDPAddr) {
 	// doesn't leave state partially modified.
 	switch r.checkCapacityAndDuplicate(resp.Username, resp.RoomID) {
 	case checkRoomFull:
+		// Decrement for the ORIGINAL registration address (c.PublicAddr),
+		// NOT the current `from`. NAT rebinding may have changed the
+		// client's observed address between registration and auth response.
 		if c.PublicAddr != nil {
 			r.decrementIPConnCount(addrToConnIPKey(c.PublicAddr))
 		}

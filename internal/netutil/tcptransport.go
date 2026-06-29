@@ -7,7 +7,6 @@ import (
 	"log"
 	"net"
 	"sync"
-	"sync/atomic"
 	"time"
 )
 
@@ -163,7 +162,6 @@ type UDPTCPBridge struct {
 	virtualIP  net.IP        // the client's assigned virtual IP
 	remoteAddr *net.UDPAddr  // synthetic address for protocol compatibility
 	done       chan struct{}
-	started    atomic.Bool   // true once ReceiveLoop has started
 }
 
 // NewUDPTCPBridge creates a bridge between a TCP transport and the server's
@@ -185,7 +183,6 @@ func (b *UDPTCPBridge) RemoteAddr() *net.UDPAddr {
 // ReceiveLoop reads packets from TCP and calls the handler for each one.
 // Runs until the TCP connection is closed or the bridge is stopped.
 func (b *UDPTCPBridge) ReceiveLoop(handler func(data []byte, addr *net.UDPAddr)) {
-	b.started.Store(true)
 	defer close(b.done)
 	for {
 		data, err := b.tcp.Receive()
@@ -205,9 +202,13 @@ func (b *UDPTCPBridge) Send(data []byte) error {
 // Stop signals the bridge to stop.
 func (b *UDPTCPBridge) Stop() {
 	b.tcp.Close()
-	if !b.started.Load() {
-		return // ReceiveLoop never started — don't wait for done
+	// Fast path: if ReceiveLoop already exited, return immediately.
+	select {
+	case <-b.done:
+		return
+	default:
 	}
+	// ReceiveLoop still running (or never started) — wait up to 5s.
 	timer := time.NewTimer(5 * time.Second)
 	defer timer.Stop()
 	select {
