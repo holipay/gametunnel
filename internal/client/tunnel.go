@@ -212,34 +212,25 @@ func (t *Tunnel) Connect(ctx context.Context, serverAddr string, mtu int, newTUN
 		log.Printf("[tunnel] connected via TCP fallback")
 	}
 
-	// ── NAT type probe (background, non-blocking) ─────────────────
-	// Skip if already probed in a previous session — avoids wasting
-	// a probe when reconnecting with the same server.
+	// ── NAT type probe (synchronous, before receiveFromServer) ─────
+	// Must complete before starting receiveFromServer to avoid both
+	// reading from the same conn simultaneously (race condition).
+	// Skip if already probed in a previous session.
 	t.mu.RLock()
 	alreadyProbed := t.nat.natProbeResult != nil
 	t.mu.RUnlock()
 	if t.tcpTransport == nil && !alreadyProbed {
-		go func() {
-			// Use t.conn snapshot to avoid referencing a stale connection
-			// if Connect is called again before the probe finishes.
-			t.mu.RLock()
-			c := t.conn
-			t.mu.RUnlock()
-			if c == nil {
-				return
-			}
-			result, err := nat.ProbeNATType(c, sAddr)
-			if err != nil {
-				log.Printf("[nat-probe] probe failed: %v", err)
-			} else {
-				t.mu.Lock()
-				t.nat.natProbeResult = result
-				t.nat.portPredictor = nat.PortPredictorFromNATProbe([]*nat.NATProbeResult{result})
-				t.mu.Unlock()
-				log.Printf("[nat-probe] NAT type: %d, external: %s:%d, RTT: %v",
-					result.Type, result.ExternalIP, result.ExternalPort, result.RTT)
-			}
-		}()
+		result, err := nat.ProbeNATType(conn, sAddr)
+		if err != nil {
+			log.Printf("[nat-probe] probe failed: %v", err)
+		} else {
+			t.mu.Lock()
+			t.nat.natProbeResult = result
+			t.nat.portPredictor = nat.PortPredictorFromNATProbe([]*nat.NATProbeResult{result})
+			t.mu.Unlock()
+			log.Printf("[nat-probe] NAT type: %d, external: %s:%d, RTT: %v",
+				result.Type, result.ExternalIP, result.ExternalPort, result.RTT)
+		}
 	}
 
 	// ── TUN device: reuse or create ─────────────────────────────────
