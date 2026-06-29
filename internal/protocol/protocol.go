@@ -151,10 +151,7 @@ func DecodeLenient(data []byte, allowCRCFallback bool) (*Message, error) {
 		return msg, nil
 	}
 	if allowCRCFallback && errors.Is(err, ErrChecksumMismatch) {
-		if len(data) >= ChecksumLen {
-			return Decode(data[:len(data)-ChecksumLen])
-		}
-		return nil, ErrPacketTooShort
+		return Decode(data)
 	}
 	return nil, err
 }
