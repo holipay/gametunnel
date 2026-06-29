@@ -19,23 +19,25 @@ const DataFlagHasToken byte = 0x02
 // Reserved for backward compatibility — receivers silently ignore this flag.
 const DataFlagHasFEC byte = 0x04
 
+// DataFormatVersion is the explicit format version byte written after dstIP
+// in the DataPayload wire format. Replaces the old isNewFormat heuristic.
+// 0x01 = current format: srcIP(4) + dstIP(4) + formatVer(1) + flags(1) + [token(16)] + data(N)
+// Old format (no formatVer): srcIP(4) + dstIP(4) + IPv4data(N)
+const DataFormatVersion byte = 0x01
+
 // DataPayload carries a relayed IP packet between client and server.
-// Wire format: srcIP(4) + dstIP(4) + flags(1) + data(N)
+// Wire format (v1.8+): srcIP(4) + dstIP(4) + formatVer(1) + flags(1) + [token(16)] + data(N)
+// Wire format (legacy): srcIP(4) + dstIP(4) + IPv4data(N)
 //
-// Flags:
-//
-//	0x00 = data is uncompressed (legacy compatible)
-//	0x01 = reserved (was LZ4-compressed, now unused)
-//
-// Backward compatibility: old clients send 8+N bytes (no flags). The
-// Unmarshal functions detect this by checking if len(data) > 8 and the
-// first byte after dstIP looks like a valid flags value vs. a valid
-// IP packet start (IPv4 version nibble = 0x4).
+// The formatVer byte (0x01) explicitly distinguishes new format from legacy
+// packets. Legacy packets have IPv4 data starting at byte 8 (version nibble
+// 0x4x-0xFx), which never collides with formatVer=0x01.
 type DataPayload struct {
-	SrcIP  net.IP
-	DstIP  net.IP
-	Flags  byte   // DataFlagCompressed etc.
-	Data   []byte
+	SrcIP     net.IP
+	DstIP     net.IP
+	FormatVer byte   // DataFormatVersion (0 = old format without version)
+	Flags     byte   // DataFlagHasToken etc.
+	Data      []byte
 }
 
 // dataPayloadPool reuses DataPayload objects to reduce GC pressure on the
@@ -56,6 +58,7 @@ func PutDataPayload(dp *DataPayload) {
 	dp.SrcIP = dp.SrcIP[:0]
 	dp.DstIP = dp.DstIP[:0]
 	dp.Data = dp.Data[:0]
+	dp.FormatVer = 0
 	dp.Flags = 0
 	dataPayloadPool.Put(dp)
 }
@@ -66,17 +69,18 @@ func (d *DataPayload) Marshal() []byte {
 	if src == nil || dst == nil {
 		return nil
 	}
-	buf := make([]byte, 9+len(d.Data))
+	buf := make([]byte, 10+len(d.Data))
 	copy(buf[0:4], src)
 	copy(buf[4:8], dst)
-	buf[8] = d.Flags
-	copy(buf[9:], d.Data)
+	buf[8] = DataFormatVersion
+	buf[9] = d.Flags
+	copy(buf[10:], d.Data)
 	return buf
 }
 
 // MarshalSize returns the encoded size of this DataPayload.
 func (d *DataPayload) MarshalSize() int {
-	return 9 + len(d.Data)
+	return 10 + len(d.Data)
 }
 
 // MarshalTo writes the encoded payload into dst (zero-copy).
@@ -84,13 +88,14 @@ func (d *DataPayload) MarshalSize() int {
 func (d *DataPayload) MarshalTo(dst []byte) int {
 	src := d.SrcIP.To4()
 	dstIP := d.DstIP.To4()
-	if src == nil || dstIP == nil || len(dst) < 9 {
+	if src == nil || dstIP == nil || len(dst) < 10 {
 		return 0
 	}
 	copy(dst[0:4], src)
 	copy(dst[4:8], dstIP)
-	dst[8] = d.Flags
-	return 9 + copy(dst[9:], d.Data)
+	dst[8] = DataFormatVersion
+	dst[9] = d.Flags
+	return 10 + copy(dst[10:], d.Data)
 }
 
 func UnmarshalData(data []byte) (*DataPayload, error) {
@@ -101,9 +106,11 @@ func UnmarshalData(data []byte) (*DataPayload, error) {
 		SrcIP: net.IP(append([]byte(nil), data[0:4]...)),
 		DstIP: net.IP(append([]byte(nil), data[4:8]...)),
 	}
-	if len(data) > 8 && isNewFormat(data[8]) {
-		dp.Flags = data[8]
-		offset := 9
+	if len(data) > 8 && data[8] == DataFormatVersion {
+		// New format: formatVer(1) + flags(1) + [token(16)] + data(N)
+		dp.FormatVer = data[8]
+		dp.Flags = data[9]
+		offset := 10
 		if dp.Flags&DataFlagHasToken != 0 {
 			offset += 16
 		}
@@ -115,6 +122,7 @@ func UnmarshalData(data []byte) (*DataPayload, error) {
 		copy(pktData, data[offset:])
 		dp.Data = pktData
 	} else {
+		// Old format (legacy): raw IPv4 data directly after dstIP
 		pktData := make([]byte, len(data)-8)
 		copy(pktData, data[8:])
 		dp.Data = pktData
@@ -141,9 +149,11 @@ func UnmarshalDataPooled(data []byte) (*DataPayload, error) {
 	}
 	copy(dp.SrcIP, data[0:4])
 	copy(dp.DstIP, data[4:8])
-	if len(data) > 8 && isNewFormat(data[8]) {
-		dp.Flags = data[8]
-		offset := 9
+	if len(data) > 8 && data[8] == DataFormatVersion {
+		// New format: formatVer(1) + flags(1) + [token(16)] + data(N)
+		dp.FormatVer = data[8]
+		dp.Flags = data[9]
+		offset := 10
 		if dp.Flags&DataFlagHasToken != 0 {
 			offset += 16
 		}
@@ -159,7 +169,8 @@ func UnmarshalDataPooled(data []byte) (*DataPayload, error) {
 		}
 		copy(dp.Data, rawData)
 	} else {
-		dp.Flags = 0
+		dp.FormatVer = 0
+	dp.Flags = 0
 		dataLen := len(data) - 8
 		if cap(dp.Data) < dataLen {
 			dp.Data = make([]byte, dataLen)
@@ -171,12 +182,4 @@ func UnmarshalDataPooled(data []byte) (*DataPayload, error) {
 	return dp, nil
 }
 
-// isNewFormat returns true if the byte looks like a flags byte (0x00-0x07)
-// rather than an IPv4 version nibble (0x45-0x4F).
-// This is the backward-compatibility heuristic for detecting old vs new format.
-// IMPORTANT: Flags values 0x00-0x07 are valid. Values 0x08-0xFF are reserved to
-// avoid collision with old-format IPv4 headers (0x4x-0xFx).
-func isNewFormat(b byte) bool {
-	return b <= 0x07
-}
 
