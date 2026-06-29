@@ -73,16 +73,16 @@ func (p *Peer) tryRateLimitHolePunch(backoff time.Duration) bool {
 }
 
 // TunDevice abstracts the TUN device for testability and platform independence.
+// All TUN implementations must provide device info, route management, and
+// basic I/O. This ensures consistent behavior across platforms.
 type TunDevice interface {
 	Read(buf []byte) (int, error)
 	Write(data []byte) (int, error)
 	Close() error
-}
-
-// RouteConfigurator is an optional interface for TUN devices that support
-// reconfiguring routes without recreation. Used on reconnect to re-apply
-// routes that may have been modified by the OS during disconnection.
-type RouteConfigurator interface {
+	Name() string
+	MTU() int
+	// ReconfigureRoutes re-applies routes without recreating the device.
+	// Called on reconnect to fix routes that may have been modified by the OS.
 	ReconfigureRoutes()
 }
 
@@ -389,9 +389,7 @@ func (t *Tunnel) ensureTUN(mtu int) error {
 	case tunAlive && !ipChanged:
 		log.Printf("%s", i18n.Format(i18n.T().LogReuseTUN, t.virtualIP))
 		if v := t.tunDev.Load(); v != nil {
-			if rc, ok := v.(RouteConfigurator); ok {
-				rc.ReconfigureRoutes()
-			}
+			v.(TunDevice).ReconfigureRoutes()
 		}
 
 	case tunAlive && ipChanged:
