@@ -38,6 +38,7 @@ type Server struct {
 	lang       i18n.Lang
 	startTime  time.Time
 	ctx        context.Context // stored for use in packet handlers
+	cancelCtx  context.CancelFunc // cancels ctx on Close()
 
 	// Worker pool
 	workers int
@@ -184,11 +185,13 @@ func New(cfg Config) (*Server, error) {
 	tcpWrite := func(addr *net.UDPAddr, data []byte) bool {
 		key := addrToRateKey(addr)
 		if b, ok := s.tcpBridges.Load(key); ok {
-			bridge := b.(*netutil.UDPTCPBridge)
-			if err := bridge.Send(data); err != nil {
-				log.Printf("[server] tcp bridge send error: %v", err)
+			if bridge, ok := b.(*netutil.UDPTCPBridge); ok {
+				if err := bridge.Send(data); err != nil {
+					log.Printf("[server] tcp bridge send error: %v", err)
+				}
+				return true
 			}
-			return true
+			return false // sentinel ("reserved") — bridge not ready yet
 		}
 		return false
 	}
@@ -241,7 +244,7 @@ func New(cfg Config) (*Server, error) {
 
 // Run starts the server and blocks until ctx is cancelled.
 func (s *Server) Run(ctx context.Context) {
-	s.ctx = ctx
+	s.ctx, s.cancelCtx = context.WithCancel(ctx)
 	s.startStatusServer(ctx, s.statusAddr)
 	go s.keepaliveLoop(ctx)
 	go s.rateLimitLoop(ctx)
@@ -304,6 +307,11 @@ func (s *Server) Run(ctx context.Context) {
 // Close shuts down the server and all room background goroutines.
 // Sends disconnect notifications to all connected clients before closing.
 func (s *Server) Close() error {
+	// Cancel context to signal all goroutines to exit
+	if s.cancelCtx != nil {
+		s.cancelCtx()
+	}
+
 	// Notify all clients before shutting down
 	s.roomMu.RLock()
 	for _, room := range s.rooms {
@@ -532,36 +540,28 @@ func (s *Server) tcpAcceptLoop(ctx context.Context) {
 
 		// Assign a unique port for this TCP client so its synthetic
 		// address is distinct in rateKey/addrMap lookups.
-		port := int(s.tcpPortCounter.Add(1) % 65536)
-		if port == 0 {
-			port = 1
-		}
-		// Retry on collision (counter wrap-around after 65536 connections).
+		// Create bridge first, then atomically register it to avoid TOCTOU.
+		var bridge *netutil.UDPTCPBridge
+		var key rateKey
+		var port int
 		for {
-			syntheticAddr := &net.UDPAddr{
-				IP:   net.IPv4(127, 0, 0, 254),
-				Port: port,
-			}
-			key := addrToRateKey(syntheticAddr)
-			if _, loaded := s.tcpBridges.LoadOrStore(key, nil); !loaded {
-				s.tcpBridges.Delete(key) // we just checked, real Store happens later
-				break
-			}
 			port = int(s.tcpPortCounter.Add(1) % 65536)
 			if port == 0 {
 				port = 1
 			}
+			syntheticAddr := &net.UDPAddr{
+				IP:   net.IPv4(127, 0, 0, 254),
+				Port: port,
+			}
+			key = addrToRateKey(syntheticAddr)
+			candidate := netutil.NewUDPTCPBridge(tcp, syntheticAddr)
+			if _, loaded := s.tcpBridges.LoadOrStore(key, candidate); !loaded {
+				bridge = candidate
+				break
+			}
+			// Collision — try next port.
+			candidate.Stop()
 		}
-		syntheticAddr := &net.UDPAddr{
-			IP:   net.IPv4(127, 0, 0, 254),
-			Port: port,
-		}
-
-		bridge := netutil.NewUDPTCPBridge(tcp, syntheticAddr)
-
-		// Register bridge so outgoing packets are routed via TCP
-		key := addrToRateKey(syntheticAddr)
-		s.tcpBridges.Store(key, bridge)
 
 		// Handle TCP packets in a goroutine
 		go func() {

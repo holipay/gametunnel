@@ -125,15 +125,16 @@ func TestRoutePacket_Broadcast(t *testing.T) {
 	tunnel, serverConn := newTestTunnel(t)
 
 	tunnel.serverIP = net.IPv4(10, 0, 0, 1).To4()
-	tunnel.serverIPKey = ipKey(tunnel.serverIP)
-	tunnel.cachedSubnet = &net.IPNet{
+	tunnel.serverIPKey.Store(ipKey(tunnel.serverIP))
+	tunnel.cachedSubnet.Store(&net.IPNet{
 		IP:   net.IPv4(10, 0, 0, 0).To4(),
 		Mask: net.CIDRMask(24, 32),
-	}
+	})
 
 	pkt := []byte{0x45, 0, 0, 20, 0, 0, 0, 0, 64, 17, 0, 0, 10, 0, 0, 2, 255, 255, 255, 255}
-	srcIP := net.IPv4(10, 0, 0, 2).To4()
-	dstIP := net.IPv4(255, 255, 255, 255).To4()
+	var srcIP, dstIP [4]byte
+	copy(srcIP[:], net.IPv4(10, 0, 0, 2).To4())
+	copy(dstIP[:], net.IPv4(255, 255, 255, 255).To4())
 
 	go tunnel.routePacket(pkt, srcIP, dstIP)
 
@@ -164,12 +165,14 @@ func TestRoutePacket_ServerIP(t *testing.T) {
 
 	serverIP := net.IPv4(10, 0, 0, 1).To4()
 	tunnel.serverIP = serverIP
-	tunnel.serverIPKey = ipKey(serverIP)
+	tunnel.serverIPKey.Store(ipKey(serverIP))
 
 	pkt := []byte{0x45, 0, 0, 20}
-	srcIP := net.IPv4(10, 0, 0, 2).To4()
+	var srcIP, dstIP [4]byte
+	copy(srcIP[:], net.IPv4(10, 0, 0, 2).To4())
+	copy(dstIP[:], serverIP)
 
-	go tunnel.routePacket(pkt, srcIP, serverIP)
+	go tunnel.routePacket(pkt, srcIP, dstIP)
 
 	data := readUDPWithTimeout(serverConn, 2*time.Second)
 	if data == nil {
@@ -205,15 +208,15 @@ func TestRoutePacket_PeerP2P(t *testing.T) {
 
 	serverIP := net.IPv4(10, 0, 0, 1).To4()
 	tunnel.serverIP = serverIP
-	tunnel.serverIPKey = ipKey(serverIP)
+	tunnel.serverIPKey.Store(ipKey(serverIP))
 
 	peerIP := net.IPv4(10, 0, 0, 3).To4()
 	peerAddr := peerConn.LocalAddr().(*net.UDPAddr)
 	peer := &Peer{
 		VirtualIP:  peerIP,
-		PublicAddr: peerAddr,
 		Username:   "peer1",
 	}
+	peer.PublicAddr.Store(peerAddr)
 	peer.DirectReach.Store(true)
 	tunnel.peers = map[[16]byte]*Peer{
 		ipKey(peerIP): peer,
@@ -221,8 +224,11 @@ func TestRoutePacket_PeerP2P(t *testing.T) {
 
 	pkt := []byte{0x45, 0, 0, 20}
 	srcIP := net.IPv4(10, 0, 0, 2).To4()
+	var srcIP4, dstIP4 [4]byte
+	copy(srcIP4[:], srcIP)
+	copy(dstIP4[:], peerIP)
 
-	go tunnel.routePacket(pkt, srcIP, peerIP)
+	go tunnel.routePacket(pkt, srcIP4, dstIP4)
 
 	// Peer should receive the packet
 	peerData := readUDPWithTimeout(peerConn, 2*time.Second)
@@ -265,22 +271,25 @@ func TestRoutePacket_PeerNilAddr(t *testing.T) {
 
 	serverIP := net.IPv4(10, 0, 0, 1).To4()
 	tunnel.serverIP = serverIP
-	tunnel.serverIPKey = ipKey(serverIP)
+	tunnel.serverIPKey.Store(ipKey(serverIP))
 
 	// Peer exists but has no PublicAddr (hole punch not yet completed)
 	peerIP := net.IPv4(10, 0, 0, 3).To4()
+	peer := &Peer{
+		VirtualIP:  peerIP,
+		Username:   "peer1",
+	}
 	tunnel.peers = map[[16]byte]*Peer{
-		ipKey(peerIP): {
-			VirtualIP:  peerIP,
-			PublicAddr: nil,
-			Username:   "peer1",
-		},
+		ipKey(peerIP): peer,
 	}
 
 	pkt := []byte{0x45, 0, 0, 20}
 	srcIP := net.IPv4(10, 0, 0, 2).To4()
+	var srcIP4, dstIP4 [4]byte
+	copy(srcIP4[:], srcIP)
+	copy(dstIP4[:], peerIP)
 
-	go tunnel.routePacket(pkt, srcIP, peerIP)
+	go tunnel.routePacket(pkt, srcIP4, dstIP4)
 
 	// Should fall back to server relay
 	data := readUDPWithTimeout(serverConn, 2*time.Second)
@@ -302,13 +311,16 @@ func TestRoutePacket_UnknownIP(t *testing.T) {
 
 	serverIP := net.IPv4(10, 0, 0, 1).To4()
 	tunnel.serverIP = serverIP
-	tunnel.serverIPKey = ipKey(serverIP)
+	tunnel.serverIPKey.Store(ipKey(serverIP))
 
 	pkt := []byte{0x45, 0, 0, 20}
 	srcIP := net.IPv4(10, 0, 0, 2).To4()
 	dstIP := net.IPv4(10, 0, 0, 99).To4() // unknown IP, not in peers
+	var srcIP4, dstIP4 [4]byte
+	copy(srcIP4[:], srcIP)
+	copy(dstIP4[:], dstIP)
 
-	go tunnel.routePacket(pkt, srcIP, dstIP)
+	go tunnel.routePacket(pkt, srcIP4, dstIP4)
 
 	data := readUDPWithTimeout(serverConn, 2*time.Second)
 	if data == nil {
@@ -372,8 +384,8 @@ func TestHandlePeerInfo_NewPlayer(t *testing.T) {
 	if !peer.VirtualIP.Equal(peerIP) {
 		t.Errorf("expected VirtualIP %s, got %s", peerIP, peer.VirtualIP)
 	}
-	if peer.PublicAddr.String() != peerAddr.String() {
-		t.Errorf("expected PublicAddr %s, got %s", peerAddr, peer.PublicAddr)
+	if peer.PublicAddr.Load().String() != peerAddr.String() {
+		t.Errorf("expected PublicAddr %s, got %s", peerAddr, peer.PublicAddr.Load())
 	}
 
 	// Allow startHolePunch goroutine to start
@@ -388,12 +400,13 @@ func TestHandlePeerInfo_UpdatePlayer(t *testing.T) {
 	newAddr := &net.UDPAddr{IP: net.IPv4(5, 6, 7, 8), Port: 2000}
 
 	// Pre-populate peers
+	existingPeer := &Peer{
+		VirtualIP:  peerIP,
+		Username:   "player1",
+	}
+	existingPeer.PublicAddr.Store(oldAddr)
 	tunnel.peers = map[[16]byte]*Peer{
-		ipKey(peerIP): {
-			VirtualIP:  peerIP,
-			PublicAddr: oldAddr,
-			Username:   "player1",
-		},
+		ipKey(peerIP): existingPeer,
 	}
 
 	payload := &protocol.PeerInfoPayload{
@@ -415,8 +428,8 @@ func TestHandlePeerInfo_UpdatePlayer(t *testing.T) {
 	if !ok {
 		t.Fatal("expected peer to still be in peers map")
 	}
-	if peer.PublicAddr.String() != newAddr.String() {
-		t.Errorf("expected PublicAddr %s, got %s", newAddr, peer.PublicAddr)
+	if peer.PublicAddr.Load().String() != newAddr.String() {
+		t.Errorf("expected PublicAddr %s, got %s", newAddr, peer.PublicAddr.Load())
 	}
 	if peer.Username != "player1" {
 		t.Errorf("expected Username 'player1', got '%s'", peer.Username)
@@ -430,17 +443,19 @@ func TestHandlePeerInfo_PlayerLeaving(t *testing.T) {
 	peer2IP := net.IPv4(10, 0, 0, 6).To4()
 
 	// Pre-populate with two peers
+	player1 := &Peer{
+		VirtualIP:  peer1IP,
+		Username:   "player1",
+	}
+	player1.PublicAddr.Store(&net.UDPAddr{IP: net.IPv4(1, 2, 3, 4), Port: 1000})
+	player2 := &Peer{
+		VirtualIP:  peer2IP,
+		Username:   "player2",
+	}
+	player2.PublicAddr.Store(&net.UDPAddr{IP: net.IPv4(5, 6, 7, 8), Port: 2000})
 	tunnel.peers = map[[16]byte]*Peer{
-		ipKey(peer1IP): {
-			VirtualIP:  peer1IP,
-			PublicAddr: &net.UDPAddr{IP: net.IPv4(1, 2, 3, 4), Port: 1000},
-			Username:   "player1",
-		},
-		ipKey(peer2IP): {
-			VirtualIP:  peer2IP,
-			PublicAddr: &net.UDPAddr{IP: net.IPv4(5, 6, 7, 8), Port: 2000},
-			Username:   "player2",
-		},
+		ipKey(peer1IP): player1,
+		ipKey(peer2IP): player2,
 	}
 
 	// Server sends updated list containing only peer2; peer1 has left
@@ -473,12 +488,13 @@ func TestHandlePeerInfo_EmptyList(t *testing.T) {
 	tunnel, _ := newTestTunnel(t)
 
 	peerIP := net.IPv4(10, 0, 0, 5).To4()
+	player := &Peer{
+		VirtualIP:  peerIP,
+		Username:   "player1",
+	}
+	player.PublicAddr.Store(&net.UDPAddr{IP: net.IPv4(1, 2, 3, 4), Port: 1000})
 	tunnel.peers = map[[16]byte]*Peer{
-		ipKey(peerIP): {
-			VirtualIP:  peerIP,
-			PublicAddr: &net.UDPAddr{IP: net.IPv4(1, 2, 3, 4), Port: 1000},
-			Username:   "player1",
-		},
+		ipKey(peerIP): player,
 	}
 
 	// Server sends empty peer list
@@ -797,10 +813,10 @@ func TestHandleDataFromServer(t *testing.T) {
 
 	serverIP := net.IPv4(10, 0, 0, 1).To4()
 	tunnel.serverIP = serverIP
-	tunnel.serverIPKey = ipKey(serverIP)
+	tunnel.serverIPKey.Store(ipKey(serverIP))
 
 	mock := &mockTunDevice{}
-	tunnel.tunDev = mock
+	tunnel.tunDev.Store(mock)
 
 	dp := &protocol.DataPayload{
 		SrcIP: net.IPv4(10, 0, 0, 1).To4(),
@@ -822,7 +838,7 @@ func TestHandleDataFromServer_EmptyData(t *testing.T) {
 	tunnel, _ := newTestTunnel(t)
 
 	mock := &mockTunDevice{}
-	tunnel.tunDev = mock
+	tunnel.tunDev.Store(mock)
 
 	dp := &protocol.DataPayload{
 		SrcIP: net.IPv4(10, 0, 0, 1).To4(),
@@ -840,7 +856,7 @@ func TestHandleDataFromServer_EmptyData(t *testing.T) {
 
 func TestHandleDataFromServer_NilTunDev(t *testing.T) {
 	tunnel, _ := newTestTunnel(t)
-	tunnel.tunDev = nil // no TUN device
+	// no TUN device — tunDev starts empty (Load() returns nil)
 
 	dp := &protocol.DataPayload{
 		SrcIP: net.IPv4(10, 0, 0, 1).To4(),
@@ -916,8 +932,8 @@ func TestHandlePeerInfo_IPv6PublicAddr(t *testing.T) {
 	if !ok {
 		t.Fatal("expected peer to be added")
 	}
-	if peer.PublicAddr.String() != ipv6Addr.String() {
-		t.Errorf("expected PublicAddr %s, got %s", ipv6Addr, peer.PublicAddr)
+	if peer.PublicAddr.Load().String() != ipv6Addr.String() {
+		t.Errorf("expected PublicAddr %s, got %s", ipv6Addr, peer.PublicAddr.Load())
 	}
 	if peer.Username != "ipv6peer" {
 		t.Errorf("expected username 'ipv6peer', got '%s'", peer.Username)
@@ -963,11 +979,9 @@ func TestHandleHolePunchReceived(t *testing.T) {
 	peerAddr := &net.UDPAddr{IP: net.IPv4(1, 2, 3, 4), Port: 12345}
 
 	tunnel.mu.Lock()
-	tunnel.peers[ipKey(peerIP)] = &Peer{
-		VirtualIP:  peerIP,
-		PublicAddr: peerAddr,
-		Username:   "peer1",
-	}
+	hpPeer := &Peer{VirtualIP: peerIP, Username: "peer1"}
+	hpPeer.PublicAddr.Store(peerAddr)
+	tunnel.peers[ipKey(peerIP)] = hpPeer
 	tunnel.mu.Unlock()
 
 	// Build hole punch payload: 4 bytes virtual IP
@@ -1008,9 +1022,9 @@ func TestCleanStalePeers(t *testing.T) {
 	oldTime := time.Now().Add(-2 * time.Minute) // 2 minutes ago (> 90s grace period)
 	peer := &Peer{
 		VirtualIP:  peerIP,
-		PublicAddr: &net.UDPAddr{IP: net.IPv4(1, 2, 3, 4), Port: 12345},
 		Username:   "stale",
 	}
+	peer.PublicAddr.Store(&net.UDPAddr{IP: net.IPv4(1, 2, 3, 4), Port: 12345})
 	peer.lastSeen.Store(oldTime.UnixNano())
 
 	tunnel.mu.Lock()
@@ -1035,9 +1049,9 @@ func TestCleanStalePeers_KeepsRecent(t *testing.T) {
 	recentTime := time.Now().Add(-10 * time.Second) // 10 seconds ago (< 90s grace period)
 	peer := &Peer{
 		VirtualIP:  peerIP,
-		PublicAddr: &net.UDPAddr{IP: net.IPv4(1, 2, 3, 4), Port: 12345},
 		Username:   "recent",
 	}
+	peer.PublicAddr.Store(&net.UDPAddr{IP: net.IPv4(1, 2, 3, 4), Port: 12345})
 	peer.lastSeen.Store(recentTime.UnixNano())
 
 	tunnel.mu.Lock()
@@ -1059,7 +1073,7 @@ func TestCleanStalePeers_KeepsRecent(t *testing.T) {
 
 func TestDecryptWriteAndRelease_NilTunDev(t *testing.T) {
 	tunnel, _ := newTestTunnel(t)
-	tunnel.tunDev = nil
+	// no TUN device — tunDev starts empty (Load() returns nil)
 
 	dp := &protocol.DataPayload{
 		SrcIP: net.IPv4(10, 0, 0, 1).To4(),
@@ -1074,7 +1088,7 @@ func TestDecryptWriteAndRelease_NilTunDev(t *testing.T) {
 func TestDecryptWriteAndRelease_NoCipher(t *testing.T) {
 	tunnel, _ := newTestTunnel(t)
 	mock := &mockTunDevice{}
-	tunnel.tunDev = mock
+	tunnel.tunDev.Store(mock)
 
 	dp := &protocol.DataPayload{
 		SrcIP: net.IPv4(10, 0, 0, 1).To4(),
@@ -1095,7 +1109,7 @@ func TestDecryptWriteAndRelease_NoCipher(t *testing.T) {
 func TestHandleDirectData_UnknownPeer(t *testing.T) {
 	tunnel, _ := newTestTunnel(t)
 	mock := &mockTunDevice{}
-	tunnel.tunDev = mock
+	tunnel.tunDev.Store(mock)
 
 	// Unknown peer
 	peerIP := net.IPv4(10, 0, 0, 99).To4()
@@ -1123,7 +1137,7 @@ func TestHandleDirectData_UnknownPeer(t *testing.T) {
 func TestHandleDirectData_WrongAddress(t *testing.T) {
 	tunnel, _ := newTestTunnel(t)
 	mock := &mockTunDevice{}
-	tunnel.tunDev = mock
+	tunnel.tunDev.Store(mock)
 
 	peerIP := net.IPv4(10, 0, 0, 5).To4()
 	correctAddr := &net.UDPAddr{IP: net.IPv4(1, 2, 3, 4), Port: 12345}
@@ -1131,11 +1145,9 @@ func TestHandleDirectData_WrongAddress(t *testing.T) {
 	wrongPort := &net.UDPAddr{IP: net.IPv4(1, 2, 3, 4), Port: 9999}
 
 	tunnel.mu.Lock()
-	tunnel.peers[ipKey(peerIP)] = &Peer{
-		VirtualIP:  peerIP,
-		PublicAddr: correctAddr,
-		Username:   "peer1",
-	}
+	wdPeer := &Peer{VirtualIP: peerIP, Username: "peer1"}
+	wdPeer.PublicAddr.Store(correctAddr)
+	tunnel.peers[ipKey(peerIP)] = wdPeer
 	tunnel.mu.Unlock()
 
 	dp := &protocol.DataPayload{
@@ -1163,11 +1175,11 @@ func TestHandleDirectData_WrongAddress(t *testing.T) {
 func TestHandleDataFromServer_UnknownSrcIP(t *testing.T) {
 	tunnel, _ := newTestTunnel(t)
 	mock := &mockTunDevice{}
-	tunnel.tunDev = mock
+	tunnel.tunDev.Store(mock)
 
 	serverIP := net.IPv4(10, 0, 0, 1).To4()
 	tunnel.serverIP = serverIP
-	tunnel.serverIPKey = ipKey(serverIP)
+	tunnel.serverIPKey.Store(ipKey(serverIP))
 
 	// Unknown srcIP (not server, not peer)
 	unknownIP := net.IPv4(99, 99, 99, 99).To4()
@@ -1215,9 +1227,9 @@ func TestHasDirectPeerTraffic_DirectReach(t *testing.T) {
 	peerIP := net.IPv4(10, 0, 0, 5).To4()
 	peer := &Peer{
 		VirtualIP:  peerIP,
-		PublicAddr: &net.UDPAddr{IP: net.IPv4(1, 2, 3, 4), Port: 12345},
 		Username:   "peer1",
 	}
+	peer.PublicAddr.Store(&net.UDPAddr{IP: net.IPv4(1, 2, 3, 4), Port: 12345})
 	peer.DirectReach.Store(true)
 
 	tunnel.mu.Lock()
@@ -1235,9 +1247,9 @@ func TestHasDirectPeerTraffic_NoDirectReach(t *testing.T) {
 	peerIP := net.IPv4(10, 0, 0, 5).To4()
 	peer := &Peer{
 		VirtualIP:  peerIP,
-		PublicAddr: &net.UDPAddr{IP: net.IPv4(1, 2, 3, 4), Port: 12345},
 		Username:   "peer1",
 	}
+	peer.PublicAddr.Store(&net.UDPAddr{IP: net.IPv4(1, 2, 3, 4), Port: 12345})
 
 	tunnel.mu.Lock()
 	tunnel.peers[ipKey(peerIP)] = peer
@@ -1275,14 +1287,14 @@ func TestSendP2PKeepalives_WithDirectPeers(t *testing.T) {
 
 	peer := &Peer{
 		VirtualIP:  peerIP,
-		PublicAddr: peerAddr,
 		Username:   "peer1",
 	}
+	peer.PublicAddr.Store(peerAddr)
 	peer.DirectReach.Store(true)
 
 	tunnel.mu.Lock()
 	tunnel.peers[ipKey(peerIP)] = peer
-	tunnel.cachedPunchPacket = protocol.EncodeChecked(protocol.TypeHolePunch, tunnel.virtualIP.To4())
+	tunnel.cachedPunchPacket.Store(protocol.EncodeChecked(protocol.TypeHolePunch, tunnel.virtualIP.To4()))
 	tunnel.mu.Unlock()
 
 	// Should not panic
@@ -1294,7 +1306,7 @@ func TestSendP2PKeepalives_WithDirectPeers(t *testing.T) {
 func TestTunnelStatus_Connected(t *testing.T) {
 	tunnel, _ := newTestTunnel(t)
 	mock := &mockTunDevice{}
-	tunnel.tunDev = mock
+	tunnel.tunDev.Store(mock)
 	tunnel.virtualIP = net.IPv4(10, 10, 0, 2).To4()
 	tunnel.subnetMask = net.CIDRMask(24, 32)
 	tunnel.serverIP = net.IPv4(10, 10, 0, 1).To4()
@@ -1325,7 +1337,7 @@ func TestTunnelStatus_Disconnected(t *testing.T) {
 func TestTunnelStatus_WithPeers(t *testing.T) {
 	tunnel, _ := newTestTunnel(t)
 	mock := &mockTunDevice{}
-	tunnel.tunDev = mock
+	tunnel.tunDev.Store(mock)
 	tunnel.virtualIP = net.IPv4(10, 10, 0, 2).To4()
 
 	// Add P2P peer
@@ -1360,9 +1372,9 @@ func TestTunnelStatus_WithPeers(t *testing.T) {
 func TestTunnelStatus_ServerVersion(t *testing.T) {
 	tunnel, _ := newTestTunnel(t)
 	mock := &mockTunDevice{}
-	tunnel.tunDev = mock
+	tunnel.tunDev.Store(mock)
 	tunnel.virtualIP = net.IPv4(10, 10, 0, 2).To4()
-	tunnel.serverVersion = 0x0102 // v1.2
+	tunnel.serverVersion.Store(0x0102) // v1.2
 
 	status := tunnel.Status()
 
@@ -1374,9 +1386,9 @@ func TestTunnelStatus_ServerVersion(t *testing.T) {
 func TestTunnelStatus_ServerVersionZero(t *testing.T) {
 	tunnel, _ := newTestTunnel(t)
 	mock := &mockTunDevice{}
-	tunnel.tunDev = mock
+	tunnel.tunDev.Store(mock)
 	tunnel.virtualIP = net.IPv4(10, 10, 0, 2).To4()
-	tunnel.serverVersion = 0 // old server
+	tunnel.serverVersion.Store(0) // old server
 
 	status := tunnel.Status()
 
@@ -1400,8 +1412,8 @@ func TestHandleAssignIP_StoresVersion(t *testing.T) {
 		t.Fatalf("handleAssignIP failed: %v", err)
 	}
 
-	if tunnel.serverVersion != protocol.AppVersion {
-		t.Errorf("serverVersion: got 0x%04x, want 0x%04x", tunnel.serverVersion, protocol.AppVersion)
+	if 	tunnel.serverVersion.Load() != uint32(protocol.AppVersion) {
+		t.Errorf("serverVersion: got 0x%04x, want 0x%04x", tunnel.serverVersion.Load(), protocol.AppVersion)
 	}
 }
 
@@ -1426,16 +1438,13 @@ func TestVirtualIP(t *testing.T) {
 func TestCloseTUN(t *testing.T) {
 	tunnel, _ := newTestTunnel(t)
 	mock := &mockTunDevice{}
-	tunnel.tunDev = mock
+	tunnel.tunDev.Store(mock)
 	tunnel.lastAssignedIP = net.IPv4(10, 10, 0, 2).To4()
 
 	tunnel.CloseTUN()
 
 	if !mock.closed {
 		t.Error("expected TUN device to be closed")
-	}
-	if tunnel.tunDev != nil {
-		t.Error("expected tunDev to be nil")
 	}
 	if tunnel.lastAssignedIP != nil {
 		t.Error("expected lastAssignedIP to be nil")
@@ -1444,7 +1453,7 @@ func TestCloseTUN(t *testing.T) {
 
 func TestCloseTUN_NilDevice(t *testing.T) {
 	tunnel, _ := newTestTunnel(t)
-	tunnel.tunDev = nil
+	// tunDev starts empty (Load() returns nil)
 
 	// Should not panic
 	tunnel.CloseTUN()
@@ -1455,7 +1464,7 @@ func TestCloseTUN_NilDevice(t *testing.T) {
 func TestDisconnect(t *testing.T) {
 	tunnel, _ := newTestTunnel(t)
 	mock := &mockTunDevice{}
-	tunnel.tunDev = mock
+	tunnel.tunDev.Store(mock)
 	tunnel.serverAddr.Store(&net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 4700})
 
 	tunnel.Disconnect()
@@ -1669,7 +1678,7 @@ func TestSendLoop_CtrlPriority(t *testing.T) {
 func TestHandleDirectData_NonTypeData(t *testing.T) {
 	tunnel, _ := newTestTunnel(t)
 	mock := &mockTunDevice{}
-	tunnel.tunDev = mock
+	tunnel.tunDev.Store(mock)
 
 	fromAddr := &net.UDPAddr{IP: net.IPv4(1, 2, 3, 4), Port: 12345}
 
@@ -1688,7 +1697,7 @@ func TestHandleDirectData_NonTypeData(t *testing.T) {
 func TestHandleDirectData_EmptyPayload(t *testing.T) {
 	tunnel, _ := newTestTunnel(t)
 	mock := &mockTunDevice{}
-	tunnel.tunDev = mock
+	tunnel.tunDev.Store(mock)
 
 	fromAddr := &net.UDPAddr{IP: net.IPv4(1, 2, 3, 4), Port: 12345}
 
@@ -1827,13 +1836,13 @@ func TestStartHolePunch_ContextCancel(t *testing.T) {
 	peerIP := net.IPv4(10, 0, 0, 5).To4()
 	peer := &Peer{
 		VirtualIP:  peerIP,
-		PublicAddr: &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 12345},
 		Username:   "peer1",
 	}
+	peer.PublicAddr.Store(&net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 12345})
 
 	tunnel.mu.Lock()
 	tunnel.peers[ipKey(peerIP)] = peer
-	tunnel.cachedPunchPacket = protocol.EncodeChecked(protocol.TypeHolePunch, tunnel.virtualIP.To4())
+	tunnel.cachedPunchPacket.Store(protocol.EncodeChecked(protocol.TypeHolePunch, tunnel.virtualIP.To4()))
 	tunnel.mu.Unlock()
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -1872,14 +1881,14 @@ func TestRetryFailedHolePunches_WithPeers(t *testing.T) {
 	peerIP := net.IPv4(10, 0, 0, 5).To4()
 	peer := &Peer{
 		VirtualIP:  peerIP,
-		PublicAddr: &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 12345},
 		Username:   "peer1",
 	}
+	peer.PublicAddr.Store(&net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 12345})
 	// DirectReach is false by default
 
 	tunnel.mu.Lock()
 	tunnel.peers[ipKey(peerIP)] = peer
-	tunnel.cachedPunchPacket = protocol.EncodeChecked(protocol.TypeHolePunch, tunnel.virtualIP.To4())
+	tunnel.cachedPunchPacket.Store(protocol.EncodeChecked(protocol.TypeHolePunch, tunnel.virtualIP.To4()))
 	tunnel.mu.Unlock()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
@@ -1894,23 +1903,26 @@ func TestRetryFailedHolePunches_WithPeers(t *testing.T) {
 func TestRoutePacket_BroadcastToServer(t *testing.T) {
 	tunnel, serverConn := newTestTunnel(t)
 	mock := &mockTunDevice{}
-	tunnel.tunDev = mock
+	tunnel.tunDev.Store(mock)
 	tunnel.virtualIP = net.IPv4(10, 10, 0, 2).To4()
 	tunnel.subnetMask = net.CIDRMask(24, 32)
 	tunnel.serverIP = net.IPv4(10, 10, 0, 1).To4()
-	tunnel.serverIPKey = ipKey(tunnel.serverIP)
-	tunnel.cachedSubnet = &net.IPNet{
+	tunnel.serverIPKey.Store(ipKey(tunnel.serverIP))
+	tunnel.cachedSubnet.Store(&net.IPNet{
 		IP:   tunnel.virtualIP.Mask(tunnel.subnetMask),
 		Mask: tunnel.subnetMask,
-	}
+	})
 
 	// Broadcast packet (255.255.255.255)
 	pkt := make([]byte, 20)
 	pkt[0] = 0x45 // IPv4
 	srcIP := net.IPv4(10, 10, 0, 2).To4()
 	dstIP := net.IPv4(255, 255, 255, 255).To4()
+	var srcIP4, dstIP4 [4]byte
+	copy(srcIP4[:], srcIP)
+	copy(dstIP4[:], dstIP)
 
-	tunnel.routePacket(pkt, srcIP, dstIP)
+	tunnel.routePacket(pkt, srcIP4, dstIP4)
 
 	// Should have sent to server
 	pkt2 := readUDPWithTimeout(serverConn, 100*time.Millisecond)
@@ -1922,23 +1934,26 @@ func TestRoutePacket_BroadcastToServer(t *testing.T) {
 func TestRoutePacket_UnicastToServer(t *testing.T) {
 	tunnel, serverConn := newTestTunnel(t)
 	mock := &mockTunDevice{}
-	tunnel.tunDev = mock
+	tunnel.tunDev.Store(mock)
 	tunnel.virtualIP = net.IPv4(10, 10, 0, 2).To4()
 	tunnel.subnetMask = net.CIDRMask(24, 32)
 	tunnel.serverIP = net.IPv4(10, 10, 0, 1).To4()
-	tunnel.serverIPKey = ipKey(tunnel.serverIP)
-	tunnel.cachedSubnet = &net.IPNet{
+	tunnel.serverIPKey.Store(ipKey(tunnel.serverIP))
+	tunnel.cachedSubnet.Store(&net.IPNet{
 		IP:   tunnel.virtualIP.Mask(tunnel.subnetMask),
 		Mask: tunnel.subnetMask,
-	}
+	})
 
 	// Unicast to server
 	pkt := make([]byte, 20)
 	pkt[0] = 0x45
 	srcIP := net.IPv4(10, 10, 0, 2).To4()
 	dstIP := net.IPv4(10, 10, 0, 1).To4() // server IP
+	var srcIP4, dstIP4 [4]byte
+	copy(srcIP4[:], srcIP)
+	copy(dstIP4[:], dstIP)
 
-	tunnel.routePacket(pkt, srcIP, dstIP)
+	tunnel.routePacket(pkt, srcIP4, dstIP4)
 
 	pkt2 := readUDPWithTimeout(serverConn, 100*time.Millisecond)
 	if pkt2 == nil {
@@ -1949,23 +1964,23 @@ func TestRoutePacket_UnicastToServer(t *testing.T) {
 func TestRoutePacket_PeerFallbackToRelay(t *testing.T) {
 	tunnel, serverConn := newTestTunnel(t)
 	mock := &mockTunDevice{}
-	tunnel.tunDev = mock
+	tunnel.tunDev.Store(mock)
 	tunnel.virtualIP = net.IPv4(10, 10, 0, 2).To4()
 	tunnel.subnetMask = net.CIDRMask(24, 32)
 	tunnel.serverIP = net.IPv4(10, 10, 0, 1).To4()
-	tunnel.serverIPKey = ipKey(tunnel.serverIP)
-	tunnel.cachedSubnet = &net.IPNet{
+	tunnel.serverIPKey.Store(ipKey(tunnel.serverIP))
+	tunnel.cachedSubnet.Store(&net.IPNet{
 		IP:   tunnel.virtualIP.Mask(tunnel.subnetMask),
 		Mask: tunnel.subnetMask,
-	}
+	})
 
 	// Peer exists but no DirectReach - should fallback to relay
 	peerIP := net.IPv4(10, 10, 0, 5).To4()
 	peer := &Peer{
 		VirtualIP:  peerIP,
-		PublicAddr: &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 12345},
 		Username:   "peer1",
 	}
+	peer.PublicAddr.Store(&net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 12345})
 	// DirectReach is false
 
 	tunnel.mu.Lock()
@@ -1976,8 +1991,11 @@ func TestRoutePacket_PeerFallbackToRelay(t *testing.T) {
 	pkt[0] = 0x45
 	srcIP := net.IPv4(10, 10, 0, 2).To4()
 	dstIP := peerIP
+	var srcIP4, dstIP4 [4]byte
+	copy(srcIP4[:], srcIP)
+	copy(dstIP4[:], dstIP)
 
-	tunnel.routePacket(pkt, srcIP, dstIP)
+	tunnel.routePacket(pkt, srcIP4, dstIP4)
 
 	// Should have sent to server (relay)
 	pkt2 := readUDPWithTimeout(serverConn, 100*time.Millisecond)
@@ -1991,7 +2009,7 @@ func TestRoutePacket_PeerFallbackToRelay(t *testing.T) {
 func TestDisconnect_ClosesConn(t *testing.T) {
 	tunnel, _ := newTestTunnel(t)
 	mock := &mockTunDevice{}
-	tunnel.tunDev = mock
+	tunnel.tunDev.Store(mock)
 
 	tunnel.Disconnect()
 

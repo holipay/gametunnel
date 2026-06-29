@@ -36,8 +36,12 @@ const holePunchBackoff = 5 * time.Second
 // Respects context cancellation. Uses the cached hole punch packet.
 func (t *Tunnel) burstHolePunch(addr *net.UDPAddr, count int, interval time.Duration, ctx context.Context) {
 	t.mu.RLock()
-	packet := t.cachedPunchPacket
+	raw := t.cachedPunchPacket.Load()
 	t.mu.RUnlock()
+	if raw == nil {
+		return
+	}
+	packet := raw.([]byte)
 	for i := 0; i < count; i++ {
 		select {
 		case <-ctx.Done():
@@ -68,12 +72,11 @@ func (t *Tunnel) sendHolePunchRelay(peerIP net.IP) {
 func (t *Tunnel) startHolePunch(ctx context.Context, peerIP net.IP) {
 	t.mu.RLock()
 	peer, ok := t.peers[ipKey(peerIP)]
-	if !ok || peer.PublicAddr == nil {
+	if !ok || peer.PublicAddr.Load() == nil {
 		t.mu.RUnlock()
 		return
 	}
-	// Snapshot PublicAddr under lock to avoid data race with handlePeerInfo
-	peerAddr := peer.PublicAddr
+	peerAddr := peer.PublicAddr.Load()
 	natResult := t.natProbeResult
 	t.mu.RUnlock()
 
@@ -149,12 +152,11 @@ func (t *Tunnel) handleHolePunchReceived(ctx context.Context, payload []byte) {
 
 	t.mu.RLock()
 	peer, ok := t.peers[ipKey(peerIP)]
-	if !ok || peer.PublicAddr == nil {
+	if !ok || peer.PublicAddr.Load() == nil {
 		t.mu.RUnlock()
 		return
 	}
-	// Snapshot PublicAddr under lock to avoid data race with handlePeerInfo
-	peerAddr := peer.PublicAddr
+	peerAddr := peer.PublicAddr.Load()
 	t.mu.RUnlock()
 
 	// Rate limit: check if we recently punched back to this peer
@@ -163,7 +165,9 @@ func (t *Tunnel) handleHolePunchReceived(ctx context.Context, payload []byte) {
 	}
 
 	// Punch back in a goroutine — don't block the receive loop.
+	t.holePunchWg.Add(1)
 	go func() {
+		defer t.holePunchWg.Done()
 		t.burstHolePunch(peerAddr, holePunchBurstPerPhase, 50*time.Millisecond, ctx)
 	}()
 }
@@ -202,7 +206,7 @@ func (t *Tunnel) retryFailedHolePunches(ctx context.Context) {
 	t.mu.RLock()
 	var retryPeers []net.IP
 	for _, peer := range t.peers {
-		if peer.PublicAddr != nil && !peer.DirectReach.Load() {
+		if peer.PublicAddr.Load() != nil && !peer.DirectReach.Load() {
 			retryPeers = append(retryPeers, peer.VirtualIP)
 		}
 	}
@@ -214,7 +218,11 @@ func (t *Tunnel) retryFailedHolePunches(ctx context.Context) {
 
 	log.Printf(i18n.T().LogRetryPunch, len(retryPeers))
 	for _, peerIP := range retryPeers {
-		go t.startHolePunch(ctx, peerIP)
+		t.holePunchWg.Add(1)
+		go func(ip net.IP) {
+			defer t.holePunchWg.Done()
+			t.startHolePunch(ctx, ip)
+		}(peerIP)
 		t.sendHolePunchRelay(peerIP)
 	}
 }

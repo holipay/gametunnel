@@ -45,16 +45,22 @@ type DataPayload struct {
 // dataPayloadPool reuses DataPayload objects to reduce GC pressure on the
 // hot path (every game data packet goes through UnmarshalData).
 var dataPayloadPool = sync.Pool{
-	New: func() interface{} { return &DataPayload{} },
+	New: func() interface{} {
+		return &DataPayload{
+			SrcIP: make([]byte, 0, 4),
+			DstIP: make([]byte, 0, 4),
+		}
+	},
 }
 
 // PutDataPayload returns a DataPayload to the pool. Callers MUST NOT use the
 // object or any of its fields after calling this.
 func PutDataPayload(dp *DataPayload) {
-	// Clear references to allow GC of underlying buffers
-	dp.SrcIP = nil
-	dp.DstIP = nil
-	dp.Data = nil
+	// Reset lengths but keep backing arrays for zero-allocation reuse.
+	dp.SrcIP = dp.SrcIP[:0]
+	dp.DstIP = dp.DstIP[:0]
+	dp.Data = dp.Data[:0]
+	dp.Flags = 0
 	dataPayloadPool.Put(dp)
 }
 
@@ -126,14 +132,25 @@ func UnmarshalData(data []byte) (*DataPayload, error) {
 	return dp, nil
 }
 
-// UnmarshalDataPooled is like UnmarshalData but reuses a pooled DataPayload.
+// UnmarshalDataPooled is like UnmarshalData but reuses a pooled DataPayload
+// with zero heap allocations (backing arrays are preserved across calls).
 func UnmarshalDataPooled(data []byte) (*DataPayload, error) {
 	if len(data) < 8 {
 		return nil, ErrPacketTooShort
 	}
 	dp := dataPayloadPool.Get().(*DataPayload)
-	dp.SrcIP = append(dp.SrcIP[:0], data[0:4]...)
-	dp.DstIP = append(dp.DstIP[:0], data[4:8]...)
+	if cap(dp.SrcIP) < 4 {
+		dp.SrcIP = make([]byte, 4)
+	} else {
+		dp.SrcIP = dp.SrcIP[:4]
+	}
+	if cap(dp.DstIP) < 4 {
+		dp.DstIP = make([]byte, 4)
+	} else {
+		dp.DstIP = dp.DstIP[:4]
+	}
+	copy(dp.SrcIP, data[0:4])
+	copy(dp.DstIP, data[4:8])
 	if len(data) > 8 && isNewFormat(data[8]) {
 		dp.Flags = data[8]
 		offset := 9
@@ -152,10 +169,21 @@ func UnmarshalDataPooled(data []byte) (*DataPayload, error) {
 			}
 			rawData = rawData[:len(rawData)-FECHeaderSize]
 		}
-		dp.Data = append(dp.Data[:0], rawData...)
+		if cap(dp.Data) < len(rawData) {
+			dp.Data = make([]byte, len(rawData))
+		} else {
+			dp.Data = dp.Data[:len(rawData)]
+		}
+		copy(dp.Data, rawData)
 	} else {
 		dp.Flags = 0
-		dp.Data = append(dp.Data[:0], data[8:]...)
+		dataLen := len(data) - 8
+		if cap(dp.Data) < dataLen {
+			dp.Data = make([]byte, dataLen)
+		} else {
+			dp.Data = dp.Data[:dataLen]
+		}
+		copy(dp.Data, data[8:])
 	}
 	return dp, nil
 }

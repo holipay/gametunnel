@@ -25,7 +25,7 @@ func BenchmarkBuildEncryptedDataPacket(b *testing.B) {
 	cipher, _ := crypto.NewCipher(key, crypto.DirClientToServer)
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		buildEncryptedDataPacket(srcIP, dstIP, data, cipher, 0)
+		buildEncryptedDataPacket(srcIP, dstIP, data, cipher, 0, [16]byte{})
 	}
 }
 

@@ -23,10 +23,11 @@ type sendJob struct {
 
 // tunJob is a TUN packet dispatched from the reader to worker goroutines.
 // The packet data is a copy (not a slice of the shared TUN read buffer).
+// srcIP/dstIP use [4]byte to avoid net.IP heap escape via channel send.
 type tunJob struct {
 	data  []byte
-	srcIP net.IP
-	dstIP net.IP
+	srcIP [4]byte
+	dstIP [4]byte
 }
 
 // tunChanSize is the buffer size for the TUN worker channel.
@@ -51,13 +52,13 @@ func ipKey(ip net.IP) [16]byte {
 
 // fecEnabled returns true if FEC should be used (server supports it).
 func (t *Tunnel) fecEnabled() bool {
-	return t.serverVersion >= 0x0108
+	return t.serverVersion.Load() >= uint32(protocol.MinFECVersion)
 }
 
 // Peer represents a remote player.
 type Peer struct {
 	VirtualIP     net.IP
-	PublicAddr    *net.UDPAddr
+	PublicAddr    atomic.Pointer[net.UDPAddr]
 	Username      string
 	DirectReach   atomic.Bool               // true if P2P direct path has been confirmed
 	lastSeen      atomic.Int64 // last time server reported this peer (UnixNano)
@@ -106,12 +107,12 @@ type Tunnel struct {
 	ctrlCh         chan sendJob // high-priority channel for control packets (never dropped)
 	tunCh          chan tunJob  // TUN packet channel for worker pool
 	serverAddr     atomic.Pointer[net.UDPAddr]
-	tunDev         TunDevice
+	tunDev         atomic.Value // stores TunDevice (set once per Connect, read in hot path)
 	virtualIP      net.IP
 	serverIP       net.IP
-	serverIPKey     [16]byte // cached serverIP as [16]byte for fast comparison
+	serverIPKey    atomic.Value // stores [16]byte
 	subnetMask     net.IPMask
-	cachedSubnet   *net.IPNet // cached subnet for broadcast detection
+	cachedSubnet   atomic.Pointer[net.IPNet]
 	peers          map[[16]byte]*Peer
 	mu             sync.RWMutex
 	username       string
@@ -130,7 +131,7 @@ type Tunnel struct {
 	lastServerResponse atomic.Int64
 
 	// Server version from AssignIP response (0 = old server without version)
-	serverVersion uint16
+	serverVersion atomic.Uint32
 
 	// Session token (v1.7+): 16-byte random token for anti-spoofing.
 	// Included in relay packets when server version >= 0x0107.
@@ -142,7 +143,7 @@ type Tunnel struct {
 
 	// Cached hole punch packet — built once on Connect, reused by
 	// startHolePunch, handleHolePunchReceived, and sendP2PKeepalives.
-	cachedPunchPacket []byte
+	cachedPunchPacket atomic.Value
 
 	// End-to-end encryption (nil when no password)
 	encCipher *crypto.Cipher // client→server (relay send, DirClientToServer)
@@ -173,11 +174,13 @@ type Tunnel struct {
 	lastMTU        int                                // MTU from last connection
 	newTUNFunc     func(TunConfig) (TunDevice, error) // cached factory
 
+	// Hole punch lifecycle — tracks outstanding hole punch goroutines
+	holePunchWg sync.WaitGroup
+
 	// Connect lifecycle — ensures old goroutines exit before new ones start
-	runCancel   context.CancelFunc
-	runDone     chan struct{}
-	runWg       sync.WaitGroup
-	natProbeDone chan struct{} // closed when NAT probe goroutine finishes
+	runCancel context.CancelFunc
+	runDone   chan struct{}
+	runWg     sync.WaitGroup
 }
 
 // sendChanSize is the buffer size for the UDP send channel.
@@ -253,17 +256,6 @@ func (t *Tunnel) Connect(ctx context.Context, serverAddr string, mtu int, newTUN
 		}
 	}
 
-	// Wait for any in-flight NAT probe to finish before closing the old conn,
-	// so the probe goroutine doesn't operate on a closed connection.
-	if t.natProbeDone != nil {
-		select {
-		case <-t.natProbeDone:
-		case <-time.After(3 * time.Second):
-			log.Printf("[tunnel] NAT probe did not finish within 3s, proceeding anyway")
-		}
-		t.natProbeDone = nil
-	}
-
 	// Close old FEC decoder goroutine before creating a new one
 	t.fecDecoder.Close()
 	t.fecDecoder = netutil.NewFECDecoder(0)
@@ -320,9 +312,7 @@ func (t *Tunnel) Connect(ctx context.Context, serverAddr string, mtu int, newTUN
 	alreadyProbed := t.natProbeResult != nil
 	t.mu.RUnlock()
 	if t.tcpTransport == nil && !alreadyProbed {
-		t.natProbeDone = make(chan struct{})
 		go func() {
-			defer close(t.natProbeDone)
 			// Use t.conn snapshot to avoid referencing a stale connection
 			// if Connect is called again before the probe finishes.
 			t.mu.RLock()
@@ -415,19 +405,20 @@ func (t *Tunnel) Connect(ctx context.Context, serverAddr string, mtu int, newTUN
 // ensureTUN reuses or creates the TUN device based on whether the IP changed.
 func (t *Tunnel) ensureTUN(mtu int) error {
 	ipChanged := t.lastAssignedIP != nil && !t.virtualIP.Equal(t.lastAssignedIP)
-	tunAlive := t.tunDev != nil
+	tunAlive := t.tunDev.Load() != nil
 
 	switch {
 	case tunAlive && !ipChanged:
 		log.Printf("%s", i18n.Format(i18n.T().LogReuseTUN, t.virtualIP))
-		if rc, ok := t.tunDev.(RouteConfigurator); ok {
-			rc.ReconfigureRoutes()
+		if v := t.tunDev.Load(); v != nil {
+			if rc, ok := v.(RouteConfigurator); ok {
+				rc.ReconfigureRoutes()
+			}
 		}
 
 	case tunAlive && ipChanged:
 		log.Printf("%s", i18n.Format(i18n.T().LogIPChanged, t.lastAssignedIP, t.virtualIP))
-		t.tunDev.Close()
-		t.tunDev = nil
+		t.tunDev.Load().(TunDevice).Close()
 		return t.createTUN(mtu)
 
 	case !tunAlive:
@@ -452,7 +443,7 @@ func (t *Tunnel) createTUN(mtu int) error {
 	if err != nil {
 		return fmt.Errorf("%s", i18n.Format(i18n.T().ErrCreateTUN, err))
 	}
-	t.tunDev = dev
+	t.tunDev.Store(dev)
 	t.lastAssignedIP = append(net.IP(nil), t.virtualIP...) // defensive copy
 	t.lastMTU = mtu
 	return nil
@@ -470,6 +461,12 @@ func (t *Tunnel) Disconnect() {
 				t.sendCtrl(packet, addr)
 				time.Sleep(50 * time.Millisecond)
 			}
+			// Cancel context to signal hole punch goroutines to exit
+			if t.runCancel != nil {
+				t.runCancel()
+			}
+			// Wait for outstanding hole punch goroutines to finish
+			t.holePunchWg.Wait()
 			t.mu.Lock()
 			c := t.conn
 			tcp := t.tcpTransport
@@ -491,8 +488,7 @@ func (t *Tunnel) Disconnect() {
 func (t *Tunnel) CloseTUN() {
 	t.closeTUNOnce.Do(func() {
 		t.mu.Lock()
-		dev := t.tunDev
-		t.tunDev = nil
+		dev, _ := t.tunDev.Load().(TunDevice)
 		t.lastAssignedIP = nil
 		t.mu.Unlock()
 		if dev != nil {
@@ -535,12 +531,12 @@ func (t *Tunnel) Status() TunnelStatus {
 	defer t.mu.RUnlock()
 
 	st := TunnelStatus{
-		Connected:     t.tunDev != nil && t.virtualIP != nil,
+		Connected:     t.tunDev.Load() != nil && t.virtualIP != nil,
 		VirtualIP:     t.virtualIP,
 		SubnetMask:    t.subnetMask,
 		ServerIP:      t.serverIP,
 		PeerCount:     len(t.peers),
-		ServerVersion: t.serverVersion,
+		ServerVersion: uint16(t.serverVersion.Load()),
 	}
 
 	// NAT probe info
@@ -662,16 +658,19 @@ func (t *Tunnel) writeUDP(conn *net.UDPConn, data []byte, addr *net.UDPAddr) {
 // Replaces the previous mutex-based approach to eliminate lock contention
 // between the TUN reader, server reader, and keepalive goroutines.
 func (t *Tunnel) sendUDP(data []byte, addr *net.UDPAddr) {
-	// Check client-side rate limit
-	if !t.sendLimiter.allow(len(data)) {
+	// Reserve rate limiter tokens first, refund if channel send fails.
+	// This prevents token starvation when the channel is full.
+	res := t.sendLimiter.tryReserve(len(data))
+	if !res.ok() {
 		t.sendErrors.Add(1)
 		return
 	}
 
 	select {
 	case t.sendCh <- sendJob{data: data, addr: addr}:
+		res.commit()
 	default:
-		// Channel full — drop packet (backpressure)
+		res.cancel()
 		n := t.sendErrors.Add(1)
 		if n == 1 || n%100 == 0 {
 			log.Printf("%s", i18n.Format(i18n.T().LogSendFail, n, fmt.Errorf("send channel full")))
