@@ -429,12 +429,16 @@ func (r *Room) handleAuthResponse(payload []byte, from *net.UDPAddr) {
 	// doesn't leave state partially modified.
 	switch r.checkCapacityAndDuplicate(resp.Username, resp.RoomID) {
 	case checkRoomFull:
-		r.decrementIPConnCount(addrToConnIPKey(from))
+		if c.PublicAddr != nil {
+			r.decrementIPConnCount(addrToConnIPKey(c.PublicAddr))
+		}
 		r.mu.Unlock()
 		r.sendKick(from, t.KickRoomFull)
 		return
 	case checkDuplicate:
-		r.decrementIPConnCount(addrToConnIPKey(from))
+		if c.PublicAddr != nil {
+			r.decrementIPConnCount(addrToConnIPKey(c.PublicAddr))
+		}
 		r.mu.Unlock()
 		r.sendKick(from, t.KickDuplicateName)
 		return
