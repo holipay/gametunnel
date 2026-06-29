@@ -1,4 +1,4 @@
-package netutil
+package nat
 
 import (
 	"math"

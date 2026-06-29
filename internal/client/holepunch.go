@@ -8,6 +8,7 @@ import (
 
 	"github.com/holipay/gametunnel/internal/i18n"
 	"github.com/holipay/gametunnel/internal/netutil"
+	"github.com/holipay/gametunnel/internal/nat"
 	"github.com/holipay/gametunnel/internal/protocol"
 )
 
@@ -81,22 +82,22 @@ func (t *Tunnel) startHolePunch(ctx context.Context, peerIP net.IP) {
 	t.mu.RUnlock()
 
 	// Determine strategy based on NAT type
-	strategy := netutil.StrategyDirect
+	strategy := nat.StrategyDirect
 	if natResult != nil {
 		// We know our NAT type; the peer's NAT type is unknown
 		// Use our type to decide strategy (conservative: assume peer is restricted)
 		switch natResult.Type {
-		case netutil.NATSymmetric:
+		case nat.NATSymmetric:
 			// Symmetric NAT — try extended punch with port prediction
-			strategy = netutil.StrategyExtended
-		case netutil.NATFullCone, netutil.NATNoNAT:
+			strategy = nat.StrategyExtended
+		case nat.NATFullCone, nat.NATNoNAT:
 			// Full Cone or no NAT — direct punch is very likely to succeed
-			strategy = netutil.StrategyDirect
+			strategy = nat.StrategyDirect
 		}
 	}
 
 	// If Symmetric NAT detected, try port prediction first
-	if strategy == netutil.StrategyExtended {
+	if strategy == nat.StrategyExtended {
 		t.mu.RLock()
 		pp := t.portPredictor
 		t.mu.RUnlock()
@@ -131,7 +132,7 @@ func (t *Tunnel) startHolePunch(ctx context.Context, peerIP net.IP) {
 	}
 
 	// If extended strategy failed, log with extra info
-	if strategy == netutil.StrategyExtended {
+	if strategy == nat.StrategyExtended {
 		log.Printf("[hole-punch] P2P failed for %v (symmetric NAT, port prediction insufficient)", peerIP)
 	} else {
 		log.Printf(i18n.T().LogP2PFailed, peerIP)

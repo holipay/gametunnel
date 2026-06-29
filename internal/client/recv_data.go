@@ -9,6 +9,7 @@ import (
 	"github.com/holipay/gametunnel/internal/crypto"
 	"github.com/holipay/gametunnel/internal/i18n"
 	"github.com/holipay/gametunnel/internal/netutil"
+	"github.com/holipay/gametunnel/internal/pool"
 	"github.com/holipay/gametunnel/internal/protocol"
 )
 
@@ -26,15 +27,15 @@ func (t *Tunnel) decryptWriteAndRelease(dp *protocol.DataPayload, cipher *crypto
 
 	outData := dp.Data
 	if cipher != nil && crypto.IsEncrypted(dp.Data) {
-		decBuf := netutil.PktBufGet(len(dp.Data))
+		decBuf := pool.PktBufGet(len(dp.Data))
 		var err error
 		outData, err = cipher.DecryptInto(decBuf[:0], dp.Data)
 		if err != nil {
-			netutil.PktBufPut(decBuf)
+			pool.PktBufPut(decBuf)
 			protocol.PutDataPayload(dp)
 			return
 		}
-		defer netutil.PktBufPut(decBuf)
+		defer pool.PktBufPut(decBuf)
 	}
 
 	if _, err := dev.Write(outData); err != nil {
