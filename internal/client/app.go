@@ -124,12 +124,12 @@ func (a *App) GetStatus() StatusResponse {
 
 			// Version info
 			if ts.ServerVersion > 0 {
-				s.ServerVersion = FormatVersion(ts.ServerVersion)
+				s.ServerVersion = protocol.FormatVersion(ts.ServerVersion)
 				if ts.ServerVersion > protocol.AppVersion {
 					s.UpgradeAvailable = true
 					s.UpgradeMessage = fmt.Sprintf(i18n.T().UpgradePrompt,
-						FormatVersion(protocol.AppVersion),
-						FormatVersion(ts.ServerVersion))
+						protocol.FormatVersion(protocol.AppVersion),
+						protocol.FormatVersion(ts.ServerVersion))
 				}
 			}
 		}
@@ -366,11 +366,6 @@ func FormatDuration(d time.Duration) string {
 		return fmt.Sprintf("%02d:%02d:%02d", h, m, s)
 	}
 	return fmt.Sprintf("%02d:%02d", m, s)
-}
-
-// FormatVersion formats an encoded version number (major<<8|minor) as "vX.Y".
-func FormatVersion(v uint16) string {
-	return fmt.Sprintf("v%d.%d", protocol.VersionMajor(v), protocol.VersionMinor(v))
 }
 
 // JSON serializes the status to JSON bytes.
