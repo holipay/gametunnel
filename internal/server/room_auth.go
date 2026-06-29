@@ -284,14 +284,16 @@ func (r *Room) handleECDHConfirm(payload []byte, from *net.UDPAddr) {
 	// Verify HMAC over both public keys (prevents MITM)
 	authKey := r.getAuthKey(c.authRoomID)
 	if authKey == nil {
+		r.cleanupPendingAuth(fromKey, fromKey, false, c)
 		r.mu.Unlock()
 		r.sendKick(from, t.KickInternalError)
 		return
 	}
 
 	if !auth.VerifyECDHMAC(authKey, confirm.HMAC[:], c.ecdhPub, confirm.PublicKey[:]) {
-		r.mu.Unlock()
 		log.Printf("[ecdh] HMAC verification failed for %s", c.Username)
+		r.cleanupPendingAuth(fromKey, fromKey, false, c)
+		r.mu.Unlock()
 		r.sendKickCode(from, protocol.KickCodeWrongPassword, t.KickWrongPassword)
 		return
 	}
@@ -299,8 +301,9 @@ func (r *Room) handleECDHConfirm(payload []byte, from *net.UDPAddr) {
 	// Compute shared secret
 	shared, err := auth.ComputeECDHSharedSecret(c.ecdhPriv, confirm.PublicKey[:])
 	if err != nil {
-		r.mu.Unlock()
 		log.Printf("[ecdh] shared secret computation failed: %v", err)
+		r.cleanupPendingAuth(fromKey, fromKey, false, c)
+		r.mu.Unlock()
 		r.sendKick(from, t.KickInternalError)
 		return
 	}
@@ -308,6 +311,7 @@ func (r *Room) handleECDHConfirm(payload []byte, from *net.UDPAddr) {
 	// Derive session key
 	sessionKey := auth.DeriveSessionKey(shared, c.authRoomID)
 	if sessionKey == nil {
+		r.cleanupPendingAuth(fromKey, fromKey, false, c)
 		r.mu.Unlock()
 		r.sendKick(from, t.KickInternalError)
 		return
@@ -345,7 +349,9 @@ func (r *Room) handleECDHConfirm(payload []byte, from *net.UDPAddr) {
 		Version:    protocol.SetECDHFlag(protocol.AppVersion),
 	}
 	assign.SessionToken = c.SessionToken
-	r.sendChecked(protocol.TypeAssignIP, assign.Marshal(), from)
+	if data := assign.Marshal(); data != nil {
+		r.sendChecked(protocol.TypeAssignIP, data, from)
+	}
 	r.sendPeerInfoToClient(from)
 	r.invalidatePeerInfoCache()
 	r.markDirty()

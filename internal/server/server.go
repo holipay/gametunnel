@@ -56,6 +56,7 @@ type Server struct {
 	rooms       map[string]*Room    // roomID → Room
 	addrToRoom  map[rateKey]*Room   // client addr → Room (fast routing)
 	roomMu      sync.RWMutex        // protects rooms + addrToRoom
+	maxRooms    int                 // max auto-created rooms (0 = unlimited)
 
 	// Default room (single-room mode)
 	defaultRoom *Room
@@ -106,7 +107,10 @@ type Config struct {
 	MultiRoom      bool   // enable multi-room mode
 	BandwidthLimit int    // per-client outbound bandwidth limit in bytes/sec (0 = default 10Mbps)
 	TCPAddr        string // TCP listen address for fallback (e.g. ":4700"), empty = disabled
+	MaxRooms       int    // max auto-created rooms in multi-room mode (0 = default 64)
 }
+
+const defaultMaxRooms = 64
 
 // New creates a new Server. Call Run() to start it.
 func New(cfg Config) (*Server, error) {
@@ -161,6 +165,11 @@ func New(cfg Config) (*Server, error) {
 
 	bwLimiter := NewBandwidthLimiter(cfg.BandwidthLimit)
 
+	maxRooms := cfg.MaxRooms
+	if maxRooms <= 0 && cfg.MultiRoom {
+		maxRooms = defaultMaxRooms
+	}
+
 	s := &Server{
 		conn:        conn,
 		statusAddr:  cfg.StatusAddr,
@@ -176,6 +185,7 @@ func New(cfg Config) (*Server, error) {
 		rooms:       make(map[string]*Room),
 		addrToRoom:  make(map[rateKey]*Room),
 		multiRoom:   cfg.MultiRoom,
+		maxRooms:    maxRooms,
 		stateDir:    cfg.StateDir,
 		bwLimiter:   bwLimiter,
 	}
@@ -461,6 +471,12 @@ func (s *Server) handleRegisterMultiRoom(payload []byte, from *net.UDPAddr) {
 	s.roomMu.Lock()
 	room, exists := s.rooms[reg.RoomID]
 	if !exists {
+		// Check room limit before creating
+		if s.maxRooms > 0 && len(s.rooms) >= s.maxRooms {
+			s.roomMu.Unlock()
+			s.sendKick(from, "server room limit reached")
+			return
+		}
 		// Auto-create room with default settings
 		// Each room gets the next available /24 subnet
 		subnet := s.allocateSubnet()
@@ -544,7 +560,8 @@ func (s *Server) tcpAcceptLoop(ctx context.Context) {
 		var bridge *netutil.UDPTCPBridge
 		var key rateKey
 		var port int
-		for {
+		const maxPortAttempts = 65536
+		for attempt := 0; attempt < maxPortAttempts; attempt++ {
 			port = int(s.tcpPortCounter.Add(1) % 65536)
 			if port == 0 {
 				port = 1
@@ -561,6 +578,11 @@ func (s *Server) tcpAcceptLoop(ctx context.Context) {
 			}
 			// Collision — try next port.
 			candidate.Stop()
+		}
+		if bridge == nil {
+			tcp.Close()
+			log.Printf("[server] TCP bridge: no available ports")
+			continue
 		}
 
 		// Handle TCP packets in a goroutine

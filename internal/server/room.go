@@ -344,7 +344,9 @@ func (r *Room) sendAssignIP(vip net.IP, to *net.UDPAddr) {
 		Version:      protocol.AppVersion,
 		SessionToken: sessionToken,
 	}
-	r.sendChecked(protocol.TypeAssignIP, assign.Marshal(), to)
+	if data := assign.Marshal(); data != nil {
+		r.sendChecked(protocol.TypeAssignIP, data, to)
+	}
 }
 
 // markDirty notifies the server that room state has changed (for persistence).

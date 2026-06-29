@@ -49,8 +49,9 @@ func (d *Device) configure() error {
 }
 
 func (d *Device) ReconfigureRoutes() {
-	d.CleanupRoutes()
-	d.configure()
+	if err := d.configure(); err != nil {
+		log.Printf("[tun] reconfigure routes failed: %v", err)
+	}
 }
 
 func (d *Device) CleanupRoutes() {
