@@ -184,11 +184,13 @@ func New(cfg Config) (*Server, error) {
 	tcpWrite := func(addr *net.UDPAddr, data []byte) bool {
 		key := addrToRateKey(addr)
 		if b, ok := s.tcpBridges.Load(key); ok {
-			bridge := b.(*netutil.UDPTCPBridge)
-			if err := bridge.Send(data); err != nil {
-				log.Printf("[server] tcp bridge send error: %v", err)
+			if bridge, ok := b.(*netutil.UDPTCPBridge); ok {
+				if err := bridge.Send(data); err != nil {
+					log.Printf("[server] tcp bridge send error: %v", err)
+				}
+				return true
 			}
-			return true
+			return false // sentinel ("reserved") — bridge not ready yet
 		}
 		return false
 	}
@@ -543,8 +545,7 @@ func (s *Server) tcpAcceptLoop(ctx context.Context) {
 				Port: port,
 			}
 			key := addrToRateKey(syntheticAddr)
-			if _, loaded := s.tcpBridges.LoadOrStore(key, nil); !loaded {
-				s.tcpBridges.Delete(key) // we just checked, real Store happens later
+			if _, loaded := s.tcpBridges.LoadOrStore(key, "reserved"); !loaded {
 				break
 			}
 			port = int(s.tcpPortCounter.Add(1) % 65536)

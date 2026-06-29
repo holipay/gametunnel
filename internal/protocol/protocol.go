@@ -22,6 +22,12 @@ const ProtocolVersion byte = 1
 // v1.3 = 0x0103 = 259, v1.4 = 0x0104 = 260, v1.5 = 0x0105 = 261, v1.6 = 0x0106 = 262, v1.7 = 0x0107 = 263
 const AppVersion uint16 = 0x0107
 
+// MinTokenVersion is the minimum server version that supports session tokens.
+const MinTokenVersion uint16 = 0x0107
+
+// MinFECVersion is the minimum server version that supports FEC.
+const MinFECVersion uint16 = 0x0108
+
 // HeaderLen is the fixed header size: version(1) + type(1).
 const HeaderLen = 2
 

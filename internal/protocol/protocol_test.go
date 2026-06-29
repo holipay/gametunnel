@@ -559,8 +559,11 @@ func TestPutDataPayload(t *testing.T) {
 		Data:  []byte("test"),
 	}
 	PutDataPayload(dp)
-	if dp.SrcIP != nil || dp.DstIP != nil || dp.Data != nil {
-		t.Error("expected all fields to be nil after Put")
+	if len(dp.SrcIP) != 0 || len(dp.DstIP) != 0 || len(dp.Data) != 0 {
+		t.Error("expected all fields to be empty after Put")
+	}
+	if cap(dp.SrcIP) == 0 || cap(dp.DstIP) == 0 {
+		t.Error("expected backing arrays to be preserved (cap > 0)")
 	}
 }
 

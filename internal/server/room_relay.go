@@ -38,7 +38,7 @@ func (r *Room) handleRelay(payload []byte, from *net.UDPAddr) {
 	// Session token validation (v1.7+): if client sent a token, verify it.
 	// For unencrypted rooms, token is in the payload after flags.
 	// For encrypted rooms, token is encrypted inside AEAD (server can't validate).
-	if sender.clientVersion >= 0x0107 && sender.HasSessionToken() && len(payload) >= 25 {
+	if sender.clientVersion >= protocol.MinTokenVersion && sender.HasSessionToken() && len(payload) >= 25 {
 		flags := payload[8]
 		if flags&protocol.DataFlagHasToken != 0 {
 			token := payload[9:25]

@@ -69,27 +69,28 @@ func buildEncryptedDataPacket(srcIP, dstIP net.IP, pkt []byte, cipher *crypto.Ci
 // routePacket determines how to route an outgoing IP packet.
 // pkt is a slice of the TUN read buffer; it must not be retained beyond
 // this call — Marshal copies the data for the UDP send.
-func (t *Tunnel) routePacket(pkt []byte, srcIP, dstIP net.IP) {
-	// Compute dstKey once — ipKey calls To16() which allocates for IPv4.
-	dstKey := ipKey(dstIP)
+// srcIP/dstIP use [4]byte to avoid net.IP heap escape in the caller; they
+// are converted to net.IP here where the result stays on the worker stack.
+func (t *Tunnel) routePacket(pkt []byte, srcIP, dstIP [4]byte) {
+	dstKey := ipKey(dstIP[:])
 
 	// Single read lock snapshot for all fields needed in this call.
 	t.mu.RLock()
-	serverIPKey := t.serverIPKey
+	serverIPKey, _ := t.serverIPKey.Load().([16]byte)
 	serverAddr := t.serverAddr.Load()
-	cachedSubnet := t.cachedSubnet
+	cachedSubnet := t.cachedSubnet.Load()
 	encCipher := t.encCipher
 	p2pCipher := t.p2pCipher
-	serverVersion := t.serverVersion
+	serverVersion := t.serverVersion.Load()
 	var token [16]byte
-	if serverVersion >= 0x0107 {
+	if serverVersion >= uint32(protocol.MinTokenVersion) {
 		token = t.sessionToken
 	}
 	peer, ok := t.peers[dstKey]
 	var peerAddr *net.UDPAddr
 	var peerDirect bool
 	if ok {
-		peerAddr = peer.PublicAddr
+		peerAddr = peer.PublicAddr.Load()
 		peerDirect = peerAddr != nil && peer.DirectReach.Load()
 	}
 	lz4Enc := t.lz4Encoder
@@ -108,25 +109,33 @@ func (t *Tunnel) routePacket(pkt []byte, srcIP, dstIP net.IP) {
 
 	// Embed FEC header (groupID + seq) at end of data when FEC is enabled.
 	// The encoder receives only the raw IP data (without FEC header).
+	// IMPORTANT: must copy sendData before appending FEC header — sendData may
+	// point into a pooled LZ4 buffer, and append's aliasing could corrupt it.
 	rawForFEC := sendData
 	if fecEnc != nil && t.fecEnabled() {
 		gid, seq := fecEnc.CurrentGroupInfo()
 		var fecHeader [5]byte
 		binary.LittleEndian.PutUint32(fecHeader[:4], gid)
 		fecHeader[4] = seq
-		sendData = append(sendData, fecHeader[:]...)
+		tmp := make([]byte, len(sendData)+5)
+		copy(tmp, sendData)
+		copy(tmp[len(sendData):], fecHeader[:])
+		sendData = tmp
 		flags |= protocol.DataFlagHasFEC
 	}
 
+	srcNet := net.IP(srcIP[:])
+	dstNet := net.IP(dstIP[:])
+
 	// Fast path: check server destination first (most common for relay)
 	if dstKey == serverIPKey {
-		t.sendToServerFEC(sendData, rawForFEC, srcIP, dstIP, encCipher, flags, fecEnc, token, serverAddr)
+		t.sendToServerFEC(sendData, rawForFEC, srcNet, dstNet, encCipher, flags, fecEnc, token, serverAddr)
 		return
 	}
 
 	// Broadcast/multicast: relay to all peers via server
-	if cachedSubnet != nil && netutil.IsRelayTarget(dstIP, cachedSubnet) {
-		t.sendToServerFEC(sendData, rawForFEC, srcIP, dstIP, encCipher, flags, fecEnc, token, serverAddr)
+	if cachedSubnet != nil && netutil.IsRelayTarget(dstNet, cachedSubnet) {
+		t.sendToServerFEC(sendData, rawForFEC, srcNet, dstNet, encCipher, flags, fecEnc, token, serverAddr)
 		return
 	}
 
@@ -134,16 +143,16 @@ func (t *Tunnel) routePacket(pkt []byte, srcIP, dstIP net.IP) {
 		// P2P direct path — send directly for low latency.
 		var packet []byte
 		if p2pCipher != nil {
-			packet = buildEncryptedDataPacket(srcIP, dstIP, sendData, p2pCipher, flags)
+			packet = buildEncryptedDataPacket(srcNet, dstNet, sendData, p2pCipher, flags)
 		} else {
-			packet = buildDataPacket(srcIP, dstIP, sendData, flags, [16]byte{})
+			packet = buildDataPacket(srcNet, dstNet, sendData, flags, [16]byte{})
 		}
 		t.sendUDP(packet, peerAddr)
 		// Generate FEC parity for P2P path — use raw IP data without FEC header
 		t.feedFEC(rawForFEC, peerAddr, fecEnc)
 	} else {
 		// Fallback: relay through server.
-		t.sendToServerFEC(sendData, rawForFEC, srcIP, dstIP, encCipher, flags, fecEnc, token, serverAddr)
+		t.sendToServerFEC(sendData, rawForFEC, srcNet, dstNet, encCipher, flags, fecEnc, token, serverAddr)
 	}
 }
 

@@ -154,7 +154,7 @@ func (t *Tunnel) handleServerData(ctx context.Context, conn *net.UDPConn, msg *p
 // the pool when done.
 func (t *Tunnel) decryptWriteAndRelease(dp *protocol.DataPayload, cipher *crypto.Cipher) {
 	t.mu.RLock()
-	dev := t.tunDev
+	dev, _ := t.tunDev.Load().(TunDevice)
 	lz4Dec := t.lz4Decoder
 	t.mu.RUnlock()
 	if dev == nil {
@@ -216,7 +216,7 @@ func (t *Tunnel) handleDirectData(ctx context.Context, from *net.UDPAddr, msg *p
 	t.mu.RLock()
 	p2pCipher := t.p2pCipher
 	fecDec := t.fecDecoder
-	dev := t.tunDev
+	dev, _ := t.tunDev.Load().(TunDevice)
 	lz4Dec := t.lz4Decoder
 
 	// Validate srcIP is a known peer (anti-spoofing)
@@ -230,7 +230,7 @@ func (t *Tunnel) handleDirectData(ctx context.Context, from *net.UDPAddr, msg *p
 	}
 
 	// Verify the packet actually came from this peer's public address (IP + port)
-	peerAddr := peer.PublicAddr
+	peerAddr := peer.PublicAddr.Load()
 	if peerAddr == nil || !from.IP.Equal(peerAddr.IP) || from.Port != peerAddr.Port {
 		protocol.PutDataPayload(dp)
 		return
@@ -321,11 +321,11 @@ func (t *Tunnel) handleDirectHolePunch(ctx context.Context, from *net.UDPAddr, m
 
 	t.mu.RLock()
 	peer, ok := t.peers[ipKey(peerIP)]
-	if !ok || peer.PublicAddr == nil {
+	if !ok || peer.PublicAddr.Load() == nil {
 		t.mu.RUnlock()
 		return
 	}
-	peerAddr := peer.PublicAddr
+	peerAddr := peer.PublicAddr.Load()
 	t.mu.RUnlock()
 
 	// Verify the sender matches the peer's known public address (anti-spoofing)
@@ -342,7 +342,9 @@ func (t *Tunnel) handleDirectHolePunch(ctx context.Context, from *net.UDPAddr, m
 	peer.DirectReach.Store(true)
 
 	// Punch back in a goroutine — don't block the receive loop
+	t.holePunchWg.Add(1)
 	go func() {
+		defer t.holePunchWg.Done()
 		t.burstHolePunch(peerAddr, holePunchBurstPerPhase, 50*time.Millisecond, ctx)
 	}()
 }
@@ -354,7 +356,7 @@ func (t *Tunnel) handleFECPacket(data []byte) {
 	t.mu.RLock()
 	fecDec := t.fecDecoder
 	lz4Dec := t.lz4Decoder
-	dev := t.tunDev
+	dev, _ := t.tunDev.Load().(TunDevice)
 	fecEnabled := t.fecEnabled()
 	t.mu.RUnlock()
 
@@ -431,22 +433,25 @@ func (t *Tunnel) handlePeerInfo(ctx context.Context, payload []byte) {
 		}
 		if existing, ok := oldPeers[key]; ok {
 			// Check if peer's public address changed (NAT rebinding)
-			addrChanged := existing.PublicAddr != nil && pubAddr != nil &&
-				(!existing.PublicAddr.IP.Equal(pubAddr.IP) || existing.PublicAddr.Port != pubAddr.Port)
+			existingAddr := existing.PublicAddr.Load()
+			addrChanged := existingAddr != nil && pubAddr != nil &&
+				(!existingAddr.IP.Equal(pubAddr.IP) || existingAddr.Port != pubAddr.Port)
 			if addrChanged {
-				log.Printf(i18n.T().LogPeerAddrChange, entry.Username, entry.VirtualIP, existing.PublicAddr, entry.PublicAddr)
+				log.Printf(i18n.T().LogPeerAddrChange, entry.Username, entry.VirtualIP, existing.PublicAddr.Load(), entry.PublicAddr)
 				existing.DirectReach.Store(false) // reset P2P status, need re-punch
 				changedPeerIPs = append(changedPeerIPs, entry.VirtualIP)
 			}
-			existing.PublicAddr = pubAddr
+			existing.PublicAddr.Store(pubAddr)
 			existing.Username = entry.Username
 			existing.lastSeen.Store(now.UnixNano())
 			t.peers[key] = existing
 		} else {
 			p := &Peer{
-				VirtualIP:  entry.VirtualIP,
-				PublicAddr: pubAddr,
-				Username:   entry.Username,
+				VirtualIP: entry.VirtualIP,
+				Username:  entry.Username,
+			}
+			if pubAddr != nil {
+				p.PublicAddr.Store(pubAddr)
 			}
 			p.lastSeen.Store(now.UnixNano())
 			t.peers[key] = p
@@ -491,12 +496,12 @@ func (t *Tunnel) handleDataFromServer(payload []byte) {
 
 	// Snapshot all needed fields under a single read lock to avoid races with reconnect
 	t.mu.RLock()
-	serverIPKey := t.serverIPKey
+	serverIPKey, _ := t.serverIPKey.Load().([16]byte)
 	decCipher := t.decCipher
 	_, known := t.peers[srcKey]
 	fecDec := t.fecDecoder
 	lz4Dec := t.lz4Decoder
-	dev := t.tunDev
+	dev, _ := t.tunDev.Load().(TunDevice)
 	t.mu.RUnlock()
 
 	// Allow traffic from the server's virtual IP (relay path) or known peers.
@@ -590,7 +595,7 @@ func (t *Tunnel) receiveFromTUN(ctx context.Context) {
 		}
 
 		t.mu.RLock()
-		dev := t.tunDev
+		dev, _ := t.tunDev.Load().(TunDevice)
 		t.mu.RUnlock()
 		if dev == nil {
 			return
@@ -633,14 +638,11 @@ func (t *Tunnel) receiveFromTUN(ctx context.Context) {
 			continue
 		}
 
-		// Extract src/dst IPs. The [4]byte arrays avoid heap allocation for
-		// the copy itself, but net.IP() conversion causes escape. This is
-		// still cheaper than make(net.IP, 4) which always allocates.
-		var srcIPBuf, dstIPBuf [4]byte
-		copy(srcIPBuf[:], buf[12:16])
-		copy(dstIPBuf[:], buf[16:20])
-		srcIP := net.IP(srcIPBuf[:])
-		dstIP := net.IP(dstIPBuf[:])
+		// Extract src/dst IPs as [4]byte to avoid heap escape via channel send.
+		// net.IP(srcIP[:]) in the worker goroutine stays on its stack.
+		var srcIP, dstIP [4]byte
+		copy(srcIP[:], buf[12:16])
+		copy(dstIP[:], buf[16:20])
 
 		// Copy packet data — buf is reused on the next Read, but workers
 		// process packets asynchronously. Use pooled buffer to reduce

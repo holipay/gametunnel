@@ -188,11 +188,11 @@ func (t *Tunnel) handleAssignIP(payload []byte) error {
 	t.virtualIP = assign.VirtualIP
 	t.serverIP = assign.ServerIP
 	t.subnetMask = net.IPMask(assign.SubnetMask)
-	t.serverVersion = protocol.ClearECDHFlag(assign.Version)
+	t.serverVersion.Store(uint32(protocol.ClearECDHFlag(assign.Version)))
 	t.sessionToken = assign.SessionToken
-	t.cachedSubnet = cachedSubnet
-	t.serverIPKey = serverIPKey
-	t.cachedPunchPacket = cachedPunchPacket
+	t.cachedSubnet.Store(cachedSubnet)
+	t.serverIPKey.Store(serverIPKey)
+	t.cachedPunchPacket.Store(cachedPunchPacket)
 	t.encCipher = encCipher
 	t.decCipher = decCipher
 	t.p2pCipher = p2pCipher
@@ -271,7 +271,11 @@ func (t *Tunnel) handleECDHExchange(payload []byte) error {
 		return fmt.Errorf("ECDH shared secret: %w", err)
 	}
 
-	// Zero out private key material after shared secret derivation
+	// Note: priv.Bytes() returns a copy, so zeroing it below is ineffective
+	// against the original key bytes in the ecdh.PrivateKey.
+	// Go's crypto/ecdh does not expose a Zero() method, and reflect/unsafe
+	// access to the internal *big.Int is version-dependent.
+	// We keep the zeroing as defense-in-depth for any GC'd copies.
 	privBytes := priv.Bytes()
 	for i := range privBytes {
 		privBytes[i] = 0

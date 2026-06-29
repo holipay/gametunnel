@@ -40,8 +40,9 @@ func (t *Tunnel) sendP2PKeepalives() {
 	}
 	var addrs []peerAddr
 	for _, peer := range t.peers {
-		if peer.DirectReach.Load() && peer.PublicAddr != nil {
-			addrs = append(addrs, peerAddr{addr: peer.PublicAddr})
+		pAddr := peer.PublicAddr.Load()
+		if peer.DirectReach.Load() && pAddr != nil {
+			addrs = append(addrs, peerAddr{addr: pAddr})
 		}
 	}
 	t.mu.RUnlock()
@@ -52,8 +53,12 @@ func (t *Tunnel) sendP2PKeepalives() {
 
 	// Reuse cached hole punch packet — built once in handleAssignIP.
 	t.mu.RLock()
-	packet := t.cachedPunchPacket
+	raw := t.cachedPunchPacket.Load()
 	t.mu.RUnlock()
+	if raw == nil {
+		return
+	}
+	packet := raw.([]byte)
 
 	for _, pa := range addrs {
 		t.sendCtrl(packet, pa.addr)

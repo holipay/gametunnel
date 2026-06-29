@@ -77,3 +77,72 @@ func (l *clientSendLimiter) allowSlow(size int) bool {
 	l.tokens.Store(tokens)
 	return true
 }
+
+// reservation represents pre-reserved rate limiter tokens.
+// Created by tryReserve, then either commit() or cancel().
+type reservation struct {
+	limiter  *clientSendLimiter
+	size     int
+	reserved bool
+}
+
+// tryReserve attempts to reserve size bytes. Unlike allow(), the caller
+// can cancel (refund) the reservation if the send ultimately fails.
+func (l *clientSendLimiter) tryReserve(size int) *reservation {
+	if l == nil {
+		return &reservation{reserved: true}
+	}
+	tokens := l.tokens.Load()
+	if tokens >= int64(size) && l.tokens.CompareAndSwap(tokens, tokens-int64(size)) {
+		return &reservation{limiter: l, size: size, reserved: true}
+	}
+	return l.tryReserveSlow(size)
+}
+
+func (l *clientSendLimiter) tryReserveSlow(size int) *reservation {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	now := time.Now()
+	elapsed := now.Sub(l.lastTime).Seconds()
+	l.lastTime = now
+	if elapsed < 0 {
+		elapsed = 0
+	}
+
+	tokens := l.tokens.Load()
+	tokens += int64(elapsed * float64(l.rate))
+	if tokens > l.burst {
+		tokens = l.burst
+	}
+
+	if tokens < int64(size) {
+		l.tokens.Store(tokens)
+		return &reservation{reserved: false}
+	}
+
+	tokens -= int64(size)
+	l.tokens.Store(tokens)
+	return &reservation{limiter: l, size: size, reserved: true}
+}
+
+// ok returns true if the reservation was successful (tokens available).
+func (r *reservation) ok() bool { return r.reserved }
+
+// commit is a no-op — tokens were already deducted by tryReserve.
+func (r *reservation) commit() {}
+
+// cancel refunds the reserved tokens back to the bucket.
+func (r *reservation) cancel() {
+	if !r.reserved || r.limiter == nil {
+		return
+	}
+	r.limiter.mu.Lock()
+	tokens := r.limiter.tokens.Load()
+	tokens += int64(r.size)
+	if tokens > r.limiter.burst {
+		tokens = r.limiter.burst
+	}
+	r.limiter.tokens.Store(tokens)
+	r.limiter.mu.Unlock()
+}
