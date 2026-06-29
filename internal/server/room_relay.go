@@ -36,29 +36,18 @@ func (r *Room) handleRelay(payload []byte, from *net.UDPAddr) {
 	}
 
 	// Session token validation (v1.7+): if client sent a token, verify it.
-	// The payload may be in old format (flags at [8]) or new format (formatVer at [8], flags at [9]).
-	if sender.clientVersion >= protocol.MinTokenVersion && sender.HasSessionToken() && len(payload) >= 25 {
-		var flagsByte byte
-		var tokenOff int
-		if len(payload) > 8 && payload[8] == protocol.DataFormatVersion {
-			// New format (v1.8+): formatVer(1) + flags(1) + [token(16)] + data
-			if len(payload) < 26 {
-				r.mu.RUnlock()
-				return
-			}
-			flagsByte = payload[9]
-			tokenOff = 10
-		} else {
-			// Old format: flags(1) + [token(16)] + data
-			flagsByte = payload[8]
-			tokenOff = 9
+	if sender.clientVersion >= protocol.MinTokenVersion && sender.HasSessionToken() {
+		if len(payload) <= 8 {
+			r.mu.RUnlock()
+			return
 		}
-		if flagsByte&protocol.DataFlagHasToken != 0 {
-			if len(payload) < tokenOff+16 {
+		flags, tokenOff, _ := protocol.ParseDataHeader(payload)
+		if flags&protocol.DataFlagHasToken != 0 {
+			if len(payload) < tokenOff+protocol.DataTokenLen {
 				r.mu.RUnlock()
 				return
 			}
-			token := payload[tokenOff : tokenOff+16]
+			token := payload[tokenOff : tokenOff+protocol.DataTokenLen]
 			if !sender.ValidateSessionToken(token) {
 				r.mu.RUnlock()
 				return

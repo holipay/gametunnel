@@ -19,7 +19,8 @@ func buildDataPacket(srcIP, dstIP net.IP, data []byte, flags byte, token [16]byt
 		flags |= protocol.DataFlagHasToken
 		tokenLen = 16
 	}
-	size := protocol.HeaderLen + 10 + tokenLen + len(data) + protocol.ChecksumLen
+	payloadLen := protocol.DataHeaderLen + tokenLen + len(data)
+	size := protocol.HeaderLen + payloadLen + protocol.ChecksumLen
 	dst := make([]byte, size)
 	off := 0
 	dst[off] = protocol.ProtocolVersion
@@ -34,7 +35,7 @@ func buildDataPacket(srcIP, dstIP net.IP, data []byte, flags byte, token [16]byt
 	off++
 	if tokenLen > 0 {
 		copy(dst[off:], token[:])
-		off += 16
+		off += protocol.DataTokenLen
 	}
 	copy(dst[off:], data)
 	off += len(data)
@@ -55,7 +56,8 @@ func buildEncryptedDataPacket(srcIP, dstIP net.IP, pkt []byte, cipher *crypto.Ci
 		tokenLen = 16
 	}
 	encMax := crypto.Overhead + len(pkt)
-	size := protocol.HeaderLen + 10 + tokenLen + encMax
+	payloadLen := protocol.DataHeaderLen + tokenLen
+	size := protocol.HeaderLen + payloadLen + encMax
 	dst := make([]byte, size)
 
 	off := 0
@@ -71,7 +73,7 @@ func buildEncryptedDataPacket(srcIP, dstIP net.IP, pkt []byte, cipher *crypto.Ci
 	off++
 	if tokenLen > 0 {
 		copy(dst[off:], token[:])
-		off += 16
+		off += protocol.DataTokenLen
 	}
 
 	dst = dst[:off]

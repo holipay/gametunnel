@@ -1096,7 +1096,8 @@ func TestHandleRelay_TokenValidation_WrongToken(t *testing.T) {
 	copy(payload[4:8], receiver.VirtualIP.To4())
 	payload[8] = protocol.DataFormatVersion
 	payload[9] = protocol.DataFlagHasToken
-	// Write a wrong token (all zeros instead of sender.SessionToken)
+	// Explicitly zero the token field so it won't match sender.SessionToken
+	clear(payload[10:26])
 	copy(payload[26:], []byte{0x01, 0x02, 0x03, 0x04, 0x05})
 
 	r.handleRelay(payload, senderAddr)
