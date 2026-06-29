@@ -125,21 +125,17 @@ func (t *Tunnel) handleDataFromServer(payload []byte) {
 		return
 	}
 
-	srcKey := ipKey(dp.SrcIP)
-
 	// Snapshot all needed fields under a single read lock to avoid races with reconnect
 	t.mu.RLock()
-	serverIPKey, _ := t.session.serverIPKey.Load().([16]byte)
 	decCipher := t.crypto.decCipher
-	_, known := t.peers[srcKey]
 	dev, _ := t.tunDev.Load().(TunDevice)
 	t.mu.RUnlock()
 
-	// Allow traffic from the server's virtual IP (relay path) or known peers.
-	if srcKey != serverIPKey && !known {
-		protocol.PutDataPayload(dp)
-		return
-	}
+	// Accept all server-relayed traffic unconditionally. The server already
+	// validates anti-spoofing (srcIP must match the sender's registered virtual
+	// IP), so the client can trust relayed packets without the known-peer check.
+	// This prevents a race where game discovery broadcasts from a newly joined
+	// peer arrive before the peer info broadcast reaches existing clients.
 
 	if dev == nil {
 		protocol.PutDataPayload(dp)

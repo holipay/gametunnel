@@ -1182,16 +1182,13 @@ func TestHandleDirectData_WrongAddress(t *testing.T) {
 
 // ── handleDataFromServer Tests ─────────────────────────────────
 
-func TestHandleDataFromServer_UnknownSrcIP(t *testing.T) {
+func TestHandleDataFromServer_AnySrcIP(t *testing.T) {
 	tunnel, _ := newTestTunnel(t)
 	mock := &mockTunDevice{}
 	tunnel.tunDev.Store(mock)
 
-	serverIP := net.IPv4(10, 0, 0, 1).To4()
-	tunnel.session.serverIP = serverIP
-	tunnel.session.serverIPKey.Store(ipKey(serverIP))
-
-	// Unknown srcIP (not server, not peer)
+	// Unknown srcIP (not server, not peer) — should be accepted because
+	// the server already validates anti-spoofing for relayed packets.
 	unknownIP := net.IPv4(99, 99, 99, 99).To4()
 	dp := &protocol.DataPayload{
 		SrcIP: unknownIP,
@@ -1201,9 +1198,9 @@ func TestHandleDataFromServer_UnknownSrcIP(t *testing.T) {
 
 	tunnel.handleDataFromServer(dp.Marshal())
 
-	// Should not write to TUN
-	if len(mock.writeBuf) != 0 {
-		t.Error("unknown srcIP should not be written to TUN")
+	// Should write to TUN (server-relayed packets are trusted unconditionally)
+	if len(mock.writeBuf) == 0 {
+		t.Error("relayed packet with unknown srcIP should be written to TUN")
 	}
 }
 
