@@ -167,7 +167,6 @@ func (t *Tunnel) handleServerData(ctx context.Context, conn *net.UDPConn, msg *p
 func (t *Tunnel) decryptWriteAndRelease(dp *protocol.DataPayload, cipher *crypto.Cipher) {
 	t.mu.RLock()
 	dev, _ := t.tunDev.Load().(TunDevice)
-	lz4Dec := t.lz4Decoder
 	t.mu.RUnlock()
 	if dev == nil {
 		protocol.PutDataPayload(dp)
@@ -176,7 +175,6 @@ func (t *Tunnel) decryptWriteAndRelease(dp *protocol.DataPayload, cipher *crypto
 
 	outData := dp.Data
 	if cipher != nil && crypto.IsEncrypted(dp.Data) {
-		// Use pooled buffer for decryption output to reduce GC pressure
 		decBuf := netutil.PktBufGet(len(dp.Data))
 		var err error
 		outData, err = cipher.DecryptInto(decBuf[:0], dp.Data)
@@ -185,20 +183,7 @@ func (t *Tunnel) decryptWriteAndRelease(dp *protocol.DataPayload, cipher *crypto
 			protocol.PutDataPayload(dp)
 			return
 		}
-		// Note: decBuf may be returned to pool after outData is consumed
 		defer netutil.PktBufPut(decBuf)
-	}
-
-	// Decompress if LZ4 flag is set
-	if protocol.IsCompressed(dp.Flags) && lz4Dec != nil {
-		decompressed, err := lz4Dec.Decompress(outData)
-		if err != nil {
-			log.Printf("[lz4] decompress error: %v", err)
-			protocol.PutDataPayload(dp)
-			return
-		}
-		outData = decompressed
-		defer lz4Dec.PutBuffer(decompressed)
 	}
 
 	if _, err := dev.Write(outData); err != nil {
@@ -229,7 +214,6 @@ func (t *Tunnel) handleDirectData(ctx context.Context, from *net.UDPAddr, msg *p
 	p2pCipher := t.p2pCipher
 	fecDec := t.fecDecoder
 	dev, _ := t.tunDev.Load().(TunDevice)
-	lz4Dec := t.lz4Decoder
 
 	// Validate srcIP is a known peer (anti-spoofing)
 	srcKey := ipKey(dp.SrcIP)
@@ -305,19 +289,8 @@ func (t *Tunnel) handleDirectData(ctx context.Context, from *net.UDPAddr, msg *p
 			recovered := fecDec.ProcessDataPacket(groupID, seq, rawData)
 			for _, pkt := range recovered {
 				if len(pkt) >= 20 {
-					out := pkt
-					decompressed := false
-					if protocol.IsCompressed(dp.Flags) && lz4Dec != nil {
-						if d, err := lz4Dec.Decompress(pkt); err == nil {
-							out = d
-							decompressed = true
-						}
-					}
-					if _, werr := dev.Write(out); werr != nil {
+					if _, werr := dev.Write(pkt); werr != nil {
 						log.Printf("[fec] recovered packet write error: %v", werr)
-					}
-					if decompressed {
-						lz4Dec.PutBuffer(out)
 					}
 				}
 				netutil.PktBufPut(pkt)
@@ -325,19 +298,7 @@ func (t *Tunnel) handleDirectData(ctx context.Context, from *net.UDPAddr, msg *p
 		}
 	}
 
-	// ── Step 3: Decompress (if compressed) ──
-	if protocol.IsCompressed(dp.Flags) && lz4Dec != nil {
-		decompressed, decErr := lz4Dec.Decompress(outData)
-		if decErr != nil {
-			log.Printf("[lz4] decompress error: %v", decErr)
-			protocol.PutDataPayload(dp)
-			return
-		}
-		outData = decompressed
-		defer lz4Dec.PutBuffer(decompressed)
-	}
-
-	// ── Step 4: Write to TUN ──
+	// ── Step 3: Write to TUN ──
 	if _, werr := dev.Write(outData); werr != nil {
 		log.Printf(i18n.T().LogTUNWriteFail, werr)
 	}
@@ -388,7 +349,6 @@ func (t *Tunnel) handleDirectHolePunch(ctx context.Context, from *net.UDPAddr, m
 func (t *Tunnel) handleFECPacket(data []byte) {
 	t.mu.RLock()
 	fecDec := t.fecDecoder
-	lz4Dec := t.lz4Decoder
 	dev, _ := t.tunDev.Load().(TunDevice)
 	fecEnabled := t.fecEnabled()
 	t.mu.RUnlock()
@@ -409,19 +369,8 @@ func (t *Tunnel) handleFECPacket(data []byte) {
 	recovered := fecDec.ProcessParityPacket(groupID, groupSize, parity)
 	for _, pkt := range recovered {
 		if len(pkt) >= 20 {
-			out := pkt
-			decompressed := false
-			if lz4Dec != nil {
-				if d, err := lz4Dec.Decompress(pkt); err == nil {
-					out = d
-					decompressed = true
-				}
-			}
-			if _, err := dev.Write(out); err != nil {
+			if _, err := dev.Write(pkt); err != nil {
 				log.Printf("[fec] recovered packet write error: %v", err)
-			}
-			if decompressed {
-				lz4Dec.PutBuffer(out)
 			}
 		}
 		netutil.PktBufPut(pkt)
@@ -534,7 +483,6 @@ func (t *Tunnel) handleDataFromServer(payload []byte) {
 	decCipher := t.decCipher
 	_, known := t.peers[srcKey]
 	fecDec := t.fecDecoder
-	lz4Dec := t.lz4Decoder
 	dev, _ := t.tunDev.Load().(TunDevice)
 	t.mu.RUnlock()
 
@@ -575,19 +523,8 @@ func (t *Tunnel) handleDataFromServer(payload []byte) {
 			recovered := fecDec.ProcessDataPacket(groupID, seq, rawData)
 			for _, pkt := range recovered {
 				if len(pkt) >= 20 {
-					out := pkt
-					decompressed := false
-					if protocol.IsCompressed(dp.Flags) && lz4Dec != nil {
-						if d, err := lz4Dec.Decompress(pkt); err == nil {
-							out = d
-							decompressed = true
-						}
-					}
-					if _, werr := dev.Write(out); werr != nil {
+					if _, werr := dev.Write(pkt); werr != nil {
 						log.Printf("[fec] recovered packet write error: %v", werr)
-					}
-					if decompressed {
-						lz4Dec.PutBuffer(out)
 					}
 				}
 				netutil.PktBufPut(pkt)
@@ -595,19 +532,7 @@ func (t *Tunnel) handleDataFromServer(payload []byte) {
 		}
 	}
 
-	// ── Step 3: Decompress (if compressed) ──
-	if protocol.IsCompressed(dp.Flags) && lz4Dec != nil {
-		decompressed, decErr := lz4Dec.Decompress(outData)
-		if decErr != nil {
-			log.Printf("[lz4] decompress error: %v", decErr)
-			protocol.PutDataPayload(dp)
-			return
-		}
-		outData = decompressed
-		defer lz4Dec.PutBuffer(decompressed)
-	}
-
-	// ── Step 4: Write to TUN ──
+	// ── Step 3: Write to TUN ──
 	if _, werr := dev.Write(outData); werr != nil {
 		log.Printf(i18n.T().LogTUNWriteFail, werr)
 	}

@@ -102,25 +102,13 @@ func (t *Tunnel) routePacket(pkt []byte, srcIP, dstIP [4]byte) {
 		peerAddr = peer.PublicAddr.Load()
 		peerDirect = peerAddr != nil && peer.DirectReach.Load()
 	}
-	lz4Enc := t.lz4Encoder
 	fecEnc := t.fecEncoder
 	t.mu.RUnlock()
 
-	// Try LZ4 compression
-	var flags byte
-	sendData := pkt
-	if lz4Enc != nil {
-		if compressed := lz4Enc.Compress(pkt); compressed != nil {
-			sendData = compressed
-			flags = protocol.DataFlagCompressed
-		}
-	}
-
 	// Embed FEC header (groupID + seq) at end of data when FEC is enabled.
-	// The encoder receives only the raw IP data (without FEC header).
-	// IMPORTANT: must copy sendData before appending FEC header — sendData may
-	// point into a pooled LZ4 buffer, and append's aliasing could corrupt it.
-	rawForFEC := sendData
+	rawForFEC := pkt
+	sendData := pkt
+	var flags byte
 	if fecEnc != nil && t.fecEnabled() {
 		gid, seq := fecEnc.CurrentGroupInfo()
 		var fecHeader [5]byte

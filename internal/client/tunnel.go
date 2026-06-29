@@ -158,10 +158,6 @@ type Tunnel struct {
 	fecEncoder *netutil.FECEncoder // generates parity packets
 	fecDecoder *netutil.FECDecoder // recovers lost packets
 
-	// LZ4: lightweight compression
-	lz4Encoder *netutil.LZ4Encoder
-	lz4Decoder *netutil.LZ4Decoder
-
 	// TCP fallback transport (nil when using UDP)
 	tcpTransport *netutil.TCPTransport // TCP connection for when UDP is blocked
 
@@ -207,9 +203,6 @@ func New(cfg *Config) *Tunnel {
 		// FEC: 8 packets per group (12.5% overhead)
 		fecEncoder: netutil.NewFECEncoder(0),
 		fecDecoder: netutil.NewFECDecoder(0),
-		// LZ4 compression
-		lz4Encoder: netutil.NewLZ4Encoder(),
-		lz4Decoder: netutil.NewLZ4Decoder(),
 	}
 	t.disconnectOnce.Store(&sync.Once{})
 	return t
