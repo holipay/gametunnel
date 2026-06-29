@@ -94,6 +94,16 @@ func (t *Tunnel) receiveFromServer(ctx context.Context, conn *net.UDPConn, serve
 				msg.Type == protocol.TypeKick
 		}
 
+		// When client and server are on the same machine, the kernel may
+		// route server responses through loopback (::1 or 127.0.0.1) even
+		// when the client connected via the server's public IPv4/IPv6
+		// address. The port check ensures this only matches the actual
+		// server process.
+		if !fromServer && from != nil && serverAddr != nil &&
+			from.Port == serverAddr.Port && from.IP.IsLoopback() {
+			fromServer = true
+		}
+
 		// Strip trailing CRC for encrypted relay data from older servers
 		// that still append the redundant CRC. New servers (v1.8+) omit
 		// it because AEAD already provides integrity. The version check
