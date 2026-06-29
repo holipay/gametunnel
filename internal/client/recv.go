@@ -30,7 +30,7 @@ const readBufSize = 65535
 // receiveFromServer handles packets from the server and direct P2P peers.
 // It distinguishes between server-relayed packets and direct peer packets
 // by checking the source address, which is critical for P2P detection.
-func (t *Tunnel) receiveFromServer(ctx context.Context, conn *net.UDPConn) {
+func (t *Tunnel) receiveFromServer(ctx context.Context, conn *net.UDPConn, serverAddr *net.UDPAddr) {
 	buf := make([]byte, readBufSize)
 	consecutiveErrors := 0
 
@@ -86,8 +86,12 @@ func (t *Tunnel) receiveFromServer(ctx context.Context, conn *net.UDPConn) {
 			continue
 		}
 
-		sa := t.serverAddr.Load()
-		fromServer := from != nil && sa != nil && from.IP.Equal(sa.IP) && from.Port == sa.Port
+		// Use the snapshot serverAddr (captured at Connect time) for the primary
+		// fromServer check. This avoids the race window during reconnect where
+		// t.serverAddr may have been updated but the packet arrived on the old
+		// connection. The secondary heuristic (server-only message types) provides
+		// additional protection for edge cases.
+		fromServer := from != nil && from.IP.Equal(serverAddr.IP) && from.Port == serverAddr.Port
 
 		// Secondary heuristic: server-only message types are definitely
 		// from the server. Catches the race window during reconnect where
@@ -112,7 +116,7 @@ func (t *Tunnel) receiveFromServer(ctx context.Context, conn *net.UDPConn) {
 
 		if fromServer {
 			t.handleServerData(ctx, conn, msg)
-		} else if from != nil && sa != nil {
+		} else if from != nil && serverAddr != nil {
 			t.handleDirectData(ctx, from, msg)
 		}
 	}
