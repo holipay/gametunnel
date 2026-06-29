@@ -71,7 +71,7 @@ func (t *Tunnel) handlePeerInfo(ctx context.Context, payload []byte) {
 	t.peers = make(map[[16]byte]*Peer, len(info.Peers))
 	for _, entry := range info.Peers {
 		// Skip self — server sends full list including this client
-		if entry.VirtualIP.Equal(t.virtualIP) {
+		if entry.VirtualIP.Equal(t.session.virtualIP) {
 			continue
 		}
 		key := ipKey(entry.VirtualIP)

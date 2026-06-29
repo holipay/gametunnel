@@ -64,14 +64,14 @@ func (t *Tunnel) handleDirectData(ctx context.Context, from *net.UDPAddr, msg *p
 
 	// Snapshot all needed fields under a single read lock
 	t.mu.RLock()
-	p2pCipher := t.p2pCipher
+	p2pCipher := t.crypto.p2pCipher
 
 	// Validate srcIP is a known peer (anti-spoofing)
 	srcKey := ipKey(dp.SrcIP)
 	peer, known := t.peers[srcKey]
 
 	// Snapshot session token for unencrypted P2P auth
-	sessionToken := t.sessionToken
+	sessionToken := t.session.sessionToken
 	t.mu.RUnlock()
 
 	if !known {
@@ -139,8 +139,8 @@ func (t *Tunnel) handleDataFromServer(payload []byte) {
 
 	// Snapshot all needed fields under a single read lock to avoid races with reconnect
 	t.mu.RLock()
-	serverIPKey, _ := t.serverIPKey.Load().([16]byte)
-	decCipher := t.decCipher
+	serverIPKey, _ := t.session.serverIPKey.Load().([16]byte)
+	decCipher := t.crypto.decCipher
 	_, known := t.peers[srcKey]
 	dev, _ := t.tunDev.Load().(TunDevice)
 	t.mu.RUnlock()

@@ -17,8 +17,8 @@ import (
 // It handles both passwordless and HMAC challenge-response flows.
 func (t *Tunnel) register(ctx context.Context) error {
 	reg := &protocol.RegisterPayload{
-		RoomID:   t.roomID,
-		Username: t.username,
+		RoomID:   t.session.roomID,
+		Username: t.session.username,
 		Version:  protocol.AppVersion,
 	}
 	packet := protocol.EncodeChecked(protocol.TypeRegister, reg.Marshal())
@@ -141,17 +141,17 @@ func (t *Tunnel) handleAssignIP(payload []byte) error {
 
 	// Initialize end-to-end encryption if password is set
 	var encCipher, decCipher, p2pCipher *crypto.Cipher
-	if t.roomPass != "" {
+	if t.session.roomPass != "" {
 		// Use ECDH session key if negotiated, otherwise fall back to password-derived key
 		var key []byte
 		t.mu.RLock()
-		if protocol.IsECDHNegotiated(assign.Version) && t.ecdhSessionKey != nil {
-			key = t.ecdhSessionKey
+		if protocol.IsECDHNegotiated(assign.Version) && t.crypto.ecdhSessionKey != nil {
+			key = t.crypto.ecdhSessionKey
 		}
 		t.mu.RUnlock()
 
 		if key == nil {
-			key = auth.DeriveKey(t.roomPass, t.roomID)
+			key = auth.DeriveKey(t.session.roomPass, t.session.roomID)
 		}
 		if key == nil {
 			return fmt.Errorf("%s", i18n.T().ErrDeriveKeyFailed)
@@ -185,19 +185,19 @@ func (t *Tunnel) handleAssignIP(payload []byte) error {
 
 	// Atomically update all fields under lock to prevent races with readers
 	t.mu.Lock()
-	t.virtualIP = assign.VirtualIP
-	t.serverIP = assign.ServerIP
-	t.subnetMask = net.IPMask(assign.SubnetMask)
-	t.serverVersion.Store(uint32(protocol.ClearECDHFlag(assign.Version)))
-	t.sessionToken = assign.SessionToken
-	t.cachedSubnet.Store(cachedSubnet)
-	t.serverIPKey.Store(serverIPKey)
-	t.cachedPunchPacket.Store(cachedPunchPacket)
-	t.encCipher = encCipher
-	t.decCipher = decCipher
-	t.p2pCipher = p2pCipher
+	t.session.virtualIP = assign.VirtualIP
+	t.session.serverIP = assign.ServerIP
+	t.session.subnetMask = net.IPMask(assign.SubnetMask)
+	t.session.serverVersion.Store(uint32(protocol.ClearECDHFlag(assign.Version)))
+	t.session.sessionToken = assign.SessionToken
+	t.session.cachedSubnet.Store(cachedSubnet)
+	t.session.serverIPKey.Store(serverIPKey)
+	t.nat.cachedPunchPacket.Store(cachedPunchPacket)
+	t.crypto.encCipher = encCipher
+	t.crypto.decCipher = decCipher
+	t.crypto.p2pCipher = p2pCipher
 	// Clear ECDH session key after use (prevent reuse)
-	t.ecdhSessionKey = nil
+	t.crypto.ecdhSessionKey = nil
 	// Clear stale peers from previous session — they will be repopulated
 	// by the next PeerInfo message from the server.
 	t.peers = make(map[[16]byte]*Peer)
@@ -208,7 +208,7 @@ func (t *Tunnel) handleAssignIP(payload []byte) error {
 
 // handleAuthChallenge responds to the server's HMAC authentication challenge.
 func (t *Tunnel) handleAuthChallenge(payload []byte) error {
-	if t.roomPass == "" {
+	if t.session.roomPass == "" {
 		return fmt.Errorf("%s", i18n.T().ErrNeedPassword)
 	}
 
@@ -217,7 +217,7 @@ func (t *Tunnel) handleAuthChallenge(payload []byte) error {
 		return fmt.Errorf("%s", i18n.Format(i18n.T().ErrParseAuthFailed, err))
 	}
 
-	key := auth.DeriveKey(t.roomPass, t.roomID)
+	key := auth.DeriveKey(t.session.roomPass, t.session.roomID)
 	if key == nil {
 		return fmt.Errorf("%s", i18n.T().ErrDeriveKeyFailed)
 	}
@@ -232,11 +232,11 @@ func (t *Tunnel) handleAuthChallenge(payload []byte) error {
 		}
 	}
 
-	hmacVal := auth.ComputeHMAC(key, acp.Challenge, t.roomID, t.username, clientAddr)
+	hmacVal := auth.ComputeHMAC(key, acp.Challenge, t.session.roomID, t.session.username, clientAddr)
 
 	resp := &protocol.AuthResponsePayload{
-		RoomID:   t.roomID,
-		Username: t.username,
+		RoomID:   t.session.roomID,
+		Username: t.session.username,
 		HMAC:     hmacVal,
 	}
 
@@ -250,7 +250,7 @@ func (t *Tunnel) handleAuthChallenge(payload []byte) error {
 // handleECDHExchange processes the server's ephemeral X25519 public key.
 // Generates a client keypair, derives the shared secret, and sends ECDHConfirm.
 func (t *Tunnel) handleECDHExchange(payload []byte) error {
-	if t.roomPass == "" {
+	if t.session.roomPass == "" {
 		return fmt.Errorf("ECDH exchange without password")
 	}
 
@@ -282,7 +282,7 @@ func (t *Tunnel) handleECDHExchange(payload []byte) error {
 	}
 
 	// Derive session key
-	sessionKey := auth.DeriveSessionKey(shared, t.roomID)
+	sessionKey := auth.DeriveSessionKey(shared, t.session.roomID)
 
 	// Zero out shared secret after key derivation
 	for i := range shared {
@@ -294,7 +294,7 @@ func (t *Tunnel) handleECDHExchange(payload []byte) error {
 
 	// Compute HMAC over both public keys using password-derived key
 	// (prevents MITM: attacker can't forge HMAC without password)
-	passwordKey := auth.DeriveKey(t.roomPass, t.roomID)
+	passwordKey := auth.DeriveKey(t.session.roomPass, t.session.roomID)
 	ecdhHMAC := auth.ComputeECDHMAC(passwordKey, ecdhPkt.PublicKey[:], clientPub)
 
 	// Send ECDHConfirm
@@ -307,7 +307,7 @@ func (t *Tunnel) handleECDHExchange(payload []byte) error {
 
 	// Store session key for cipher creation in handleAssignIP
 	t.mu.Lock()
-	t.ecdhSessionKey = sessionKey
+	t.crypto.ecdhSessionKey = sessionKey
 	t.mu.Unlock()
 
 	log.Printf("[ecdh] session key negotiated")
@@ -319,8 +319,8 @@ func (t *Tunnel) handleECDHExchange(payload []byte) error {
 // The protocol is identical to UDP registration but uses TCP framing.
 func (t *Tunnel) registerTCP(ctx context.Context) error {
 	reg := &protocol.RegisterPayload{
-		RoomID:   t.roomID,
-		Username: t.username,
+		RoomID:   t.session.roomID,
+		Username: t.session.username,
 		Version:  protocol.AppVersion,
 	}
 	packet := protocol.EncodeChecked(protocol.TypeRegister, reg.Marshal())

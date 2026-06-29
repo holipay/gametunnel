@@ -98,82 +98,6 @@ type TunConfig struct {
 	MTU        int
 }
 
-// Tunnel is the GameTunnel client.
-type Tunnel struct {
-	conn           *net.UDPConn
-	sendCh         chan sendJob // dedicated channel for UDP sends (replaces connMu)
-	ctrlCh         chan sendJob // high-priority channel for control packets (never dropped)
-	tunCh          chan tunJob  // TUN packet channel for worker pool
-	serverAddr     atomic.Pointer[net.UDPAddr]
-	tunDev         atomic.Value // stores TunDevice (set once per Connect, read in hot path)
-	virtualIP      net.IP
-	serverIP       net.IP
-	serverIPKey    atomic.Value // stores [16]byte
-	subnetMask     net.IPMask
-	cachedSubnet   atomic.Pointer[net.IPNet]
-	peers          map[[16]byte]*Peer
-	mu             sync.RWMutex
-	username       string
-	roomID         string
-	roomPass       string
-	disconnectOnce atomic.Pointer[sync.Once]
-	closeTUNOnce   sync.Once
-	sendErrors     atomic.Int64 // send failure counter
-	cancelKicks    atomic.Bool  // true if server sent a fatal kick (wrong password, version mismatch)
-
-	// Client-side send rate limiter (token bucket, per-server)
-	sendLimiter *clientSendLimiter
-
-	// Server liveness tracking — updated by handleServerData.
-	// Stores time.Now().UnixNano() to avoid heap escape of time.Time.
-	lastServerResponse atomic.Int64
-
-	// Server version from AssignIP response (0 = old server without version)
-	serverVersion atomic.Uint32
-
-	// Session token (v1.7+): 16-byte random token for anti-spoofing.
-	// Included in relay packets when server version >= 0x0107.
-	sessionToken [16]byte
-
-	// ECDH session key (forward secrecy): derived from X25519 shared secret.
-	// Used to create encryption ciphers when ECDH was negotiated.
-	ecdhSessionKey []byte
-
-	// Cached hole punch packet — built once on Connect, reused by
-	// startHolePunch, handleHolePunchReceived, and sendP2PKeepalives.
-	cachedPunchPacket atomic.Value
-
-	// End-to-end encryption (nil when no password)
-	encCipher *crypto.Cipher // client→server (relay send, DirClientToServer)
-	decCipher *crypto.Cipher // server→client (relay receive, DirServerToClient)
-	p2pCipher *crypto.Cipher // client↔client (P2P direct, DirClientToClient)
-
-	// P2P enhancement: NAT type detection and port prediction
-	natProbeResult *nat.NATProbeResult // NAT type from probe (nil if not probed)
-	portPredictor  *nat.PortPredictor  // port prediction for hole punching
-
-
-	// TCP fallback transport (nil when using UDP)
-	tcpTransport *netutil.TCPTransport // TCP connection for when UDP is blocked
-
-	// Rebind acknowledgment channel — receiveFromServer sends RebindAck here,
-	// tryRebind receives from it. Avoids concurrent ReadFromUDP on t.conn.
-	rebindAckCh chan *protocol.RebindAckPayload
-
-	// TUN reuse state — persists across Connect() calls
-	lastAssignedIP net.IP                             // virtual IP from last registration
-	lastMTU        int                                // MTU from last connection
-	newTUNFunc     func(TunConfig) (TunDevice, error) // cached factory
-
-	// Hole punch lifecycle — tracks outstanding hole punch goroutines
-	holePunchWg sync.WaitGroup
-
-	// Connect lifecycle — ensures old goroutines exit before new ones start
-	runCancel context.CancelFunc
-	runDone   chan struct{}
-	runWg     sync.WaitGroup
-}
-
 // sendChanSize is the buffer size for the UDP send channel.
 // Sized to absorb bursts without blocking callers.
 const sendChanSize = 8192
@@ -185,9 +109,11 @@ const ctrlChanSize = 256
 // New creates a new Tunnel. Call Connect to start it.
 func New(cfg *Config) *Tunnel {
 	t := &Tunnel{
-		username:    cfg.PlayerName,
-		roomID:      cfg.RoomID,
-		roomPass:    cfg.RoomPassword,
+		session: session{
+			username: cfg.PlayerName,
+			roomID:   cfg.RoomID,
+			roomPass: cfg.RoomPassword,
+		},
 		peers:       make(map[[16]byte]*Peer),
 		sendCh:      make(chan sendJob, sendChanSize),
 		ctrlCh:      make(chan sendJob, ctrlChanSize),
@@ -290,7 +216,7 @@ func (t *Tunnel) Connect(ctx context.Context, serverAddr string, mtu int, newTUN
 	// Skip if already probed in a previous session — avoids wasting
 	// a probe when reconnecting with the same server.
 	t.mu.RLock()
-	alreadyProbed := t.natProbeResult != nil
+	alreadyProbed := t.nat.natProbeResult != nil
 	t.mu.RUnlock()
 	if t.tcpTransport == nil && !alreadyProbed {
 		go func() {
@@ -307,8 +233,8 @@ func (t *Tunnel) Connect(ctx context.Context, serverAddr string, mtu int, newTUN
 				log.Printf("[nat-probe] probe failed: %v", err)
 			} else {
 				t.mu.Lock()
-				t.natProbeResult = result
-				t.portPredictor = nat.PortPredictorFromNATProbe([]*nat.NATProbeResult{result})
+				t.nat.natProbeResult = result
+				t.nat.portPredictor = nat.PortPredictorFromNATProbe([]*nat.NATProbeResult{result})
 				t.mu.Unlock()
 				log.Printf("[nat-probe] NAT type: %d, external: %s:%d, RTT: %v",
 					result.Type, result.ExternalIP, result.ExternalPort, result.RTT)
@@ -385,18 +311,18 @@ func (t *Tunnel) Connect(ctx context.Context, serverAddr string, mtu int, newTUN
 
 // ensureTUN reuses or creates the TUN device based on whether the IP changed.
 func (t *Tunnel) ensureTUN(mtu int) error {
-	ipChanged := t.lastAssignedIP != nil && !t.virtualIP.Equal(t.lastAssignedIP)
+	ipChanged := t.lastAssignedIP != nil && !t.session.virtualIP.Equal(t.lastAssignedIP)
 	tunAlive := t.tunDev.Load() != nil
 
 	switch {
 	case tunAlive && !ipChanged:
-		log.Printf("%s", i18n.Format(i18n.T().LogReuseTUN, t.virtualIP))
+		log.Printf("%s", i18n.Format(i18n.T().LogReuseTUN, t.session.virtualIP))
 		if v := t.tunDev.Load(); v != nil {
 			v.(TunDevice).ReconfigureRoutes()
 		}
 
 	case tunAlive && ipChanged:
-		log.Printf("%s", i18n.Format(i18n.T().LogIPChanged, t.lastAssignedIP, t.virtualIP))
+		log.Printf("%s", i18n.Format(i18n.T().LogIPChanged, t.lastAssignedIP, t.session.virtualIP))
 		t.tunDev.Load().(TunDevice).Close()
 		return t.createTUN(mtu)
 
@@ -413,9 +339,9 @@ func (t *Tunnel) createTUN(mtu int) error {
 		return fmt.Errorf("TUN factory not set")
 	}
 	tunCfg := TunConfig{
-		VirtualIP:  t.virtualIP,
-		SubnetMask: t.subnetMask,
-		ServerIP:   t.serverIP,
+		VirtualIP:  t.session.virtualIP,
+		SubnetMask: t.session.subnetMask,
+		ServerIP:   t.session.serverIP,
 		MTU:        mtu,
 	}
 	dev, err := t.newTUNFunc(tunCfg)
@@ -423,7 +349,7 @@ func (t *Tunnel) createTUN(mtu int) error {
 		return fmt.Errorf("%s", i18n.Format(i18n.T().ErrCreateTUN, err))
 	}
 	t.tunDev.Store(dev)
-	t.lastAssignedIP = append(net.IP(nil), t.virtualIP...) // defensive copy
+	t.lastAssignedIP = append(net.IP(nil), t.session.virtualIP...) // defensive copy
 	t.lastMTU = mtu
 	return nil
 }
@@ -478,7 +404,7 @@ func (t *Tunnel) CloseTUN() {
 
 // VirtualIP returns the assigned virtual IP (valid after Connect).
 func (t *Tunnel) VirtualIP() net.IP {
-	return t.virtualIP
+	return t.session.virtualIP
 }
 
 // TunnelStatus is a point-in-time snapshot of the tunnel state.
@@ -510,19 +436,19 @@ func (t *Tunnel) Status() TunnelStatus {
 	defer t.mu.RUnlock()
 
 	st := TunnelStatus{
-		Connected:     t.tunDev.Load() != nil && t.virtualIP != nil,
-		VirtualIP:     t.virtualIP,
-		SubnetMask:    t.subnetMask,
-		ServerIP:      t.serverIP,
+		Connected:     t.tunDev.Load() != nil && t.session.virtualIP != nil,
+		VirtualIP:     t.session.virtualIP,
+		SubnetMask:    t.session.subnetMask,
+		ServerIP:      t.session.serverIP,
 		PeerCount:     len(t.peers),
-		ServerVersion: uint16(t.serverVersion.Load()),
+		ServerVersion: uint16(t.session.serverVersion.Load()),
 	}
 
 	// NAT probe info
-	if t.natProbeResult != nil {
-		st.NATType = t.natProbeResult.Type
-		st.ExternalIP = t.natProbeResult.ExternalIP
-		st.ExternalPort = t.natProbeResult.ExternalPort
+	if t.nat.natProbeResult != nil {
+		st.NATType = t.nat.natProbeResult.Type
+		st.ExternalIP = t.nat.natProbeResult.ExternalIP
+		st.ExternalPort = t.nat.natProbeResult.ExternalPort
 	}
 
 	if !st.Connected || len(t.peers) == 0 {

@@ -53,7 +53,7 @@ func (t *Tunnel) sendP2PKeepalives() {
 
 	// Reuse cached hole punch packet — built once in handleAssignIP.
 	t.mu.RLock()
-	raw := t.cachedPunchPacket.Load()
+	raw := t.nat.cachedPunchPacket.Load()
 	t.mu.RUnlock()
 	if raw == nil {
 		return

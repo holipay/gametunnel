@@ -64,7 +64,7 @@ func (t *Tunnel) receiveFromServer(ctx context.Context, conn *net.UDPConn, serve
 
 		// Encrypted rooms skip CRC32 (AEAD provides integrity).
 		t.mu.RLock()
-		encrypted := t.decCipher != nil
+		encrypted := t.crypto.decCipher != nil
 		t.mu.RUnlock()
 		var msg *protocol.Message
 		if encrypted {
@@ -99,7 +99,7 @@ func (t *Tunnel) receiveFromServer(ctx context.Context, conn *net.UDPConn, serve
 		// it because AEAD already provides integrity. The version check
 		// avoids depending on fromServer being correct.
 		if encrypted && msg.Type == protocol.TypeData && len(msg.Payload) >= protocol.ChecksumLen {
-			if t.serverVersion.Load() < uint32(protocol.MinRelayNoCRCVersion) {
+			if t.session.serverVersion.Load() < uint32(protocol.MinRelayNoCRCVersion) {
 				msg.Payload = msg.Payload[:len(msg.Payload)-protocol.ChecksumLen]
 			}
 		}

@@ -37,7 +37,7 @@ const holePunchBackoff = 5 * time.Second
 // Respects context cancellation. Uses the cached hole punch packet.
 func (t *Tunnel) burstHolePunch(addr *net.UDPAddr, count int, interval time.Duration, ctx context.Context) {
 	t.mu.RLock()
-	raw := t.cachedPunchPacket.Load()
+	raw := t.nat.cachedPunchPacket.Load()
 	t.mu.RUnlock()
 	if raw == nil {
 		return
@@ -78,7 +78,7 @@ func (t *Tunnel) startHolePunch(ctx context.Context, peerIP net.IP) {
 		return
 	}
 	peerAddr := peer.PublicAddr.Load()
-	natResult := t.natProbeResult
+	natResult := t.nat.natProbeResult
 	t.mu.RUnlock()
 
 	// Determine strategy based on NAT type
@@ -99,7 +99,7 @@ func (t *Tunnel) startHolePunch(ctx context.Context, peerIP net.IP) {
 	// If Symmetric NAT detected, try port prediction first
 	if strategy == nat.StrategyExtended {
 		t.mu.RLock()
-		pp := t.portPredictor
+		pp := t.nat.portPredictor
 		t.mu.RUnlock()
 		if pp != nil {
 			if predictedPorts := pp.PredictPortsForPeer([]int{peerAddr.Port}); len(predictedPorts) > 0 {
