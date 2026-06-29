@@ -575,9 +575,9 @@ func TestMarshalSize(t *testing.T) {
 		DstIP: net.IPv4(10, 0, 0, 3),
 		Data:  []byte("hello"),
 	}
-	// New format: srcIP(4) + dstIP(4) + flags(1) + data(5) = 14
-	if dp.MarshalSize() != 14 {
-		t.Errorf("MarshalSize: got %d, want 14", dp.MarshalSize())
+	// New format: srcIP(4) + dstIP(4) + formatVer(1) + flags(1) + data(5) = 15
+	if dp.MarshalSize() != 15 {
+		t.Errorf("MarshalSize: got %d, want 15", dp.MarshalSize())
 	}
 }
 
@@ -589,8 +589,8 @@ func TestMarshalTo(t *testing.T) {
 	}
 	dst := make([]byte, dp.MarshalSize())
 	n := dp.MarshalTo(dst)
-	if n != 14 {
-		t.Errorf("MarshalTo: wrote %d bytes, want 14", n)
+	if n != 15 {
+		t.Errorf("MarshalTo: wrote %d bytes, want 15", n)
 	}
 	// Verify it matches Marshal()
 	if !bytes.Equal(dst, dp.Marshal()) {

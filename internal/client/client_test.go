@@ -1719,6 +1719,104 @@ func TestHandleDirectData_EmptyPayload(t *testing.T) {
 	}
 }
 
+func TestHandleDirectData_TokenValidation_OldFormat(t *testing.T) {
+	tunnel, _ := newTestTunnel(t)
+	mock := &mockTunDevice{}
+	tunnel.tunDev.Store(mock)
+
+	peerIP := net.IPv4(10, 0, 0, 5).To4()
+	fromAddr := &net.UDPAddr{IP: net.IPv4(1, 2, 3, 4), Port: 12345}
+
+	tunnel.mu.Lock()
+	tunnel.sessionToken = [16]byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16}
+	wdPeer := &Peer{VirtualIP: peerIP, Username: "peer1"}
+	wdPeer.PublicAddr.Store(fromAddr)
+	tunnel.peers[ipKey(peerIP)] = wdPeer
+	tunnel.mu.Unlock()
+
+	// Old format payload with valid token: srcIP(4) + dstIP(4) + flags(1) + token(16) + data
+	payload := make([]byte, 4+4+1+16+5)
+	copy(payload[0:4], peerIP)
+	copy(payload[4:8], tunnel.virtualIP)
+	payload[8] = protocol.DataFlagHasToken
+	copy(payload[9:25], tunnel.sessionToken[:])
+	copy(payload[25:], []byte("hello"))
+
+	msg := &protocol.Message{Type: protocol.TypeData, Payload: payload}
+
+	tunnel.handleDirectData(context.Background(), fromAddr, msg)
+
+	if len(mock.writeBuf) == 0 {
+		t.Error("valid old-format token data should write to TUN")
+	}
+}
+
+func TestHandleDirectData_TokenValidation_NewFormat(t *testing.T) {
+	tunnel, _ := newTestTunnel(t)
+	mock := &mockTunDevice{}
+	tunnel.tunDev.Store(mock)
+
+	peerIP := net.IPv4(10, 0, 0, 5).To4()
+	fromAddr := &net.UDPAddr{IP: net.IPv4(1, 2, 3, 4), Port: 12345}
+
+	tunnel.mu.Lock()
+	tunnel.sessionToken = [16]byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16}
+	wdPeer := &Peer{VirtualIP: peerIP, Username: "peer1"}
+	wdPeer.PublicAddr.Store(fromAddr)
+	tunnel.peers[ipKey(peerIP)] = wdPeer
+	tunnel.mu.Unlock()
+
+	// New format payload with valid token: srcIP(4) + dstIP(4) + formatVer(1) + flags(1) + token(16) + data
+	payload := make([]byte, 4+4+1+1+16+5)
+	copy(payload[0:4], peerIP)
+	copy(payload[4:8], tunnel.virtualIP)
+	payload[8] = protocol.DataFormatVersion
+	payload[9] = protocol.DataFlagHasToken
+	copy(payload[10:26], tunnel.sessionToken[:])
+	copy(payload[26:], []byte("hello"))
+
+	msg := &protocol.Message{Type: protocol.TypeData, Payload: payload}
+
+	tunnel.handleDirectData(context.Background(), fromAddr, msg)
+
+	if len(mock.writeBuf) == 0 {
+		t.Error("valid new-format token data should write to TUN")
+	}
+}
+
+func TestHandleDirectData_TokenValidation_WrongToken(t *testing.T) {
+	tunnel, _ := newTestTunnel(t)
+	mock := &mockTunDevice{}
+	tunnel.tunDev.Store(mock)
+
+	peerIP := net.IPv4(10, 0, 0, 5).To4()
+	fromAddr := &net.UDPAddr{IP: net.IPv4(1, 2, 3, 4), Port: 12345}
+
+	tunnel.mu.Lock()
+	tunnel.sessionToken = [16]byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16}
+	wdPeer := &Peer{VirtualIP: peerIP, Username: "peer1"}
+	wdPeer.PublicAddr.Store(fromAddr)
+	tunnel.peers[ipKey(peerIP)] = wdPeer
+	tunnel.mu.Unlock()
+
+	// New format with WRONG token
+	payload := make([]byte, 4+4+1+1+16+5)
+	copy(payload[0:4], peerIP)
+	copy(payload[4:8], tunnel.virtualIP)
+	payload[8] = protocol.DataFormatVersion
+	payload[9] = protocol.DataFlagHasToken
+	// zero token (doesn't match sessionToken)
+	copy(payload[26:], []byte("hello"))
+
+	msg := &protocol.Message{Type: protocol.TypeData, Payload: payload}
+
+	tunnel.handleDirectData(context.Background(), fromAddr, msg)
+
+	if len(mock.writeBuf) != 0 {
+		t.Error("wrong token data should NOT write to TUN")
+	}
+}
+
 // ── handleServerData Tests ─────────────────────────────────────
 
 func TestHandleServerData_Ping(t *testing.T) {
