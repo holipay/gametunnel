@@ -91,25 +91,17 @@ func (t *Tunnel) handleDirectData(ctx context.Context, from *net.UDPAddr, msg *p
 	// All clients in a room share the same token, distributed by the
 	// server during registration. Old servers (pre-v1.7) have zero tokens.
 	if p2pCipher == nil && sessionToken != [16]byte{} {
-		// Detect format: new format has formatVer byte at [8], old format has flags at [8]
-		var tokenOff int
-		if len(msg.Payload) > 8 && msg.Payload[8] == protocol.DataFormatVersion {
-			// New format: formatVer(1) + flags(1) + [token(16)]
-			if len(msg.Payload) < 26 || msg.Payload[9]&protocol.DataFlagHasToken == 0 {
-				protocol.PutDataPayload(dp)
-				return
-			}
-			tokenOff = 10
-		} else {
-			// Old format: flags(1) + [token(16)]
-			if len(msg.Payload) < 25 || msg.Payload[8]&protocol.DataFlagHasToken == 0 {
-				protocol.PutDataPayload(dp)
-				return
-			}
-			tokenOff = 9
+		if len(msg.Payload) <= 8 {
+			protocol.PutDataPayload(dp)
+			return
 		}
-		var pktToken [16]byte
-		copy(pktToken[:], msg.Payload[tokenOff:tokenOff+16])
+		flags, tokenOff, _ := protocol.ParseDataHeader(msg.Payload)
+		if flags&protocol.DataFlagHasToken == 0 || len(msg.Payload) < tokenOff+protocol.DataTokenLen {
+			protocol.PutDataPayload(dp)
+			return
+		}
+		var pktToken [protocol.DataTokenLen]byte
+		copy(pktToken[:], msg.Payload[tokenOff:tokenOff+protocol.DataTokenLen])
 		if pktToken != sessionToken {
 			protocol.PutDataPayload(dp)
 			return

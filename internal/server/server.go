@@ -330,6 +330,7 @@ func (s *Server) Close() error {
 	// Cancel context to signal all goroutines to exit
 	s.closeMu.Lock()
 	cancel := s.cancelCtx
+	s.cancelCtx = nil
 	s.closeMu.Unlock()
 	if cancel != nil {
 		cancel()

@@ -1805,7 +1805,8 @@ func TestHandleDirectData_TokenValidation_WrongToken(t *testing.T) {
 	copy(payload[4:8], tunnel.virtualIP)
 	payload[8] = protocol.DataFormatVersion
 	payload[9] = protocol.DataFlagHasToken
-	// zero token (doesn't match sessionToken)
+	// Explicitly zero the token field so it won't match sessionToken
+	clear(payload[10:26])
 	copy(payload[26:], []byte("hello"))
 
 	msg := &protocol.Message{Type: protocol.TypeData, Payload: payload}
