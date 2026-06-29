@@ -13,6 +13,7 @@ import (
 	"github.com/holipay/gametunnel/internal/auth"
 	"github.com/holipay/gametunnel/internal/client"
 	"github.com/holipay/gametunnel/internal/i18n"
+	"github.com/holipay/gametunnel/internal/paths"
 )
 
 // Build info, set at build time via -ldflags.
@@ -72,7 +73,7 @@ func run(cfg *client.Config, tunFactory func(client.TunConfig) (client.TunDevice
 const maxLogSize = 1 * 1024 * 1024
 
 func setupLog() *os.File {
-	logDir := filepath.Join(appDataPath(), "GameTunnel")
+	logDir := paths.GameTunnelDir()
 	if err := os.MkdirAll(logDir, 0755); err != nil {
 		log.SetOutput(os.Stderr)
 		log.Printf("create log dir: %v", err)
@@ -104,17 +105,4 @@ func parseHostIP(addr string) net.IP {
 		return net.ParseIP(addr)
 	}
 	return net.ParseIP(host)
-}
-
-func appDataPath() string {
-	if appData := os.Getenv("APPDATA"); appData != "" {
-		return appData
-	}
-	if userProfile := os.Getenv("USERPROFILE"); userProfile != "" {
-		return filepath.Join(userProfile, "AppData", "Roaming")
-	}
-	if home := os.Getenv("HOME"); home != "" {
-		return home
-	}
-	return "."
 }

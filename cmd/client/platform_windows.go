@@ -3,6 +3,7 @@
 package main
 
 import (
+	"github.com/holipay/gametunnel/internal/paths"
 	"os"
 	"path/filepath"
 
@@ -14,7 +15,7 @@ import (
 
 // openLogFile opens the log file with the default text editor (Windows).
 func openLogFile() {
-	logPath := filepath.Join(appDataPath(), "GameTunnel", "gametunnel.log")
+	logPath := filepath.Join(paths.GameTunnelDir(), "gametunnel.log")
 	if _, err := os.Stat(logPath); err != nil {
 		os.MkdirAll(filepath.Dir(logPath), 0755)
 		os.WriteFile(logPath, []byte(""), 0600)
