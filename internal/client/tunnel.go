@@ -256,9 +256,12 @@ func (t *Tunnel) Connect(ctx context.Context, serverAddr string, mtu int, newTUN
 		}
 	}
 
-	// Close old FEC decoder goroutine before creating a new one
+	// Reset both FEC encoder and decoder on reconnect.
+	// The encoder's groupID counter starts fresh so it aligns with
+	// the new decoder's group tracking.
 	t.fecDecoder.Close()
 	t.fecDecoder = netutil.NewFECDecoder(0)
+	t.fecEncoder = netutil.NewFECEncoder(0)
 
 	// Close old conn to release the file descriptor and unblock
 	// the old receiveFromServer goroutine before creating a new one.

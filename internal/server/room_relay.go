@@ -74,21 +74,19 @@ func (r *Room) handleRelay(payload []byte, from *net.UDPAddr) {
 	// the slice into the async send queue, and the consumer reads it later.
 	// Returning the buffer to the pool before the consumer reads causes
 	// data corruption (use-after-free on the pooled buffer).
-	encoded := protocol.EncodeChecked(protocol.TypeData, payload)
-	packetSize := len(encoded)
-	if isBroadcast {
-		// Broadcast packets bypass per-client bandwidth limits.
-		// Broadcasts are game-critical (LAN discovery, game state sync)
-		// and already bounded by the sender's own rate — per-recipient
-		// limiting just adds latency for no benefit.
-		for _, addr := range targets {
-			r.sendCheckedRaw(encoded, addr)
-		}
+	// Encrypted rooms (password-protected) skip the outer CRC32 because
+	// ChaCha20-Poly1305 AEAD already provides integrity. Unencrypted rooms
+	// keep the CRC for DecodeChecked verification on the client.
+	var encoded []byte
+	if r.roomPass != "" {
+		encoded = protocol.Encode(protocol.TypeData, payload)
 	} else {
-		for _, addr := range targets {
-			if r.bwLimiter == nil || r.bwLimiter.Allow(addr, packetSize) {
-				r.sendCheckedRaw(encoded, addr)
-			}
+		encoded = protocol.EncodeChecked(protocol.TypeData, payload)
+	}
+	packetSize := len(encoded)
+	for _, addr := range targets {
+		if r.bwLimiter == nil || r.bwLimiter.Allow(addr, packetSize) {
+			r.sendCheckedRaw(encoded, addr)
 		}
 	}
 	r.totalPacketsRelay.Add(1)
