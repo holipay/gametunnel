@@ -4,11 +4,9 @@ import (
 	"context"
 	"log"
 	"net"
-	"time"
 
 	"github.com/holipay/gametunnel/internal/crypto"
 	"github.com/holipay/gametunnel/internal/i18n"
-	"github.com/holipay/gametunnel/internal/netutil"
 	"github.com/holipay/gametunnel/internal/pool"
 	"github.com/holipay/gametunnel/internal/protocol"
 )

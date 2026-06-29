@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/holipay/gametunnel/internal/protocol"
-	"github.com/holipay/gametunnel/internal/crypto"
 	"github.com/holipay/gametunnel/internal/i18n"
 	"github.com/holipay/gametunnel/internal/netutil"
 	"github.com/holipay/gametunnel/internal/pool"
@@ -217,7 +216,7 @@ func (t *Tunnel) Connect(ctx context.Context, serverAddr string, mtu int, newTUN
 	// reading from the same conn simultaneously (race condition).
 	// Skip if already probed in a previous session.
 	t.mu.RLock()
-	alreadyProbed := t.nat.natProbeResult != nil
+	alreadyProbed := t.nat.probeResult != nil
 	t.mu.RUnlock()
 	if t.tcpTransport == nil && !alreadyProbed {
 		result, err := nat.ProbeNATType(conn, sAddr)
@@ -225,7 +224,7 @@ func (t *Tunnel) Connect(ctx context.Context, serverAddr string, mtu int, newTUN
 			log.Printf("[nat-probe] probe failed: %v", err)
 		} else {
 			t.mu.Lock()
-			t.nat.natProbeResult = result
+			t.nat.probeResult = result
 			t.nat.portPredictor = nat.PortPredictorFromNATProbe([]*nat.NATProbeResult{result})
 			t.mu.Unlock()
 			log.Printf("[nat-probe] NAT type: %d, external: %s:%d, RTT: %v",
@@ -436,10 +435,10 @@ func (t *Tunnel) Status() TunnelStatus {
 	}
 
 	// NAT probe info
-	if t.nat.natProbeResult != nil {
-		st.NATType = t.nat.natProbeResult.Type
-		st.ExternalIP = t.nat.natProbeResult.ExternalIP
-		st.ExternalPort = t.nat.natProbeResult.ExternalPort
+	if t.nat.probeResult != nil {
+		st.NATType = t.nat.probeResult.Type
+		st.ExternalIP = t.nat.probeResult.ExternalIP
+		st.ExternalPort = t.nat.probeResult.ExternalPort
 	}
 
 	if !st.Connected || len(t.peers) == 0 {

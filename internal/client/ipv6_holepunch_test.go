@@ -217,7 +217,7 @@ func TestIPv6_StartHolePunch_SendsToIPv6Addr(t *testing.T) {
 	peer.PublicAddr.Store(peerAddr)
 	tunnel.mu.Lock()
 	tunnel.peers[ipKey(peerVIP)] = peer
-	tunnel.cachedPunchPacket.Store(protocol.EncodeChecked(protocol.TypeHolePunch, net.IPv4(10, 10, 0, 2).To4()))
+	tunnel.nat.cachedPunchPacket.Store(protocol.EncodeChecked(protocol.TypeHolePunch, net.IPv4(10, 10, 0, 2).To4()))
 	tunnel.mu.Unlock()
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -267,7 +267,7 @@ func TestIPv6_HandleDirectHolePunch_FromIPv6Addr(t *testing.T) {
 	peer.PublicAddr.Store(peerAddr)
 	tunnel.mu.Lock()
 	tunnel.peers[ipKey(peerVIP)] = peer
-	tunnel.cachedPunchPacket.Store(protocol.EncodeChecked(protocol.TypeHolePunch, net.IPv4(10, 10, 0, 2).To4()))
+	tunnel.nat.cachedPunchPacket.Store(protocol.EncodeChecked(protocol.TypeHolePunch, net.IPv4(10, 10, 0, 2).To4()))
 	tunnel.mu.Unlock()
 
 	// Simulate receiving a direct hole punch from the peer's IPv6 address
@@ -327,7 +327,7 @@ func TestIPv6_HandleDirectData_FromIPv6Peer(t *testing.T) {
 	tunnel, _ := newTestTunnelIPv6(t)
 	mock := &mockTunDevice{}
 	tunnel.tunDev.Store(mock)
-	tunnel.virtualIP = net.IPv4(10, 10, 0, 2).To4()
+	tunnel.session.virtualIP = net.IPv4(10, 10, 0, 2).To4()
 
 	peerVIP := net.IPv4(10, 10, 0, 3).To4()
 	peerAddr := &net.UDPAddr{IP: net.IPv6loopback, Port: 6666}
@@ -342,7 +342,7 @@ func TestIPv6_HandleDirectData_FromIPv6Peer(t *testing.T) {
 	payloadData := []byte{0x45, 0x00, 0x00, 0x1c} // fake IPv4 header
 	dp := &protocol.DataPayload{
 		SrcIP: peerVIP,
-		DstIP: tunnel.virtualIP,
+		DstIP: tunnel.session.virtualIP,
 		Data:  payloadData,
 	}
 	msg := &protocol.Message{
@@ -374,7 +374,7 @@ func TestIPv6_HandleDirectData_WrongIPv6AddrRejected(t *testing.T) {
 	tunnel, _ := newTestTunnelIPv6(t)
 	mock := &mockTunDevice{}
 	tunnel.tunDev.Store(mock)
-	tunnel.virtualIP = net.IPv4(10, 10, 0, 2).To4()
+	tunnel.session.virtualIP = net.IPv4(10, 10, 0, 2).To4()
 
 	peerVIP := net.IPv4(10, 10, 0, 3).To4()
 	correctAddr := &net.UDPAddr{IP: net.IPv6loopback, Port: 6666}
@@ -388,7 +388,7 @@ func TestIPv6_HandleDirectData_WrongIPv6AddrRejected(t *testing.T) {
 
 	dp := &protocol.DataPayload{
 		SrcIP: peerVIP,
-		DstIP: tunnel.virtualIP,
+		DstIP: tunnel.session.virtualIP,
 		Data:  []byte{0x01, 0x02},
 	}
 	msg := &protocol.Message{Type: protocol.TypeData, Payload: dp.Marshal()}
@@ -408,7 +408,7 @@ func TestIPv6_HandleDirectData_WrongPortRejected(t *testing.T) {
 	tunnel, _ := newTestTunnelIPv6(t)
 	mock := &mockTunDevice{}
 	tunnel.tunDev.Store(mock)
-	tunnel.virtualIP = net.IPv4(10, 10, 0, 2).To4()
+	tunnel.session.virtualIP = net.IPv4(10, 10, 0, 2).To4()
 
 	peerVIP := net.IPv4(10, 10, 0, 3).To4()
 	correctAddr := &net.UDPAddr{IP: net.IPv6loopback, Port: 6666}
@@ -422,7 +422,7 @@ func TestIPv6_HandleDirectData_WrongPortRejected(t *testing.T) {
 
 	dp := &protocol.DataPayload{
 		SrcIP: peerVIP,
-		DstIP: tunnel.virtualIP,
+		DstIP: tunnel.session.virtualIP,
 		Data:  []byte{0x01, 0x02},
 	}
 	msg := &protocol.Message{Type: protocol.TypeData, Payload: dp.Marshal()}
@@ -445,8 +445,8 @@ func TestIPv6_RoutePacket_P2PDirectWithIPv6Peer(t *testing.T) {
 	peerAddr := peerConn.LocalAddr().(*net.UDPAddr)
 
 	serverIP := net.IPv4(10, 10, 0, 1).To4()
-	tunnel.serverIP = serverIP
-	tunnel.serverIPKey.Store(ipKey(serverIP))
+	tunnel.session.serverIP = serverIP
+	tunnel.session.serverIPKey.Store(ipKey(serverIP))
 
 	peer := &Peer{VirtualIP: peerVIP, Username: "v6peer"}
 	peer.PublicAddr.Store(peerAddr)
@@ -486,8 +486,8 @@ func TestIPv6_RoutePacket_FallbackToRelayWithIPv6Server(t *testing.T) {
 	tunnel, serverConn := newTestTunnelIPv6(t)
 
 	serverIP := net.IPv6loopback
-	tunnel.serverIP = serverIP
-	tunnel.serverIPKey.Store(ipKey(serverIP))
+	tunnel.session.serverIP = serverIP
+	tunnel.session.serverIPKey.Store(ipKey(serverIP))
 
 	peerVIP := net.IPv4(10, 10, 0, 3).To4()
 	// Peer exists but no DirectReach
@@ -534,10 +534,10 @@ func TestIPv6_HolePunchFlow_EndToEnd(t *testing.T) {
 	tunnel, _ := newTestTunnelIPv6(t)
 
 	serverIP := net.IPv6loopback
-	tunnel.serverIP = serverIP
-	tunnel.serverIPKey.Store(ipKey(serverIP))
-	tunnel.virtualIP = net.IPv4(10, 10, 0, 2).To4()
-	tunnel.cachedPunchPacket.Store(protocol.EncodeChecked(protocol.TypeHolePunch, tunnel.virtualIP.To4()))
+	tunnel.session.serverIP = serverIP
+	tunnel.session.serverIPKey.Store(ipKey(serverIP))
+	tunnel.session.virtualIP = net.IPv4(10, 10, 0, 2).To4()
+	tunnel.nat.cachedPunchPacket.Store(protocol.EncodeChecked(protocol.TypeHolePunch, tunnel.session.virtualIP.To4()))
 
 	// Setup: peer endpoint on IPv6
 	peerConn := newIPv6PeerConn(t)
@@ -742,8 +742,8 @@ func TestIPv6_SendHolePunchRelay_UsesIPv4VirtualIP(t *testing.T) {
 	tunnel, serverConn := newTestTunnelIPv6(t)
 
 	serverIP := net.IPv6loopback
-	tunnel.serverIP = serverIP
-	tunnel.serverIPKey.Store(ipKey(serverIP))
+	tunnel.session.serverIP = serverIP
+	tunnel.session.serverIPKey.Store(ipKey(serverIP))
 
 	peerVIP := net.IPv4(10, 10, 0, 3).To4()
 
@@ -802,7 +802,7 @@ func TestIPv6_P2PKeepalive_SendsToIPv6Peer(t *testing.T) {
 
 	tunnel.mu.Lock()
 	tunnel.peers[ipKey(peerVIP)] = peer
-	tunnel.cachedPunchPacket.Store(protocol.EncodeChecked(protocol.TypeHolePunch, net.IPv4(10, 10, 0, 2).To4()))
+	tunnel.nat.cachedPunchPacket.Store(protocol.EncodeChecked(protocol.TypeHolePunch, net.IPv4(10, 10, 0, 2).To4()))
 	tunnel.mu.Unlock()
 
 	tunnel.sendP2PKeepalives()
@@ -834,7 +834,7 @@ func TestIPv6_P2PKeepalive_SkipsNonDirectPeers(t *testing.T) {
 
 	tunnel.mu.Lock()
 	tunnel.peers[ipKey(peerVIP)] = peer
-	tunnel.cachedPunchPacket.Store(protocol.EncodeChecked(protocol.TypeHolePunch, net.IPv4(10, 10, 0, 2).To4()))
+	tunnel.nat.cachedPunchPacket.Store(protocol.EncodeChecked(protocol.TypeHolePunch, net.IPv4(10, 10, 0, 2).To4()))
 	tunnel.mu.Unlock()
 
 	tunnel.sendP2PKeepalives()
@@ -861,7 +861,7 @@ func TestIPv6_RetryFailedHolePunches_IncludesIPv6Peers(t *testing.T) {
 
 	tunnel.mu.Lock()
 	tunnel.peers[ipKey(peerVIP)] = peer
-	tunnel.cachedPunchPacket.Store(protocol.EncodeChecked(protocol.TypeHolePunch, net.IPv4(10, 10, 0, 2).To4()))
+	tunnel.nat.cachedPunchPacket.Store(protocol.EncodeChecked(protocol.TypeHolePunch, net.IPv4(10, 10, 0, 2).To4()))
 	tunnel.mu.Unlock()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
@@ -899,7 +899,7 @@ func TestIPv6_Status_WithIPv6Peers(t *testing.T) {
 	tunnel, _ := newTestTunnelIPv6(t)
 	mock := &mockTunDevice{}
 	tunnel.tunDev.Store(mock)
-	tunnel.virtualIP = net.IPv4(10, 10, 0, 2).To4()
+	tunnel.session.virtualIP = net.IPv4(10, 10, 0, 2).To4()
 
 	// P2P peer via IPv6
 	peer1 := &Peer{VirtualIP: net.IPv4(10, 10, 0, 3).To4(), Username: "p2p_v6"}
@@ -977,7 +977,7 @@ func TestIPv6_HandleHolePunchReceived_ServerRelayed(t *testing.T) {
 	peer.PublicAddr.Store(peerAddr)
 	tunnel.mu.Lock()
 	tunnel.peers[ipKey(peerVIP)] = peer
-	tunnel.cachedPunchPacket.Store(protocol.EncodeChecked(protocol.TypeHolePunch, net.IPv4(10, 10, 0, 2).To4()))
+	tunnel.nat.cachedPunchPacket.Store(protocol.EncodeChecked(protocol.TypeHolePunch, net.IPv4(10, 10, 0, 2).To4()))
 	tunnel.mu.Unlock()
 
 	// Build hole punch payload: 4 bytes virtual IP
@@ -1134,7 +1134,7 @@ func TestIPv6_HolePunch_GlobalUnicastPeer(t *testing.T) {
 	tunnel, _ := newTestTunnelIPv6(t)
 	mock := &mockTunDevice{}
 	tunnel.tunDev.Store(mock)
-	tunnel.virtualIP = net.IPv4(10, 10, 0, 2).To4()
+	tunnel.session.virtualIP = net.IPv4(10, 10, 0, 2).To4()
 
 	// Use a local IPv6 listener to simulate the peer (can't reach real internet)
 	peerConn := newIPv6PeerConn(t)
@@ -1146,7 +1146,7 @@ func TestIPv6_HolePunch_GlobalUnicastPeer(t *testing.T) {
 	gPeer := &Peer{VirtualIP: peerVIP, Username: "real_peer"}
 	gPeer.PublicAddr.Store(peerAddr)
 	tunnel.peers[ipKey(peerVIP)] = gPeer
-	tunnel.cachedPunchPacket.Store(protocol.EncodeChecked(protocol.TypeHolePunch, tunnel.virtualIP.To4()))
+	tunnel.nat.cachedPunchPacket.Store(protocol.EncodeChecked(protocol.TypeHolePunch, tunnel.session.virtualIP.To4()))
 	tunnel.mu.Unlock()
 
 	// Start hole punch — should work with any IPv6 address
@@ -1187,7 +1187,7 @@ func TestIPv6_HolePunch_GlobalUnicastPeer(t *testing.T) {
 	// Simulate peer sending data back via P2P
 	dp := &protocol.DataPayload{
 		SrcIP: peerVIP,
-		DstIP: tunnel.virtualIP,
+		DstIP: tunnel.session.virtualIP,
 		Data:  []byte{0x45, 0x00, 0x00, 0x1c},
 	}
 	msg := &protocol.Message{Type: protocol.TypeData, Payload: dp.Marshal()}

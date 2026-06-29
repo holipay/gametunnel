@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/holipay/gametunnel/internal/i18n"
-	"github.com/holipay/gametunnel/internal/netutil"
 	"github.com/holipay/gametunnel/internal/nat"
 	"github.com/holipay/gametunnel/internal/protocol"
 )
@@ -78,7 +77,7 @@ func (t *Tunnel) startHolePunch(ctx context.Context, peerIP net.IP) {
 		return
 	}
 	peerAddr := peer.PublicAddr.Load()
-	natResult := t.nat.natProbeResult
+	natResult := t.nat.probeResult
 	t.mu.RUnlock()
 
 	// Determine strategy based on NAT type
