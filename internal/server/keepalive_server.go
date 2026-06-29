@@ -202,8 +202,9 @@ func (s *Server) handleRebind(payload []byte, from *net.UDPAddr) {
 			s.sendRebindAck(from, false)
 			return
 		}
-		// Verify HMAC — no address binding (rebind changes the address)
-		expected := auth.ComputeHMAC(key, nil, clientAuthRoomID, clientUsername, nil)
+		// Verify HMAC — bind to virtual IP to prevent session hijacking
+		virtualAddr := &net.UDPAddr{IP: req.VirtualIP, Port: 0}
+		expected := auth.ComputeHMAC(key, nil, clientAuthRoomID, clientUsername, virtualAddr)
 		if !hmac.Equal(req.HMAC, expected) {
 			s.sendRebindAck(from, false)
 			return

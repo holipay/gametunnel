@@ -5,7 +5,6 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
-	"unsafe"
 )
 
 // FEC (Forward Error Correction) provides packet loss recovery using
@@ -85,9 +84,9 @@ func (e *FECEncoder) Encode(data []byte) []byte {
 	n := len(data)
 	i := 0
 	for ; i+8 <= n; i += 8 {
-		p := *(*uint64)(unsafe.Pointer(&e.parity[i]))
-		d := *(*uint64)(unsafe.Pointer(&data[i]))
-		*(*uint64)(unsafe.Pointer(&e.parity[i])) = p ^ d
+		p := binary.LittleEndian.Uint64(e.parity[i:])
+		d := binary.LittleEndian.Uint64(data[i:])
+		binary.LittleEndian.PutUint64(e.parity[i:], p^d)
 	}
 	for ; i < n; i++ {
 		e.parity[i] ^= data[i]
@@ -351,7 +350,7 @@ func (d *FECDecoder) cleanupLoop() {
 // ── Helpers ────────────────────────────────────────────────────
 
 // xorBytes performs dst = dst XOR src (in-place).
-// Processes 8 bytes at a time using uint64 for ~8x throughput on amd64.
+// Processes 8 bytes at a time using uint64 for ~8x throughput.
 func xorBytes(dst, src []byte) {
 	n := len(dst)
 	if len(src) < n {
@@ -360,9 +359,9 @@ func xorBytes(dst, src []byte) {
 	// Process 8 bytes at a time
 	i := 0
 	for ; i+8 <= n; i += 8 {
-		d := *(*uint64)(unsafe.Pointer(&dst[i]))
-		s := *(*uint64)(unsafe.Pointer(&src[i]))
-		*(*uint64)(unsafe.Pointer(&dst[i])) = d ^ s
+		d := binary.LittleEndian.Uint64(dst[i:])
+		s := binary.LittleEndian.Uint64(src[i:])
+		binary.LittleEndian.PutUint64(dst[i:], d^s)
 	}
 	// Handle remaining bytes
 	for ; i < n; i++ {

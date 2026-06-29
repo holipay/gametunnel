@@ -1,6 +1,7 @@
 package client
 
 import (
+	"net"
 	"time"
 
 	"github.com/holipay/gametunnel/internal/auth"
@@ -31,15 +32,15 @@ func (t *Tunnel) tryRebind(timeout time.Duration) bool {
 	// Build rebind payload
 	rebind := &protocol.RebindPayload{VirtualIP: vip}
 
-	// If room has password, compute HMAC to prove ownership
+	// If room has password, compute HMAC to prove ownership.
+	// Bind to the virtual IP to prevent session hijacking via HMAC replay.
 	if roomPass != "" {
 		key := auth.DeriveKey(roomPass, roomID)
 		if key == nil {
 			return false
 		}
-		// HMAC proves password knowledge — no address binding because
-		// the whole point of rebind is that the address is changing.
-		rebind.HMAC = auth.ComputeHMAC(key, nil, roomID, username, nil)
+		virtualAddr := &net.UDPAddr{IP: vip, Port: 0}
+		rebind.HMAC = auth.ComputeHMAC(key, nil, roomID, username, virtualAddr)
 	}
 
 	packet := protocol.EncodeChecked(protocol.TypeRebind, rebind.Marshal())
