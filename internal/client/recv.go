@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/binary"
 	"log"
-	"strings"
 	"time"
 
 	"github.com/holipay/gametunnel/internal/i18n"
@@ -142,12 +141,11 @@ func (t *Tunnel) handleServerData(ctx context.Context, conn *net.UDPConn, msg *p
 	case protocol.TypeKick:
 		kick, err := protocol.UnmarshalKick(msg.Payload)
 		if err == nil {
-			log.Printf("kicked by server: %s", kick.Reason)
-		}
-		// For non-recoverable kicks (wrong password, version mismatch),
-		// cancel context to stop the reconnect loop.
-		if err == nil && isFatalKick(kick) {
-			t.cancelKicks.Store(true)
+			de := protocol.NewDisconnectError(kick)
+			log.Printf("kicked by server: %s", de.Message)
+			if de.IsFatal() {
+				t.cancelKicks.Store(true)
+			}
 		}
 		if conn != nil {
 			conn.Close()
@@ -233,22 +231,4 @@ func (t *Tunnel) receiveFromTUN(ctx context.Context) {
 			netutil.PktBufPut(pkt)
 		}
 	}
-}
-
-// isFatalKick returns true if the kick reason indicates a non-recoverable error
-// that should stop the reconnect loop (e.g. wrong password, version mismatch).
-// Uses numeric codes when available (newer servers), falls back to string
-// matching for backward compatibility with older servers.
-func isFatalKick(kick *protocol.KickPayload) bool {
-	if kick.Code == protocol.KickCodeWrongPassword || kick.Code == protocol.KickCodeVersionMismatch {
-		return true
-	}
-	if kick.Code != protocol.KickCodeNone {
-		return false
-	}
-	reason := kick.Reason
-	return strings.Contains(reason, "密码错误") ||
-		strings.Contains(reason, "password") ||
-		strings.Contains(reason, "版本不兼容") ||
-		strings.Contains(reason, "incompatible")
 }

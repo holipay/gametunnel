@@ -2,10 +2,13 @@ package client
 
 import (
 	"context"
+	"errors"
 	"math/rand"
 	"net"
 	"strings"
 	"time"
+
+	"github.com/holipay/gametunnel/internal/protocol"
 )
 
 // DisconnectReason classifies why the connection was lost.
@@ -43,11 +46,30 @@ const (
 	DisconnectReasonFatal
 )
 
-// ClassifyError determines the disconnect reason from an error message.
+// ClassifyError determines the disconnect reason from an error.
+// Uses typed DisconnectError when available, falls back to string matching
+// for errors from older servers or non-kick failures.
 func ClassifyError(err error) DisconnectReason {
 	if err == nil {
 		return DisconnectReasonUnknown
 	}
+
+	// Typed error path — no string matching needed
+	var de *protocol.DisconnectError
+	if errors.As(err, &de) {
+		switch de.Reason {
+		case protocol.ReasonWrongPassword, protocol.ReasonVersionMismatch:
+			return DisconnectReasonFatal
+		case protocol.ReasonRoomFull:
+			return DisconnectReasonServerFull
+		case protocol.ReasonServerShutdown:
+			return DisconnectReasonServerShutdown
+		default:
+			return DisconnectReasonUnknown
+		}
+	}
+
+	// Fallback: string matching for non-typed errors
 	msg := strings.ToLower(err.Error())
 
 	switch {
