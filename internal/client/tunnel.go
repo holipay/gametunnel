@@ -13,6 +13,9 @@ import (
 	"github.com/holipay/gametunnel/internal/crypto"
 	"github.com/holipay/gametunnel/internal/i18n"
 	"github.com/holipay/gametunnel/internal/netutil"
+	"github.com/holipay/gametunnel/internal/pool"
+	"github.com/holipay/gametunnel/internal/netkey"
+	"github.com/holipay/gametunnel/internal/nat"
 )
 
 // sendJob is a single UDP send request, consumed by the dedicated sendLoop goroutine.
@@ -45,9 +48,9 @@ var ctrlTimerPool = sync.Pool{
 }
 
 // ipKey converts an IP address to a [16]byte map key.
-// Delegates to netutil.IPKey for shared implementation.
+// Delegates to netkey.IPKey for shared implementation.
 func ipKey(ip net.IP) [16]byte {
-	return netutil.IPKey(ip)
+	return netkey.IPKey(ip)
 }
 
 // Peer represents a remote player.
@@ -146,8 +149,8 @@ type Tunnel struct {
 	p2pCipher *crypto.Cipher // client↔client (P2P direct, DirClientToClient)
 
 	// P2P enhancement: NAT type detection and port prediction
-	natProbeResult *netutil.NATProbeResult // NAT type from probe (nil if not probed)
-	portPredictor  *netutil.PortPredictor  // port prediction for hole punching
+	natProbeResult *nat.NATProbeResult // NAT type from probe (nil if not probed)
+	portPredictor  *nat.PortPredictor  // port prediction for hole punching
 
 
 	// TCP fallback transport (nil when using UDP)
@@ -299,13 +302,13 @@ func (t *Tunnel) Connect(ctx context.Context, serverAddr string, mtu int, newTUN
 			if c == nil {
 				return
 			}
-			result, err := netutil.ProbeNATType(c, sAddr)
+			result, err := nat.ProbeNATType(c, sAddr)
 			if err != nil {
 				log.Printf("[nat-probe] probe failed: %v", err)
 			} else {
 				t.mu.Lock()
 				t.natProbeResult = result
-				t.portPredictor = netutil.PortPredictorFromNATProbe([]*netutil.NATProbeResult{result})
+				t.portPredictor = nat.PortPredictorFromNATProbe([]*nat.NATProbeResult{result})
 				t.mu.Unlock()
 				log.Printf("[nat-probe] NAT type: %d, external: %s:%d, RTT: %v",
 					result.Type, result.ExternalIP, result.ExternalPort, result.RTT)
@@ -496,7 +499,7 @@ type TunnelStatus struct {
 	RelayPeers  int     // number of peers using relay
 
 	// P2P enhancement: NAT type info
-	NATType     netutil.NATType // NAT type from probe (0 = unknown)
+	NATType     nat.NATType // NAT type from probe (0 = unknown)
 	ExternalIP  net.IP          // external IP as seen by server
 	ExternalPort int            // external port as seen by server
 }
@@ -687,7 +690,7 @@ func (t *Tunnel) tunWorker(ctx context.Context) {
 			return
 		case job := <-t.tunCh:
 			t.routePacket(job.data, job.srcIP, job.dstIP)
-			netutil.PktBufPut(job.data)
+			pool.PktBufPut(job.data)
 		}
 	}
 }

@@ -8,6 +8,7 @@ import (
 
 	"github.com/holipay/gametunnel/internal/i18n"
 	"github.com/holipay/gametunnel/internal/netutil"
+	"github.com/holipay/gametunnel/internal/pool"
 	"github.com/holipay/gametunnel/internal/protocol"
 )
 
@@ -221,14 +222,14 @@ func (t *Tunnel) receiveFromTUN(ctx context.Context) {
 		// Copy packet data — buf is reused on the next Read, but workers
 		// process packets asynchronously. Use pooled buffer to reduce
 		// GC pressure on the hot path.
-		pkt := netutil.PktBufGet(n)[:n]
+		pkt := pool.PktBufGet(n)[:n]
 		copy(pkt, buf[:n])
 
 		select {
 		case t.tunCh <- tunJob{data: pkt, srcIP: srcIP, dstIP: dstIP}:
 		default:
 			// Worker channel full — drop packet and return buffer to pool
-			netutil.PktBufPut(pkt)
+			pool.PktBufPut(pkt)
 		}
 	}
 }

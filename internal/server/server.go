@@ -16,14 +16,16 @@ import (
 	"time"
 
 	"github.com/holipay/gametunnel/internal/netutil"
+	"github.com/holipay/gametunnel/internal/pool"
+	"github.com/holipay/gametunnel/internal/netkey"
 	"github.com/holipay/gametunnel/internal/protocol"
 	"github.com/holipay/gametunnel/internal/i18n"
 )
 
 // ipKey converts an IP address to a [16]byte map key.
-// Delegates to netutil.IPKey for shared implementation.
+// Delegates to netkey.IPKey for shared implementation.
 func ipKey(ip net.IP) [16]byte {
-	return netutil.IPKey(ip)
+	return netkey.IPKey(ip)
 }
 
 // ── Server ─────────────────────────────────────────────────────
@@ -305,14 +307,14 @@ func (s *Server) Run(ctx context.Context) {
 			continue
 		}
 
-		pkt := netutil.PktBufGet(n)
+		pkt := pool.PktBufGet(n)
 		n2 := copy(pkt, buf[:n])
 
 		select {
 		case s.pktCh <- pktJob{data: pkt[:n2], addr: remoteAddr}:
 		default:
 			// channel full — drop (backpressure), return buffer to pool
-			netutil.PktBufPut(pkt)
+			pool.PktBufPut(pkt)
 			s.totalPacketsDropped.Add(1)
 		}
 	}
@@ -352,7 +354,7 @@ func (s *Server) worker(ctx context.Context) {
 		case job := <-s.pktCh:
 			s.handlePacket(job.data, job.addr)
 			// Return buffer to pool with its original capacity.
-			netutil.PktBufPut(job.data[:cap(job.data)])
+			pool.PktBufPut(job.data[:cap(job.data)])
 		}
 	}
 }
@@ -587,12 +589,12 @@ func (s *Server) tcpAcceptLoop(ctx context.Context) {
 					s.totalPacketsDropped.Add(1)
 					return
 				}
-				pkt := netutil.PktBufGet(len(data))
+				pkt := pool.PktBufGet(len(data))
 				copy(pkt, data)
 				select {
 				case s.pktCh <- pktJob{data: pkt[:len(data)], addr: addr}:
 				default:
-					netutil.PktBufPut(pkt)
+					pool.PktBufPut(pkt)
 					s.totalPacketsDropped.Add(1)
 				}
 			})

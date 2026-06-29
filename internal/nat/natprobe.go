@@ -1,6 +1,6 @@
-// Package netutil provides network utility functions for NAT detection,
-// port prediction, and TCP transport.
-package netutil
+// Package nat provides NAT type detection and port prediction for P2P
+// hole punching.
+package nat
 
 import (
 	"fmt"
@@ -12,7 +12,7 @@ import (
 )
 
 // NATType classifies the client's NAT behavior.
-// Mirrors protocol.NATType but lives in netutil for client-side logic.
+// Alias of protocol.NATType for convenience.
 type NATType = protocol.NATType
 
 const (

@@ -1,6 +1,6 @@
 // Package netutil provides shared network utility functions for
 // both client and server packages to avoid code duplication.
-package netutil
+package netkey
 
 import "net"
 
