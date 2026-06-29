@@ -150,15 +150,4 @@ func (bl *BandwidthLimiter) Cleanup(stale time.Duration) {
 	})
 }
 
-// Count returns the number of active buckets.
-func (bl *BandwidthLimiter) Count() int {
-	if !bl.Enabled() {
-		return 0
-	}
-	n := 0
-	bl.buckets.Range(func(_, _ interface{}) bool {
-		n++
-		return true
-	})
-	return n
-}
+

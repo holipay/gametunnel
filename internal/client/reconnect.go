@@ -220,16 +220,6 @@ func jitter(maxJitter time.Duration) time.Duration {
 	return time.Duration(rand.Int63n(int64(maxJitter)*2)) - maxJitter
 }
 
-// Reset resets the attempt counter (e.g. after a successful connection).
-func (b *SmartBackoff) Reset() {
-	b.attempt = 0
-}
-
-// Reason returns the disconnect reason.
-func (b *SmartBackoff) Reason() DisconnectReason {
-	return b.reason
-}
-
 // ── Network Availability Check ─────────────────────────────────
 
 // IsNetworkAvailable checks if the network is likely available by

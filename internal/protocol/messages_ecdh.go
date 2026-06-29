@@ -72,8 +72,4 @@ func ClearECDHFlag(version uint16) uint16 {
 	return version & ^versionECDHFlag
 }
 
-// ECDHPayloadSize is the wire size of ECDHExchangePayload.
-const ECDHPayloadSize = 32
 
-// ECDHConfirmPayloadSize is the wire size of ECDHConfirmPayload.
-const ECDHConfirmPayloadSize = 64
