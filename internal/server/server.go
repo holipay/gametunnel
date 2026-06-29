@@ -305,14 +305,14 @@ func (s *Server) Run(ctx context.Context) {
 			continue
 		}
 
-		pkt := pktPoolGet(n)
+		pkt := netutil.PktBufGet(n)
 		n2 := copy(pkt, buf[:n])
 
 		select {
 		case s.pktCh <- pktJob{data: pkt[:n2], addr: remoteAddr}:
 		default:
 			// channel full — drop (backpressure), return buffer to pool
-			pktPoolPut(pkt)
+			netutil.PktBufPut(pkt)
 			s.totalPacketsDropped.Add(1)
 		}
 	}
@@ -352,7 +352,7 @@ func (s *Server) worker(ctx context.Context) {
 		case job := <-s.pktCh:
 			s.handlePacket(job.data, job.addr)
 			// Return buffer to pool with its original capacity.
-			pktPoolPut(job.data[:cap(job.data)])
+			netutil.PktBufPut(job.data[:cap(job.data)])
 		}
 	}
 }
@@ -370,72 +370,48 @@ func (s *Server) handlePacket(data []byte, from *net.UDPAddr) {
 		encrypted = true
 	}
 
+	// Decode: fast path for encrypted (skip CRC), standard path otherwise.
+	// Pre-auth packets (Register, NATProbe, AuthResponse, Rebind) are always
+	// unencrypted — verify their CRC in the encrypted fast path.
+	var msg *protocol.Message
 	if encrypted {
-		// Fast path: encrypted packets have no CRC32 — skip the wasted
-		// CRC compute by decoding directly. AEAD provides integrity.
-		// Pre-auth packets (Register, NATProbe, AuthResponse, Rebind) are
-		// always unencrypted — verify their CRC before processing.
-		msg, _ := protocol.DecodeSkipCRC(data)
-		if msg != nil {
-			// Pre-auth packet types are always unencrypted — verify CRC
-			if msg.Type == protocol.TypeRegister ||
-				msg.Type == protocol.TypeNATProbe ||
-				msg.Type == protocol.TypeAuthResponse ||
-				msg.Type == protocol.TypeRebind {
-				if _, err := protocol.VerifyChecksum(data); err != nil {
-					return
-				}
-			}
-			// NAT probes are unencrypted (sent pre-registration) — handle directly
-			if msg.Type == protocol.TypeNATProbe {
-				s.handleNATProbe(msg.Payload, from)
+		msg, _ = protocol.DecodeSkipCRC(data)
+		if msg == nil {
+			return
+		}
+		if msg.Type == protocol.TypeRegister ||
+			msg.Type == protocol.TypeNATProbe ||
+			msg.Type == protocol.TypeAuthResponse ||
+			msg.Type == protocol.TypeRebind {
+			if _, err := protocol.VerifyChecksum(data); err != nil {
 				return
 			}
-			// Rebind: client migrated to new address, reclaim session
-			if msg.Type == protocol.TypeRebind {
-				s.handleRebind(msg.Payload, from)
-				return
-			}
-			if s.multiRoom {
-				s.handlePacketMultiRoom(msg, from)
-			} else {
-				s.defaultRoom.HandlePacket(msg.Type, msg.Payload, from)
+		}
+	} else {
+		var err error
+		msg, err = protocol.DecodeLenient(data, false)
+		if err != nil {
+			if errors.Is(err, protocol.ErrUnsupportedVersion) {
+				s.sendKickCode(from, protocol.KickCodeVersionMismatch, fmt.Sprintf(
+					"Protocol version mismatch: server=%d, please update your client",
+					protocol.ProtocolVersion))
 			}
 			return
 		}
 	}
 
-
-	msg, err := protocol.DecodeLenient(data, encrypted)
-	if err != nil {
-		if errors.Is(err, protocol.ErrUnsupportedVersion) {
-			s.sendKickCode(from, protocol.KickCodeVersionMismatch, fmt.Sprintf(
-				"Protocol version mismatch: server=%d, please update your client",
-				protocol.ProtocolVersion))
-		}
-		return
-	}
-
-	// NAT probe — handle before room routing (probes happen pre-registration)
-	if msg.Type == protocol.TypeNATProbe {
+	// Pre-registration handlers (unencrypted, before room routing)
+	switch msg.Type {
+	case protocol.TypeNATProbe:
 		s.handleNATProbe(msg.Payload, from)
-		return
-	}
-
-	// Rebind: client migrated to new address, reclaim session
-	if msg.Type == protocol.TypeRebind {
+	case protocol.TypeRebind:
 		s.handleRebind(msg.Payload, from)
-		return
-	}
-
-	if s.multiRoom {
-		s.handlePacketMultiRoom(msg, from)
-		return
-	}
-
-	// Single-room mode: route to default room
-	if s.defaultRoom != nil {
-		s.defaultRoom.HandlePacket(msg.Type, msg.Payload, from)
+	default:
+		if s.multiRoom {
+			s.handlePacketMultiRoom(msg, from)
+		} else if s.defaultRoom != nil {
+			s.defaultRoom.HandlePacket(msg.Type, msg.Payload, from)
+		}
 	}
 }
 
@@ -611,12 +587,12 @@ func (s *Server) tcpAcceptLoop(ctx context.Context) {
 					s.totalPacketsDropped.Add(1)
 					return
 				}
-				pkt := pktPoolGet(len(data))
+				pkt := netutil.PktBufGet(len(data))
 				copy(pkt, data)
 				select {
 				case s.pktCh <- pktJob{data: pkt[:len(data)], addr: addr}:
 				default:
-					pktPoolPut(pkt)
+					netutil.PktBufPut(pkt)
 					s.totalPacketsDropped.Add(1)
 				}
 			})

@@ -208,7 +208,6 @@ func (t *Tunnel) handleDirectData(ctx context.Context, from *net.UDPAddr, msg *p
 	// Snapshot all needed fields under a single read lock
 	t.mu.RLock()
 	p2pCipher := t.p2pCipher
-	dev, _ := t.tunDev.Load().(TunDevice)
 
 	// Validate srcIP is a known peer (anti-spoofing)
 	srcKey := ipKey(dp.SrcIP)
@@ -250,30 +249,7 @@ func (t *Tunnel) handleDirectData(ctx context.Context, from *net.UDPAddr, msg *p
 	// Mark P2P direct path confirmed — this is the legitimate DirectReach signal
 	peer.DirectReach.Store(true)
 
-	if dev == nil {
-		protocol.PutDataPayload(dp)
-		return
-	}
-
-	// ── Step 1: Decrypt (if encrypted) ──
-	outData := dp.Data
-	if p2pCipher != nil && crypto.IsEncrypted(dp.Data) {
-		decBuf := netutil.PktBufGet(len(dp.Data))
-		var decErr error
-		outData, decErr = p2pCipher.DecryptInto(decBuf[:0], dp.Data)
-		if decErr != nil {
-			netutil.PktBufPut(decBuf)
-			protocol.PutDataPayload(dp)
-			return
-		}
-		defer netutil.PktBufPut(decBuf)
-	}
-
-	// ── Step 2: Write to TUN ──
-	if _, werr := dev.Write(outData); werr != nil {
-		log.Printf(i18n.T().LogTUNWriteFail, werr)
-	}
-	protocol.PutDataPayload(dp)
+	t.decryptWriteAndRelease(dp, p2pCipher)
 }
 
 // handleDirectHolePunch processes a TypeHolePunch received directly from a peer.
@@ -430,25 +406,7 @@ func (t *Tunnel) handleDataFromServer(payload []byte) {
 		return
 	}
 
-	// ── Step 1: Decrypt (if encrypted) ──
-	outData := dp.Data
-	if decCipher != nil && crypto.IsEncrypted(dp.Data) {
-		decBuf := netutil.PktBufGet(len(dp.Data))
-		var decErr error
-		outData, decErr = decCipher.DecryptInto(decBuf[:0], dp.Data)
-		if decErr != nil {
-			netutil.PktBufPut(decBuf)
-			protocol.PutDataPayload(dp)
-			return
-		}
-		defer netutil.PktBufPut(decBuf)
-	}
-
-	// ── Step 2: Write to TUN ──
-	if _, werr := dev.Write(outData); werr != nil {
-		log.Printf(i18n.T().LogTUNWriteFail, werr)
-	}
-	protocol.PutDataPayload(dp)
+	t.decryptWriteAndRelease(dp, decCipher)
 }
 
 // receiveFromTUN reads IP packets from the TUN device and dispatches them

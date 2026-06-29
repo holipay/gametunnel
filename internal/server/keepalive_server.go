@@ -22,97 +22,101 @@ func (s *Server) keepaliveLoop(ctx context.Context) {
 		case <-ticker.C:
 		}
 
-		// Clean up stale clients in all rooms
-		s.roomMu.RLock()
-		rooms := make([]*Room, 0, len(s.rooms))
-		for _, r := range s.rooms {
-			rooms = append(rooms, r)
-		}
-		s.roomMu.RUnlock()
-
-		for _, room := range rooms {
-			changed := room.CleanupStale()
-			if changed {
-				room.invalidatePeerInfoCache()
-			}
-		}
-
-		// Clean up stale addrToRoom entries in multi-room mode.
-		// When clients disconnect, the room removes from addrMap but
-		// addrToRoom is only cleaned here to avoid cross-package coupling.
+		s.cleanupStaleClients()
 		if s.multiRoom {
-			// Snapshot addrToRoom under one lock, then check each room once.
-			s.roomMu.RLock()
-			type roomEntry struct {
-				key  rateKey
-				room *Room
-			}
-			entries := make([]roomEntry, 0, len(s.addrToRoom))
-			for k, room := range s.addrToRoom {
-				if room != nil {
-					entries = append(entries, roomEntry{key: k, room: room})
-				}
-			}
-			s.roomMu.RUnlock()
-
-			// Group by room to minimize lock acquisitions.
-			byRoom := make(map[*Room][]rateKey)
-			for _, e := range entries {
-				byRoom[e.room] = append(byRoom[e.room], e.key)
-			}
-
-			var stale []rateKey
-			for room, keys := range byRoom {
-				room.mu.RLock()
-				for _, k := range keys {
-					if room.addrMap[k] == nil {
-						stale = append(stale, k)
-					}
-				}
-				room.mu.RUnlock()
-			}
-
-			if len(stale) > 0 {
-				s.roomMu.Lock()
-				for _, k := range stale {
-					// Re-check under write lock: the entry may have been
-					// replaced by a valid new registration (TOCTOU guard).
-					if s.addrToRoom[k] != nil {
-						// Find which room this key belongs to now
-						room := s.addrToRoom[k]
-						room.mu.RLock()
-						stillStale := room.addrMap[k] == nil
-						room.mu.RUnlock()
-						if stillStale {
-							delete(s.addrToRoom, k)
-						}
-					}
-				}
-				s.roomMu.Unlock()
-			}
-
-			// Clean up empty rooms that have been idle beyond the timeout.
-			// This prevents goroutine leaks from transient rooms (players join
-			// then leave, leaving peerInfoLoop and pingLoop running forever).
-			s.roomMu.Lock()
-			now := time.Now()
-			for roomID, room := range s.rooms {
-				if roomID == "default" {
-					continue // never delete the default room
-				}
-				if room.ClientCount() > 0 {
-					continue // room still has players
-				}
-				lastAct := time.Unix(0, room.lastActivity.Load())
-				if now.Sub(lastAct) > roomIdleTimeout {
-					room.Stop()
-					delete(s.rooms, roomID)
-					log.Printf("[room] cleaned up idle room %q (idle for %v)", roomID, now.Sub(lastAct))
-				}
-			}
-			s.roomMu.Unlock()
+			s.cleanupStaleAddrToRoom()
+			s.cleanupIdleRooms()
 		}
 	}
+}
+
+// cleanupStaleClients removes clients that haven't sent a keepalive in 30s.
+func (s *Server) cleanupStaleClients() {
+	s.roomMu.RLock()
+	rooms := make([]*Room, 0, len(s.rooms))
+	for _, r := range s.rooms {
+		rooms = append(rooms, r)
+	}
+	s.roomMu.RUnlock()
+
+	for _, room := range rooms {
+		if room.CleanupStale() {
+			room.invalidatePeerInfoCache()
+		}
+	}
+}
+
+// cleanupStaleAddrToRoom removes addrToRoom entries for clients that
+// disconnected (room removed from addrMap but addrToRoom was not updated).
+func (s *Server) cleanupStaleAddrToRoom() {
+	type roomEntry struct {
+		key  rateKey
+		room *Room
+	}
+
+	s.roomMu.RLock()
+	entries := make([]roomEntry, 0, len(s.addrToRoom))
+	for k, room := range s.addrToRoom {
+		if room != nil {
+			entries = append(entries, roomEntry{key: k, room: room})
+		}
+	}
+	s.roomMu.RUnlock()
+
+	byRoom := make(map[*Room][]rateKey)
+	for _, e := range entries {
+		byRoom[e.room] = append(byRoom[e.room], e.key)
+	}
+
+	var stale []rateKey
+	for room, keys := range byRoom {
+		room.mu.RLock()
+		for _, k := range keys {
+			if room.addrMap[k] == nil {
+				stale = append(stale, k)
+			}
+		}
+		room.mu.RUnlock()
+	}
+
+	if len(stale) == 0 {
+		return
+	}
+
+	s.roomMu.Lock()
+	for _, k := range stale {
+		if s.addrToRoom[k] != nil {
+			room := s.addrToRoom[k]
+			room.mu.RLock()
+			stillStale := room.addrMap[k] == nil
+			room.mu.RUnlock()
+			if stillStale {
+				delete(s.addrToRoom, k)
+			}
+		}
+	}
+	s.roomMu.Unlock()
+}
+
+// cleanupIdleRooms removes empty rooms that have been idle beyond the timeout.
+func (s *Server) cleanupIdleRooms() {
+	s.roomMu.Lock()
+	now := time.Now()
+	for roomID, room := range s.rooms {
+		if roomID == "default" {
+			continue
+		}
+		if room.ClientCount() > 0 {
+			continue
+		}
+		lastAct := time.Unix(0, room.lastActivity.Load())
+		if now.Sub(lastAct) > roomIdleTimeout {
+			room.Stop()
+			delete(s.rooms, roomID)
+			log.Printf("[room] cleaned up idle room %q (idle for %v)", roomID, now.Sub(lastAct))
+		}
+	}
+	s.roomMu.Unlock()
 }
 
 // ── NAT Probe Handler ─────────────────────────────────────────────
