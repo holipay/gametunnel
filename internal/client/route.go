@@ -89,15 +89,15 @@ func (t *Tunnel) routePacket(pkt []byte, srcIP, dstIP [4]byte) {
 
 	// Single read lock snapshot for all fields needed in this call.
 	t.mu.RLock()
-	serverIPKey, _ := t.serverIPKey.Load().([16]byte)
+	serverIPKey, _ := t.session.serverIPKey.Load().([16]byte)
 	serverAddr := t.serverAddr.Load()
-	cachedSubnet := t.cachedSubnet.Load()
-	encCipher := t.encCipher
-	p2pCipher := t.p2pCipher
-	serverVersion := t.serverVersion.Load()
+	cachedSubnet := t.session.cachedSubnet.Load()
+	encCipher := t.crypto.encCipher
+	p2pCipher := t.crypto.p2pCipher
+	serverVersion := t.session.serverVersion.Load()
 	var token [16]byte
 	if serverVersion >= uint32(protocol.MinTokenVersion) {
-		token = t.sessionToken
+		token = t.session.sessionToken
 	}
 	peer, ok := t.peers[dstKey]
 	var peerAddr *net.UDPAddr

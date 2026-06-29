@@ -19,10 +19,10 @@ import (
 //  4. If ack received, the server has updated our address — connection survived
 func (t *Tunnel) tryRebind(timeout time.Duration) bool {
 	t.mu.RLock()
-	vip := t.virtualIP
-	roomPass := t.roomPass
-	roomID := t.roomID
-	username := t.username
+	vip := t.session.virtualIP
+	roomPass := t.session.roomPass
+	roomID := t.session.roomID
+	username := t.session.username
 	t.mu.RUnlock()
 
 	if vip == nil {
