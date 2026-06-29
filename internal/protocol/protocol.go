@@ -28,6 +28,13 @@ const MinTokenVersion uint16 = 0x0107
 // MinFECVersion is the minimum server version that supports FEC.
 const MinFECVersion uint16 = 0x0108
 
+// MinRelayNoCRCVersion is the minimum server version that does NOT append
+// a redundant CRC32 to relayed TypeData packets for encrypted rooms.
+// AEAD (ChaCha20-Poly1305) already provides integrity, making the CRC
+// unnecessary. Older servers still append it for backward compatibility.
+// The client uses this constant to decide whether to strip the trailing CRC.
+const MinRelayNoCRCVersion uint16 = 0x0108
+
 // HeaderLen is the fixed header size: version(1) + type(1).
 const HeaderLen = 2
 

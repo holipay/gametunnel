@@ -89,18 +89,30 @@ func (t *Tunnel) receiveFromServer(ctx context.Context, conn *net.UDPConn) {
 		sa := t.serverAddr.Load()
 		fromServer := from != nil && sa != nil && from.IP.Equal(sa.IP) && from.Port == sa.Port
 
-		if fromServer {
-			// Server-relayed packet.
-			// Strip trailing CRC — the server always sends checked
-			// packets (EncodeChecked appends CRC), but DecodeSkipCRC
-			// does not remove it.  Leaving the CRC in place corrupts
-			// UnmarshalDataPooled parsing for TypeData.
-			if encrypted && msg.Type == protocol.TypeData && len(msg.Payload) >= protocol.ChecksumLen {
+		// Secondary heuristic: server-only message types are definitely
+		// from the server. Catches the race window during reconnect where
+		// t.serverAddr may have been updated but the packet arrived on
+		// the old connection.
+		if !fromServer {
+			fromServer = msg.Type == protocol.TypePeerInfo ||
+				msg.Type == protocol.TypePing ||
+				msg.Type == protocol.TypeRebindAck ||
+				msg.Type == protocol.TypeKick
+		}
+
+		// Strip trailing CRC for encrypted relay data from older servers
+		// that still append the redundant CRC. New servers (v1.8+) omit
+		// it because AEAD already provides integrity. The version check
+		// avoids depending on fromServer being correct.
+		if encrypted && msg.Type == protocol.TypeData && len(msg.Payload) >= protocol.ChecksumLen {
+			if t.serverVersion.Load() < uint32(protocol.MinRelayNoCRCVersion) {
 				msg.Payload = msg.Payload[:len(msg.Payload)-protocol.ChecksumLen]
 			}
-		t.handleServerData(ctx, conn, msg)
-	} else if from != nil && t.serverAddr.Load() != nil {
-			// Direct P2P packet from a peer's public address
+		}
+
+		if fromServer {
+			t.handleServerData(ctx, conn, msg)
+		} else if from != nil && sa != nil {
 			t.handleDirectData(ctx, from, msg)
 		}
 	}
@@ -222,6 +234,9 @@ func (t *Tunnel) handleDirectData(ctx context.Context, from *net.UDPAddr, msg *p
 	// Validate srcIP is a known peer (anti-spoofing)
 	srcKey := ipKey(dp.SrcIP)
 	peer, known := t.peers[srcKey]
+
+	// Snapshot session token for unencrypted P2P auth
+	sessionToken := t.sessionToken
 	t.mu.RUnlock()
 
 	if !known {
@@ -234,6 +249,23 @@ func (t *Tunnel) handleDirectData(ctx context.Context, from *net.UDPAddr, msg *p
 	if peerAddr == nil || !from.IP.Equal(peerAddr.IP) || from.Port != peerAddr.Port {
 		protocol.PutDataPayload(dp)
 		return
+	}
+
+	// For unencrypted P2P rooms, validate the session token to prevent
+	// packet forgery. Encrypted rooms get implicit auth from AEAD.
+	// All clients in a room share the same token, distributed by the
+	// server during registration. Old servers (pre-v1.7) have zero tokens.
+	if p2pCipher == nil && sessionToken != [16]byte{} {
+		if len(msg.Payload) < 25 || msg.Payload[8]&protocol.DataFlagHasToken == 0 {
+			protocol.PutDataPayload(dp)
+			return
+		}
+		var pktToken [16]byte
+		copy(pktToken[:], msg.Payload[9:25])
+		if pktToken != sessionToken {
+			protocol.PutDataPayload(dp)
+			return
+		}
 	}
 
 	// Mark P2P direct path confirmed — this is the legitimate DirectReach signal
@@ -288,6 +320,7 @@ func (t *Tunnel) handleDirectData(ctx context.Context, from *net.UDPAddr, msg *p
 						lz4Dec.PutBuffer(out)
 					}
 				}
+				netutil.PktBufPut(pkt)
 			}
 		}
 	}
@@ -391,6 +424,7 @@ func (t *Tunnel) handleFECPacket(data []byte) {
 				lz4Dec.PutBuffer(out)
 			}
 		}
+		netutil.PktBufPut(pkt)
 	}
 }
 
@@ -556,6 +590,7 @@ func (t *Tunnel) handleDataFromServer(payload []byte) {
 						lz4Dec.PutBuffer(out)
 					}
 				}
+				netutil.PktBufPut(pkt)
 			}
 		}
 	}
