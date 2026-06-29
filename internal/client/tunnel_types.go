@@ -1,8 +1,10 @@
 package client
 
 import (
+	"context"
 	"net"
 	"sync"
+	"sync/atomic"
 
 	"github.com/holipay/gametunnel/internal/crypto"
 	"github.com/holipay/gametunnel/internal/nat"
@@ -16,11 +18,11 @@ import (
 type session struct {
 	virtualIP    net.IP
 	serverIP     net.IP
-	serverIPKey  any // atomic.Value stores [16]byte — use accessor
+	serverIPKey  atomic.Value    // stores [16]byte
 	subnetMask   net.IPMask
-	cachedSubnet any // atomic.Pointer[net.IPNet] — use accessor
+	cachedSubnet atomic.Pointer[net.IPNet]
 	sessionToken [16]byte
-	serverVersion any // atomic.Uint32 — use accessor
+	serverVersion atomic.Uint32
 	username     string
 	roomID       string
 	roomPass     string
@@ -37,9 +39,9 @@ type cryptoState struct {
 
 // natState holds NAT detection results and hole punch optimization state.
 type natState struct {
-	probeResult    *nat.NATProbeResult // NAT type from probe (nil if not probed)
-	portPredictor  *nat.PortPredictor  // port prediction for hole punching
-	cachedPunchPacket any              // atomic.Value stores []byte — use accessor
+	probeResult       *nat.NATProbeResult
+	portPredictor     *nat.PortPredictor
+	cachedPunchPacket atomic.Value // stores []byte
 }
 
 // Tunnel is the GameTunnel client. Sub-structures group related fields:
