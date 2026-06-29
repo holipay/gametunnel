@@ -3,45 +3,26 @@
 package main
 
 import (
-	"github.com/holipay/gametunnel/internal/paths"
 	"fmt"
 	"log"
 	"os"
 	"path/filepath"
 	"runtime/debug"
-	"syscall"
 
 	"golang.org/x/sys/windows"
 
 	"github.com/holipay/gametunnel/internal/client"
 	"github.com/holipay/gametunnel/internal/i18n"
+	"github.com/holipay/gametunnel/internal/paths"
 	"github.com/holipay/gametunnel/internal/singleinstance"
 	"github.com/holipay/gametunnel/internal/tun"
 )
 
-var (
-	kernel32             = syscall.NewLazyDLL("kernel32.dll")
-	user32               = syscall.NewLazyDLL("user32.dll")
-	procGetConsoleWindow = kernel32.NewProc("GetConsoleWindow")
-	procShowWindow       = user32.NewProc("ShowWindow")
-)
-
 func main() {
-	// Hide console window immediately to prevent flash during UAC elevation.
-	// The elevated copy will show its own console window.
-	if wnd, _, _ := procGetConsoleWindow.Call(); wnd != 0 {
-		procShowWindow.Call(wnd, 0) // SW_HIDE
-	}
-
 	defer writeCrashLog()
 
 	// Request admin rights if not elevated (needed for TUN device)
 	requestAdmin()
-
-	// Show console for the elevated (or already admin) process
-	if wnd, _, _ := procGetConsoleWindow.Call(); wnd != 0 {
-		procShowWindow.Call(wnd, 5) // SW_SHOW
-	}
 
 	windows.SetConsoleOutputCP(65001)
 
@@ -88,7 +69,6 @@ func requestAdmin() {
 		return
 	}
 
-	// Console is already hidden by main(). Launch elevated copy.
 	verb, _ := windows.UTF16PtrFromString("runas")
 	exePath, _ := windows.UTF16PtrFromString(exe)
 
