@@ -39,6 +39,7 @@ type Server struct {
 	version     string
 	lang       i18n.Lang
 	startTime  time.Time
+	verbose    bool
 
 	closeMu    sync.Mutex
 	ctx        context.Context // stored for use in packet handlers
@@ -115,6 +116,7 @@ type Config struct {
 	BandwidthLimit int    // per-client outbound bandwidth limit in bytes/sec (0 = default 10Mbps)
 	TCPAddr        string // TCP listen address for fallback (e.g. ":4700"), empty = disabled
 	MaxRooms       int    // max auto-created rooms in multi-room mode (0 = default 64)
+	Verbose        bool   // enable verbose/debug logging
 }
 
 const defaultMaxRooms = 64
@@ -186,6 +188,7 @@ func New(cfg Config) (*Server, error) {
 		version:     cfg.Version,
 		lang:        cfg.Lang,
 		startTime:   time.Now(),
+		verbose:     cfg.Verbose,
 		workers:     workers,
 		pktCh:       make(chan pktJob, chanBuf),
 		rateShards:  newRateShardsArray(),
@@ -228,6 +231,7 @@ func New(cfg Config) (*Server, error) {
 			Conn:       conn,
 			SendQueue:  s.sendQueue,
 			BWLimiter:  bwLimiter,
+			Verbose:    cfg.Verbose,
 		})
 		if err != nil {
 			conn.Close()
@@ -497,6 +501,7 @@ func (s *Server) handleRegisterMultiRoom(payload []byte, from *net.UDPAddr) {
 			Conn:       s.conn,
 			SendQueue:  s.sendQueue,
 			BWLimiter:  s.bwLimiter,
+			Verbose:    s.verbose,
 		})
 		if err != nil {
 			s.roomMu.Unlock()
