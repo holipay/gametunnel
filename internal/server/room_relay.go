@@ -14,6 +14,13 @@ func appendAddr(buf []byte, addr *net.UDPAddr) []byte {
 	return protocol.AppendAddrStr(buf, addr)
 }
 
+// relayLog prints a debug log message when verbose mode is enabled.
+func (r *Room) relayLog(format string, args ...any) {
+	if r.verbose {
+		log.Printf("[relay] "+format, args...)
+	}
+}
+
 // ── Relay ──────────────────────────────────────────────────────
 
 func (r *Room) handleRelay(payload []byte, from *net.UDPAddr) {
@@ -24,20 +31,20 @@ func (r *Room) handleRelay(payload []byte, from *net.UDPAddr) {
 	srcIP := net.IP(payload[0:4])
 	dstIP := net.IP(payload[4:8])
 
-	log.Printf("[relay] received relay from %s: srcIP=%s dstIP=%s len=%d", from, srcIP, dstIP, len(payload))
+	r.relayLog("[relay] received relay from %s: srcIP=%s dstIP=%s len=%d", from, srcIP, dstIP, len(payload))
 
 	r.mu.RLock()
 	sender := r.addrMap[addrToRateKey(from)]
 	if sender == nil {
-		log.Printf("[relay] sender not found in addrMap")
+		r.relayLog("[relay] sender not found in addrMap")
 		r.mu.RUnlock()
 		return
 	}
 
-	log.Printf("[relay] sender=%s vip=%s", sender.Username, sender.VirtualIP)
+	r.relayLog("[relay] sender=%s vip=%s", sender.Username, sender.VirtualIP)
 
 	if !srcIP.Equal(sender.VirtualIP) {
-		log.Printf("[relay] srcIP mismatch: payload=%s != sender=%s", srcIP, sender.VirtualIP)
+		r.relayLog("[relay] srcIP mismatch: payload=%s != sender=%s", srcIP, sender.VirtualIP)
 		r.mu.RUnlock()
 		return
 	}
@@ -45,30 +52,30 @@ func (r *Room) handleRelay(payload []byte, from *net.UDPAddr) {
 	// Session token validation (v1.7+): if client sent a token, verify it.
 	if sender.clientVersion >= protocol.MinTokenVersion && sender.HasSessionToken() {
 		if len(payload) <= 8 {
-			log.Printf("[relay] payload too short for token check")
+			r.relayLog("[relay] payload too short for token check")
 			r.mu.RUnlock()
 			return
 		}
 		flags, tokenOff, isNew := protocol.ParseDataHeader(payload)
-		log.Printf("[relay] token check: flags=0x%x tokenOff=%d isNew=%v", flags, tokenOff, isNew)
+		r.relayLog("[relay] token check: flags=0x%x tokenOff=%d isNew=%v", flags, tokenOff, isNew)
 		if flags&protocol.DataFlagHasToken != 0 {
 			if len(payload) < tokenOff+protocol.DataTokenLen {
-				log.Printf("[relay] payload too short for token")
+				r.relayLog("[relay] payload too short for token")
 				r.mu.RUnlock()
 				return
 			}
 			token := payload[tokenOff : tokenOff+protocol.DataTokenLen]
 			if !sender.ValidateSessionToken(token) {
-				log.Printf("[relay] token validation FAILED")
+				r.relayLog("[relay] token validation FAILED")
 				r.mu.RUnlock()
 				return
 			}
-			log.Printf("[relay] token validation OK")
+			r.relayLog("[relay] token validation OK")
 		}
 	}
 
 	isBroadcast := netutil.IsRelayTarget(dstIP, r.subnet)
-	log.Printf("[relay] isBroadcast=%v subnet=%s", isBroadcast, r.subnet)
+	r.relayLog("[relay] isBroadcast=%v subnet=%s", isBroadcast, r.subnet)
 
 	var stackTargets [maxInlineTargets]*net.UDPAddr
 	targets := stackTargets[:0]
@@ -87,11 +94,11 @@ func (r *Room) handleRelay(payload []byte, from *net.UDPAddr) {
 	r.mu.RUnlock()
 
 	if len(targets) == 0 {
-		log.Printf("[relay] no targets to relay to")
+		r.relayLog("[relay] no targets to relay to")
 		return
 	}
 
-	log.Printf("[relay] forwarding to %d targets", len(targets))
+	r.relayLog("[relay] forwarding to %d targets", len(targets))
 	// Encode once, but DO NOT pool the buffer — sendCheckedRaw enqueues
 	// the slice into the async send queue, and the consumer reads it later.
 	// Returning the buffer to the pool before the consumer reads causes

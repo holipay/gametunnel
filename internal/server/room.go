@@ -112,6 +112,9 @@ type Room struct {
 	// Timestamps
 	createdAt    time.Time
 	lastActivity atomic.Int64 // unix nano, updated on client join/leave
+
+	// Debug
+	verbose bool
 }
 
 // RoomConfig holds configuration for creating a new room.
@@ -124,6 +127,7 @@ type RoomConfig struct {
 	Conn       *net.UDPConn         // UDP connection for sending packets
 	SendQueue  *rateLimitedQueue    // priority send queue (shared with Server)
 	BWLimiter  *BandwidthLimiter    // per-client outbound bandwidth limiter (optional)
+	Verbose    bool                 // enable verbose/debug logging
 }
 
 // NewRoom creates a new room. The subnet must be /24.
@@ -161,6 +165,7 @@ func NewRoom(cfg RoomConfig) (*Room, error) {
 		maxPerIP:    maxPerIP,
 		done:        make(chan struct{}),
 		createdAt:   time.Now(),
+		verbose:     cfg.Verbose,
 	}
 	r.lastActivity.Store(time.Now().UnixNano())
 
