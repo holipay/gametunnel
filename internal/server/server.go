@@ -39,6 +39,8 @@ type Server struct {
 	version     string
 	lang       i18n.Lang
 	startTime  time.Time
+
+	closeMu    sync.Mutex
 	ctx        context.Context // stored for use in packet handlers
 	cancelCtx  context.CancelFunc // cancels ctx on Close()
 
@@ -260,7 +262,9 @@ func New(cfg Config) (*Server, error) {
 
 // Run starts the server and blocks until ctx is cancelled.
 func (s *Server) Run(ctx context.Context) {
+	s.closeMu.Lock()
 	s.ctx, s.cancelCtx = context.WithCancel(ctx)
+	s.closeMu.Unlock()
 	s.startStatusServer(ctx, s.statusAddr)
 	go s.keepaliveLoop(ctx)
 	go s.rateLimitLoop(ctx)
@@ -324,8 +328,11 @@ func (s *Server) Run(ctx context.Context) {
 // Sends disconnect notifications to all connected clients before closing.
 func (s *Server) Close() error {
 	// Cancel context to signal all goroutines to exit
-	if s.cancelCtx != nil {
-		s.cancelCtx()
+	s.closeMu.Lock()
+	cancel := s.cancelCtx
+	s.closeMu.Unlock()
+	if cancel != nil {
+		cancel()
 	}
 
 	// Notify all clients before shutting down
@@ -496,8 +503,11 @@ func (s *Server) handleRegisterMultiRoom(payload []byte, from *net.UDPAddr) {
 		s.rooms[reg.RoomID] = room
 		log.Printf("[room] created room %q with subnet %s", reg.RoomID, subnet)
 		// Start room lifecycle loops for the newly created room
-		go room.peerInfoLoop(s.ctx)
-		go room.pingLoop(s.ctx)
+		s.closeMu.Lock()
+		ctx := s.ctx
+		s.closeMu.Unlock()
+		go room.peerInfoLoop(ctx)
+		go room.pingLoop(ctx)
 	}
 	s.roomMu.Unlock()
 

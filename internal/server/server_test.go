@@ -957,6 +957,155 @@ func TestHandleRelay_UnknownSender(t *testing.T) {
 	}
 }
 
+func TestHandleRelay_TokenValidation_OldFormat(t *testing.T) {
+	r := newTestRoom("10.10.0.0/24", net.IPv4(10, 10, 0, 1))
+	conn, _ := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 0})
+	r.conn = conn
+	defer conn.Close()
+
+	senderAddr := &net.UDPAddr{IP: net.IPv4(1, 2, 3, 4), Port: 1000}
+	receiverAddr := &net.UDPAddr{IP: net.IPv4(1, 2, 3, 5), Port: 2000}
+
+	sender := &Client{
+		Username:      "sender",
+		VirtualIP:     net.IPv4(10, 10, 0, 2),
+		PublicAddr:    senderAddr,
+		auth:          authNone,
+		clientVersion: protocol.MinTokenVersion,
+	}
+	sender.SetLastSeen(time.Now())
+	sender.GenerateSessionToken()
+
+	receiver := &Client{
+		Username:   "receiver",
+		VirtualIP:  net.IPv4(10, 10, 0, 3),
+		PublicAddr: receiverAddr,
+		auth:       authNone,
+	}
+	receiver.SetLastSeen(time.Now())
+
+	r.mu.Lock()
+	r.clients[ipKey(sender.VirtualIP)] = sender
+	r.clients[ipKey(receiver.VirtualIP)] = receiver
+	r.addrMap[addrToRateKey(senderAddr)] = sender
+	r.addrMap[addrToRateKey(receiverAddr)] = receiver
+	r.mu.Unlock()
+
+	// Old format (no formatVer): srcIP(4) + dstIP(4) + flags(1) + token(16) + data
+	payload := make([]byte, 4+4+1+16+5)
+	copy(payload[0:4], sender.VirtualIP.To4())
+	copy(payload[4:8], receiver.VirtualIP.To4())
+	payload[8] = protocol.DataFlagHasToken
+	copy(payload[9:25], sender.SessionToken[:])
+	copy(payload[25:], []byte{0x01, 0x02, 0x03, 0x04, 0x05})
+
+	r.handleRelay(payload, senderAddr)
+
+	if r.totalPacketsRelay.Load() != 1 {
+		t.Errorf("valid old-format token: totalPacketsRelay = %d, want 1", r.totalPacketsRelay.Load())
+	}
+}
+
+func TestHandleRelay_TokenValidation_NewFormat(t *testing.T) {
+	r := newTestRoom("10.10.0.0/24", net.IPv4(10, 10, 0, 1))
+	conn, _ := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 0})
+	r.conn = conn
+	defer conn.Close()
+
+	senderAddr := &net.UDPAddr{IP: net.IPv4(1, 2, 3, 4), Port: 1000}
+	receiverAddr := &net.UDPAddr{IP: net.IPv4(1, 2, 3, 5), Port: 2000}
+
+	sender := &Client{
+		Username:      "sender",
+		VirtualIP:     net.IPv4(10, 10, 0, 2),
+		PublicAddr:    senderAddr,
+		auth:          authNone,
+		clientVersion: protocol.MinTokenVersion,
+	}
+	sender.SetLastSeen(time.Now())
+	sender.GenerateSessionToken()
+
+	receiver := &Client{
+		Username:   "receiver",
+		VirtualIP:  net.IPv4(10, 10, 0, 3),
+		PublicAddr: receiverAddr,
+		auth:       authNone,
+	}
+	receiver.SetLastSeen(time.Now())
+
+	r.mu.Lock()
+	r.clients[ipKey(sender.VirtualIP)] = sender
+	r.clients[ipKey(receiver.VirtualIP)] = receiver
+	r.addrMap[addrToRateKey(senderAddr)] = sender
+	r.addrMap[addrToRateKey(receiverAddr)] = receiver
+	r.mu.Unlock()
+
+	// New format (v1.8+): srcIP(4) + dstIP(4) + formatVer(1) + flags(1) + token(16) + data
+	payload := make([]byte, 4+4+1+1+16+5)
+	copy(payload[0:4], sender.VirtualIP.To4())
+	copy(payload[4:8], receiver.VirtualIP.To4())
+	payload[8] = protocol.DataFormatVersion
+	payload[9] = protocol.DataFlagHasToken
+	copy(payload[10:26], sender.SessionToken[:])
+	copy(payload[26:], []byte{0x01, 0x02, 0x03, 0x04, 0x05})
+
+	r.handleRelay(payload, senderAddr)
+
+	if r.totalPacketsRelay.Load() != 1 {
+		t.Errorf("valid new-format token: totalPacketsRelay = %d, want 1", r.totalPacketsRelay.Load())
+	}
+}
+
+func TestHandleRelay_TokenValidation_WrongToken(t *testing.T) {
+	r := newTestRoom("10.10.0.0/24", net.IPv4(10, 10, 0, 1))
+	conn, _ := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 0})
+	r.conn = conn
+	defer conn.Close()
+
+	senderAddr := &net.UDPAddr{IP: net.IPv4(1, 2, 3, 4), Port: 1000}
+	receiverAddr := &net.UDPAddr{IP: net.IPv4(1, 2, 3, 5), Port: 2000}
+
+	sender := &Client{
+		Username:      "sender",
+		VirtualIP:     net.IPv4(10, 10, 0, 2),
+		PublicAddr:    senderAddr,
+		auth:          authNone,
+		clientVersion: protocol.MinTokenVersion,
+	}
+	sender.SetLastSeen(time.Now())
+	sender.GenerateSessionToken()
+
+	receiver := &Client{
+		Username:   "receiver",
+		VirtualIP:  net.IPv4(10, 10, 0, 3),
+		PublicAddr: receiverAddr,
+		auth:       authNone,
+	}
+	receiver.SetLastSeen(time.Now())
+
+	r.mu.Lock()
+	r.clients[ipKey(sender.VirtualIP)] = sender
+	r.clients[ipKey(receiver.VirtualIP)] = receiver
+	r.addrMap[addrToRateKey(senderAddr)] = sender
+	r.addrMap[addrToRateKey(receiverAddr)] = receiver
+	r.mu.Unlock()
+
+	// New format with WRONG token
+	payload := make([]byte, 4+4+1+1+16+5)
+	copy(payload[0:4], sender.VirtualIP.To4())
+	copy(payload[4:8], receiver.VirtualIP.To4())
+	payload[8] = protocol.DataFormatVersion
+	payload[9] = protocol.DataFlagHasToken
+	// Write a wrong token (all zeros instead of sender.SessionToken)
+	copy(payload[26:], []byte{0x01, 0x02, 0x03, 0x04, 0x05})
+
+	r.handleRelay(payload, senderAddr)
+
+	if r.totalPacketsRelay.Load() != 0 {
+		t.Errorf("wrong token should be rejected: totalPacketsRelay = %d, want 0", r.totalPacketsRelay.Load())
+	}
+}
+
 // ── handleHolePunch Tests ──────────────────────────────────────
 
 func TestHandleHolePunch_Valid(t *testing.T) {
