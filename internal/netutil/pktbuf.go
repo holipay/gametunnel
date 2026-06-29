@@ -2,7 +2,7 @@ package netutil
 
 import "sync"
 
-// pktPools is a graded byte buffer pool shared by FEC and client TUN reader.
+// pktPools is a graded byte buffer pool shared by client TUN reader.
 // Size classes: 512B (most game packets), 2KB, 16KB, 65535B (max UDP).
 var pktPools = [4]*sync.Pool{
 	{New: func() interface{} { b := make([]byte, 512); return &b }},

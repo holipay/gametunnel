@@ -15,14 +15,9 @@ const DataFlagCompressed byte = 0x01
 // Only used when both client and server are v1.7+.
 const DataFlagHasToken byte = 0x02
 
-// DataFlagHasFEC is set in Flags when a 5-byte FEC header (groupID + seq)
-// is appended at the end of the data payload. Used for forward error correction.
-// Only used when server version >= 0x0108.
+// DataFlagHasFEC was used for FEC header (now removed).
+// Reserved for backward compatibility — receivers silently ignore this flag.
 const DataFlagHasFEC byte = 0x04
-
-// FECHeaderSize is the size of the FEC header appended to the data payload.
-// Wire format: [groupID(4, LE)] [seq(1)]
-const FECHeaderSize = 5
 
 // DataPayload carries a relayed IP packet between client and server.
 // Wire format: srcIP(4) + dstIP(4) + flags(1) + data(N)
@@ -116,12 +111,6 @@ func UnmarshalData(data []byte) (*DataPayload, error) {
 			return nil, ErrPacketTooShort
 		}
 		dataLen := len(data) - offset
-		if dp.Flags&DataFlagHasFEC != 0 {
-			if dataLen < FECHeaderSize {
-				return nil, ErrPacketTooShort
-			}
-			dataLen -= FECHeaderSize
-		}
 		pktData := make([]byte, dataLen)
 		copy(pktData, data[offset:])
 		dp.Data = pktData
@@ -163,13 +152,6 @@ func UnmarshalDataPooled(data []byte) (*DataPayload, error) {
 			return nil, ErrPacketTooShort
 		}
 		rawData := data[offset:]
-		if dp.Flags&DataFlagHasFEC != 0 {
-			if len(rawData) < FECHeaderSize {
-				PutDataPayload(dp)
-				return nil, ErrPacketTooShort
-			}
-			rawData = rawData[:len(rawData)-FECHeaderSize]
-		}
 		if cap(dp.Data) < len(rawData) {
 			dp.Data = make([]byte, len(rawData))
 		} else {
@@ -198,7 +180,3 @@ func isNewFormat(b byte) bool {
 	return b <= 0x07
 }
 
-// IsFECEnabled returns true if the data payload flags indicate FEC header is present.
-func IsFECEnabled(flags byte) bool {
-	return flags&DataFlagHasFEC != 0
-}

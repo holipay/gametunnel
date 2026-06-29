@@ -64,14 +64,6 @@ func (t *Tunnel) receiveFromServer(ctx context.Context, conn *net.UDPConn, serve
 		// Successful read — reset error counter.
 		consecutiveErrors = 0
 
-		// Check for FEC parity packets first (raw, not protocol-wrapped).
-		// FEC packets are raw byte sequences that fail protocol decoding,
-		// so this check must precede DecodeLenient/DecodeSkipCRC.
-		if n >= netutil.FECHeaderSize && netutil.IsFECPacket(buf[:n]) {
-			t.handleFECPacket(buf[:n])
-			continue
-		}
-
 		// Encrypted rooms skip CRC32 (AEAD provides integrity).
 		t.mu.RLock()
 		encrypted := t.decCipher != nil
@@ -216,7 +208,6 @@ func (t *Tunnel) handleDirectData(ctx context.Context, from *net.UDPAddr, msg *p
 	// Snapshot all needed fields under a single read lock
 	t.mu.RLock()
 	p2pCipher := t.p2pCipher
-	fecDec := t.fecDecoder
 	dev, _ := t.tunDev.Load().(TunDevice)
 
 	// Validate srcIP is a known peer (anti-spoofing)
@@ -265,9 +256,6 @@ func (t *Tunnel) handleDirectData(ctx context.Context, from *net.UDPAddr, msg *p
 	}
 
 	// ── Step 1: Decrypt (if encrypted) ──
-	// Must decrypt first because the FEC header is embedded INSIDE the
-	// encrypted payload on the P2P path. Operating on ciphertext would
-	// read garbage as groupID/seq and corrupt the AEAD by truncation.
 	outData := dp.Data
 	if p2pCipher != nil && crypto.IsEncrypted(dp.Data) {
 		decBuf := netutil.PktBufGet(len(dp.Data))
@@ -281,28 +269,7 @@ func (t *Tunnel) handleDirectData(ctx context.Context, from *net.UDPAddr, msg *p
 		defer netutil.PktBufPut(decBuf)
 	}
 
-	// ── Step 2: FEC recovery (operates on plaintext data) ──
-	if protocol.IsFECEnabled(dp.Flags) && len(outData) >= protocol.FECHeaderSize && t.fecEnabled() {
-		off := len(outData) - protocol.FECHeaderSize
-		groupID := binary.LittleEndian.Uint32(outData[off:])
-		seq := outData[off+4]
-		rawData := outData[:off]
-		outData = rawData
-
-		if fecDec != nil {
-			recovered := fecDec.ProcessDataPacket(groupID, seq, rawData)
-			for _, pkt := range recovered {
-				if len(pkt) >= 20 {
-					if _, werr := dev.Write(pkt); werr != nil {
-						log.Printf("[fec] recovered packet write error: %v", werr)
-					}
-				}
-				netutil.PktBufPut(pkt)
-			}
-		}
-	}
-
-	// ── Step 3: Write to TUN ──
+	// ── Step 2: Write to TUN ──
 	if _, werr := dev.Write(outData); werr != nil {
 		log.Printf(i18n.T().LogTUNWriteFail, werr)
 	}
@@ -345,40 +312,6 @@ func (t *Tunnel) handleDirectHolePunch(ctx context.Context, from *net.UDPAddr, m
 		defer t.holePunchWg.Done()
 		t.burstHolePunch(peerAddr, holePunchBurstPerPhase, 50*time.Millisecond, ctx)
 	}()
-}
-
-// handleFECPacket processes an incoming FEC parity packet.
-// Extracts the parity data and feeds it to the FEC decoder.
-// If the decoder recovers any lost packets, they are written to TUN.
-func (t *Tunnel) handleFECPacket(data []byte) {
-	t.mu.RLock()
-	fecDec := t.fecDecoder
-	dev, _ := t.tunDev.Load().(TunDevice)
-	fecEnabled := t.fecEnabled()
-	t.mu.RUnlock()
-
-	if fecDec == nil || dev == nil || !fecEnabled {
-		return
-	}
-
-	groupID, groupSize, err := netutil.ParseFECHeader(data)
-	if err != nil {
-		return
-	}
-	parity := netutil.ParseFECParity(data)
-	if parity == nil {
-		return
-	}
-
-	recovered := fecDec.ProcessParityPacket(groupID, groupSize, parity)
-	for _, pkt := range recovered {
-		if len(pkt) >= 20 {
-			if _, err := dev.Write(pkt); err != nil {
-				log.Printf("[fec] recovered packet write error: %v", err)
-			}
-		}
-		netutil.PktBufPut(pkt)
-	}
 }
 
 // handlePeerInfo updates the peer list from the server.
@@ -466,9 +399,6 @@ func (t *Tunnel) handlePeerInfo(ctx context.Context, payload []byte) {
 // handleDataFromServer writes server-relayed data to the TUN device.
 // Note: this path is ALWAYS server-relayed — direct P2P packets are handled
 // by handleDirectData instead. Do NOT mark DirectReach here.
-// Decryption MUST happen before FEC processing: the FEC header is inside
-// the encrypted payload and operating on ciphertext reads garbage as
-// groupID/seq and corrupts AEAD by truncation.
 func (t *Tunnel) handleDataFromServer(payload []byte) {
 	dp, err := protocol.UnmarshalDataPooled(payload)
 	if err != nil {
@@ -486,7 +416,6 @@ func (t *Tunnel) handleDataFromServer(payload []byte) {
 	serverIPKey, _ := t.serverIPKey.Load().([16]byte)
 	decCipher := t.decCipher
 	_, known := t.peers[srcKey]
-	fecDec := t.fecDecoder
 	dev, _ := t.tunDev.Load().(TunDevice)
 	t.mu.RUnlock()
 
@@ -515,28 +444,7 @@ func (t *Tunnel) handleDataFromServer(payload []byte) {
 		defer netutil.PktBufPut(decBuf)
 	}
 
-	// ── Step 2: FEC recovery (operates on plaintext data) ──
-	if protocol.IsFECEnabled(dp.Flags) && len(outData) >= protocol.FECHeaderSize && t.fecEnabled() {
-		off := len(outData) - protocol.FECHeaderSize
-		groupID := binary.LittleEndian.Uint32(outData[off:])
-		seq := outData[off+4]
-		rawData := outData[:off]
-		outData = rawData
-
-		if fecDec != nil {
-			recovered := fecDec.ProcessDataPacket(groupID, seq, rawData)
-			for _, pkt := range recovered {
-				if len(pkt) >= 20 {
-					if _, werr := dev.Write(pkt); werr != nil {
-						log.Printf("[fec] recovered packet write error: %v", werr)
-					}
-				}
-				netutil.PktBufPut(pkt)
-			}
-		}
-	}
-
-	// ── Step 3: Write to TUN ──
+	// ── Step 2: Write to TUN ──
 	if _, werr := dev.Write(outData); werr != nil {
 		log.Printf(i18n.T().LogTUNWriteFail, werr)
 	}
