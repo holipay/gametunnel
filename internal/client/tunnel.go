@@ -372,7 +372,7 @@ func (t *Tunnel) Connect(ctx context.Context, serverAddr string, mtu int, newTUN
 	}
 
 	startGoroutine("sendLoop", func() { t.sendLoop(runCtx, conn) })
-	startGoroutine("receiveFromServer", func() { t.receiveFromServer(runCtx, conn) })
+	startGoroutine("receiveFromServer", func() { t.receiveFromServer(runCtx, conn, sAddr) })
 	startGoroutine("receiveFromTUN", func() { t.receiveFromTUN(runCtx) })
 	for i := 0; i < tunWorkers; i++ {
 		startGoroutine("tunWorker", func() { t.tunWorker(runCtx) })
