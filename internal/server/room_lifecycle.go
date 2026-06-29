@@ -91,8 +91,7 @@ func (r *Room) CleanupStale() bool {
 				sa.connKey = addrToConnIPKey(c.PublicAddr)
 			}
 			staleAuths = append(staleAuths, sa)
-		}
-		if c.ecdhPending && now.Sub(c.challengeAt) > 30*time.Second {
+		} else if c.ecdhPending && now.Sub(c.challengeAt) > 30*time.Second {
 			sa := staleAuth{key: addrKey, c: c}
 			if c.PublicAddr != nil {
 				sa.connKey = addrToConnIPKey(c.PublicAddr)

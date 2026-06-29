@@ -42,13 +42,18 @@ func buildDataPacket(srcIP, dstIP net.IP, data []byte, flags byte, token [16]byt
 }
 
 // buildEncryptedDataPacket encrypts pkt and wraps it in a data packet:
-// header(2) + srcIP(4) + dstIP(4) + flags(1) + encrypted.
-// The flags byte is kept in cleartext so that UnmarshalDataPooled can
-// correctly parse it — the encrypted blob (EncVersion + nonce + AEAD)
-// follows after offset 9 and IsEncrypted reads the EncVersion prefix.
-func buildEncryptedDataPacket(srcIP, dstIP net.IP, pkt []byte, cipher *crypto.Cipher, flags byte) []byte {
+// header(2) + srcIP(4) + dstIP(4) + flags(1) + [token(16)] + encrypted.
+// The flags byte and token are kept in cleartext so that UnmarshalDataPooled
+// can correctly parse them — the encrypted blob (EncVersion + nonce + AEAD)
+// follows after the token and IsEncrypted reads the EncVersion prefix.
+func buildEncryptedDataPacket(srcIP, dstIP net.IP, pkt []byte, cipher *crypto.Cipher, flags byte, token [16]byte) []byte {
+	tokenLen := 0
+	if token != [16]byte{} {
+		flags |= protocol.DataFlagHasToken
+		tokenLen = 16
+	}
 	encMax := crypto.Overhead + len(pkt)
-	size := protocol.HeaderLen + 9 + encMax
+	size := protocol.HeaderLen + 9 + tokenLen + encMax
 	dst := make([]byte, size)
 
 	off := 0
@@ -60,6 +65,10 @@ func buildEncryptedDataPacket(srcIP, dstIP net.IP, pkt []byte, cipher *crypto.Ci
 	off += 8
 	dst[off] = flags
 	off++
+	if tokenLen > 0 {
+		copy(dst[off:], token[:])
+		off += 16
+	}
 
 	dst = dst[:off]
 	dst = cipher.EncryptTo(dst, pkt)
@@ -143,9 +152,9 @@ func (t *Tunnel) routePacket(pkt []byte, srcIP, dstIP [4]byte) {
 		// P2P direct path — send directly for low latency.
 		var packet []byte
 		if p2pCipher != nil {
-			packet = buildEncryptedDataPacket(srcNet, dstNet, sendData, p2pCipher, flags)
+			packet = buildEncryptedDataPacket(srcNet, dstNet, sendData, p2pCipher, flags, token)
 		} else {
-			packet = buildDataPacket(srcNet, dstNet, sendData, flags, [16]byte{})
+			packet = buildDataPacket(srcNet, dstNet, sendData, flags, token)
 		}
 		t.sendUDP(packet, peerAddr)
 		// Generate FEC parity for P2P path — use raw IP data without FEC header
@@ -164,7 +173,7 @@ func (t *Tunnel) routePacket(pkt []byte, srcIP, dstIP [4]byte) {
 func (t *Tunnel) sendToServerFEC(data, rawForFEC []byte, srcIP, dstIP net.IP, cipher *crypto.Cipher, flags byte, fecEnc *netutil.FECEncoder, token [16]byte, serverAddr *net.UDPAddr) {
 	var packet []byte
 	if cipher != nil {
-		packet = buildEncryptedDataPacket(srcIP, dstIP, data, cipher, flags)
+		packet = buildEncryptedDataPacket(srcIP, dstIP, data, cipher, flags, token)
 	} else {
 		packet = buildDataPacket(srcIP, dstIP, data, flags, token)
 	}

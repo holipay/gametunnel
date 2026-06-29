@@ -206,8 +206,13 @@ func loadINI(path string, cfg *Config) bool {
 	if cfg.ServerAddr != "" && portOnly != "" {
 		host, _, err := net.SplitHostPort(cfg.ServerAddr)
 		if err != nil {
-			// Server address has no port yet — append it
-			cfg.ServerAddr = net.JoinHostPort(cfg.ServerAddr, portOnly)
+			// Server address has no port yet — append it.
+			// Strip brackets from IPv6 addresses to avoid double-bracketing.
+			addr := cfg.ServerAddr
+			if strings.HasPrefix(addr, "[") && strings.HasSuffix(addr, "]") {
+				addr = addr[1 : len(addr)-1]
+			}
+			cfg.ServerAddr = net.JoinHostPort(addr, portOnly)
 		} else {
 			// Server address already has port — keep it
 			_ = host
