@@ -202,6 +202,13 @@ func (b *UDPTCPBridge) Send(data []byte) error {
 // Stop signals the bridge to stop.
 func (b *UDPTCPBridge) Stop() {
 	b.tcp.Close()
+	// Fast path: if ReceiveLoop already exited, return immediately.
+	select {
+	case <-b.done:
+		return
+	default:
+	}
+	// ReceiveLoop still running (or never started) — wait up to 5s.
 	timer := time.NewTimer(5 * time.Second)
 	defer timer.Stop()
 	select {
