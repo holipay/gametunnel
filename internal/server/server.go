@@ -381,7 +381,7 @@ func (s *Server) handlePacket(data []byte, from *net.UDPAddr) {
 		}
 	}
 
-	encrypted := s.defaultRoom != nil && s.defaultRoom.roomPass != ""
+	encrypted := s.multiRoom || (s.defaultRoom != nil && s.defaultRoom.roomPass != "")
 	msg, err := protocol.DecodeLenient(data, encrypted)
 	if err != nil {
 		if errors.Is(err, protocol.ErrUnsupportedVersion) {
