@@ -126,11 +126,13 @@ func New(cfg Config) (*Server, error) {
 		return nil, err
 	}
 
-	// Use "udp4" or "udp6" explicitly based on resolved address family.
-	// "udp" with an IPv4 addr creates IPv4-only socket; with IPv6 it's
-	// platform-dependent (dual-stack on Linux with bindv6only=0, but not guaranteed).
+	// Bind to IPv6 wildcard with "udp" network to get a dual-stack socket
+	// that accepts traffic on both IPv4 and IPv6. When a specific IPv4 or
+	// IPv6 address is given, use the corresponding single-family socket.
 	network := "udp"
-	if udpAddr.IP.To4() == nil {
+	if udpAddr.IP == nil {
+		udpAddr.IP = net.IPv6zero
+	} else if udpAddr.IP.To4() == nil {
 		network = "udp6"
 	}
 	conn, err := net.ListenUDP(network, udpAddr)
