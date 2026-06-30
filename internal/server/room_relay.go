@@ -113,9 +113,19 @@ func (r *Room) handleRelay(payload []byte, from *net.UDPAddr) {
 		encoded = protocol.EncodeChecked(protocol.TypeData, payload)
 	}
 	packetSize := len(encoded)
-	for _, addr := range targets {
-		if r.bwLimiter == nil || r.bwLimiter.Allow(addr, packetSize) {
+	if isBroadcast {
+		// Broadcast packets bypass per-client bandwidth limits.
+		// Broadcasts are game-critical (LAN discovery, game state sync)
+		// and already bounded by the sender's own rate — per-recipient
+		// limiting just adds latency for no benefit.
+		for _, addr := range targets {
 			r.sendCheckedRaw(encoded, addr)
+		}
+	} else {
+		for _, addr := range targets {
+			if r.bwLimiter == nil || r.bwLimiter.Allow(addr, packetSize) {
+				r.sendCheckedRaw(encoded, addr)
+			}
 		}
 	}
 	r.totalPacketsRelay.Add(1)
