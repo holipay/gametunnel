@@ -1,4 +1,4 @@
-// Package netutil provides shared network utility functions for
+// Package netkey provides shared network key functions for
 // both client and server packages to avoid code duplication.
 package netkey
 
@@ -21,5 +21,29 @@ func IPKey(ip net.IP) [16]byte {
 	} else {
 		copy(k[:], ip)
 	}
+	return k
+}
+
+// RateKey is a fixed-size key for rate limiting, avoiding string
+// allocation per packet. Uses 16-byte IP to support both IPv4
+// (as v4-in-v6 mapped) and IPv6 addresses.
+type RateKey struct {
+	IP   [16]byte
+	Port uint16
+}
+
+// AddrToRateKey converts a UDP address to a RateKey.
+// IPv4 addresses are mapped to v4-in-v6 format for consistent keys.
+func AddrToRateKey(addr *net.UDPAddr) RateKey {
+	var k RateKey
+	if len(addr.IP) == net.IPv4len {
+		// v4-in-v6: 0:0:0:0:0:ffff:a.b.c.d
+		k.IP[10] = 0xff
+		k.IP[11] = 0xff
+		copy(k.IP[12:16], addr.IP)
+	} else {
+		copy(k.IP[:], addr.IP)
+	}
+	k.Port = uint16(addr.Port)
 	return k
 }

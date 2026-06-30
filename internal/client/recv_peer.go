@@ -1,6 +1,7 @@
 package client
 
 import (
+	"github.com/holipay/gametunnel/internal/netkey"
 	"context"
 	"log"
 	"net"
@@ -19,7 +20,7 @@ func (t *Tunnel) handleDirectHolePunch(ctx context.Context, from *net.UDPAddr, m
 	peerIP := net.IP(append([]byte(nil), msg.Payload[:4]...))
 
 	t.mu.RLock()
-	peer, ok := t.peers[ipKey(peerIP)]
+	peer, ok := t.peers[netkey.IPKey(peerIP)]
 	if !ok || peer.PublicAddr.Load() == nil {
 		t.mu.RUnlock()
 		return
@@ -74,7 +75,7 @@ func (t *Tunnel) handlePeerInfo(ctx context.Context, payload []byte) {
 		if entry.VirtualIP.Equal(t.session.virtualIP) {
 			continue
 		}
-		key := ipKey(entry.VirtualIP)
+		key := netkey.IPKey(entry.VirtualIP)
 		// Normalize PublicAddr.IP to 16 bytes (IPv4 → ::ffff:x.x.x.x) so
 		// that IP comparisons with addresses received on the IPv6 socket
 		// (always 16 bytes) work correctly. Required for fromServer check

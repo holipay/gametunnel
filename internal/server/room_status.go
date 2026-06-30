@@ -1,6 +1,7 @@
 package server
 
 import (
+	"github.com/holipay/gametunnel/internal/netkey"
 	"fmt"
 	"net"
 	"time"
@@ -163,7 +164,7 @@ func (r *Room) resolveRestoredClient(username string, roomID string, from *net.U
 			// Attach the real address
 			c.PublicAddr = from
 			c.SetLastSeen(time.Now())
-			r.addrMap[addrToRateKey(from)] = c
+			r.addrMap[netkey.AddrToRateKey(from)] = c
 
 			// Track per-IP connection count (checked above)
 			r.ipConnMu.Lock()

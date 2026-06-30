@@ -1,6 +1,7 @@
 package server
 
 import (
+	"github.com/holipay/gametunnel/internal/netkey"
 	"log"
 	"net"
 	"time"
@@ -34,7 +35,7 @@ func (r *Room) handleRelay(payload []byte, from *net.UDPAddr) {
 	r.relayLog("[relay] received relay from %s: srcIP=%s dstIP=%s len=%d", from, srcIP, dstIP, len(payload))
 
 	r.mu.RLock()
-	sender := r.addrMap[addrToRateKey(from)]
+	sender := r.addrMap[netkey.AddrToRateKey(from)]
 	if sender == nil {
 		r.relayLog("[relay] sender not found in addrMap")
 		r.mu.RUnlock()
@@ -87,7 +88,7 @@ func (r *Room) handleRelay(payload []byte, from *net.UDPAddr) {
 			}
 		}
 	} else {
-		if dst, ok := r.clients[ipKey(dstIP)]; ok && dst.PublicAddr != nil {
+		if dst, ok := r.clients[netkey.IPKey(dstIP)]; ok && dst.PublicAddr != nil {
 			targets = append(targets, dst.PublicAddr)
 		}
 	}
@@ -138,8 +139,8 @@ func (r *Room) handleHolePunch(payload []byte, from *net.UDPAddr) {
 	dstIP := net.IP(payload[:4])
 
 	r.mu.RLock()
-	src, ok1 := r.addrMap[addrToRateKey(from)]
-	dst, ok2 := r.clients[ipKey(dstIP)]
+	src, ok1 := r.addrMap[netkey.AddrToRateKey(from)]
+	dst, ok2 := r.clients[netkey.IPKey(dstIP)]
 	var dstAddr *net.UDPAddr
 	if ok2 {
 		dstAddr = dst.PublicAddr
@@ -166,7 +167,7 @@ func (r *Room) handleHolePunch(payload []byte, from *net.UDPAddr) {
 
 func (r *Room) handlePeerRequest(from *net.UDPAddr) {
 	r.mu.RLock()
-	c := r.addrMap[addrToRateKey(from)]
+	c := r.addrMap[netkey.AddrToRateKey(from)]
 	r.mu.RUnlock()
 	if c == nil {
 		return

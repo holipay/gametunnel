@@ -1,6 +1,7 @@
 package server
 
 import (
+	"github.com/holipay/gametunnel/internal/netkey"
 	"net"
 	"sync"
 	"time"
@@ -58,7 +59,7 @@ func (bl *BandwidthLimiter) Allow(dest *net.UDPAddr, size int) bool {
 
 // getBucket returns (or creates) the token bucket for a destination.
 func (bl *BandwidthLimiter) getBucket(dest *net.UDPAddr) *ratelimit.TokenBucket {
-	key := addrToRateKey(dest)
+	key := netkey.AddrToRateKey(dest)
 	if v, ok := bl.buckets.Load(key); ok {
 		return v.(*ratelimit.TokenBucket)
 	}
@@ -72,7 +73,7 @@ func (bl *BandwidthLimiter) Remove(dest *net.UDPAddr) {
 	if !bl.Enabled() {
 		return
 	}
-	bl.buckets.Delete(addrToRateKey(dest))
+	bl.buckets.Delete(netkey.AddrToRateKey(dest))
 }
 
 // Cleanup removes stale buckets that haven't been used in the given duration.

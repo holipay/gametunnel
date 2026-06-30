@@ -1,6 +1,7 @@
 package server
 
 import (
+	"github.com/holipay/gametunnel/internal/netkey"
 	"fmt"
 	"log"
 	"net"
@@ -34,7 +35,7 @@ func (r *Room) getAuthKey(roomID string) []byte {
 // from the registration address — decrementing `from` would leave the original
 // address's count permanently incremented (memory leak) and the current address's
 // count negative (blocking future registrations from that IP).
-func (r *Room) cleanupPendingAuth(fromKey, oldKey rateKey, foundByScan bool, c *Client) {
+func (r *Room) cleanupPendingAuth(fromKey, oldKey netkey.RateKey, foundByScan bool, c *Client) {
 	deleteKey := fromKey
 	if foundByScan {
 		deleteKey = oldKey
@@ -106,7 +107,7 @@ func (r *Room) handleRegister(payload []byte, from *net.UDPAddr) {
 	}
 
 	r.mu.Lock()
-	fromKey := addrToRateKey(from)
+	fromKey := netkey.AddrToRateKey(from)
 
 	if existing := r.addrMap[fromKey]; existing != nil && existing.auth == authChallengeSent {
 		// Clean up stale auth entry so the client can retry immediately
@@ -225,8 +226,8 @@ func (r *Room) doRegisterClient(reg *protocol.RegisterPayload, from *net.UDPAddr
 	}
 	c.GenerateSessionToken()
 	c.SetLastSeen(time.Now())
-	r.clients[ipKey(vip)] = c
-	r.addrMap[addrToRateKey(from)] = c
+	r.clients[netkey.IPKey(vip)] = c
+	r.addrMap[netkey.AddrToRateKey(from)] = c
 
 	log.Printf(t.LogPlayerJoin, reg.Username, from, vip, len(r.clients))
 
@@ -258,7 +259,7 @@ func (r *Room) doSendAuthChallenge(reg *protocol.RegisterPayload, from *net.UDPA
 		clientVersion: reg.Version,
 	}
 	c.SetLastSeen(time.Now())
-	r.addrMap[addrToRateKey(from)] = c
+	r.addrMap[netkey.AddrToRateKey(from)] = c
 	r.pendingAuth++
 	return challenge, true
 }
@@ -273,7 +274,7 @@ func (r *Room) handleECDHConfirm(payload []byte, from *net.UDPAddr) {
 
 	t := i18n.T()
 	r.mu.Lock()
-	fromKey := addrToRateKey(from)
+	fromKey := netkey.AddrToRateKey(from)
 	c := r.addrMap[fromKey]
 
 	if c == nil || !c.ecdhPending || c.ecdhPriv == nil {
@@ -368,12 +369,12 @@ func (r *Room) handleAuthResponse(payload []byte, from *net.UDPAddr) {
 
 	t := i18n.T()
 	r.mu.Lock()
-	fromKey := addrToRateKey(from)
+	fromKey := netkey.AddrToRateKey(from)
 	c := r.addrMap[fromKey]
 
 	// If direct address lookup fails (NAT rebinding between register and
 	// auth response), scan pending auth clients by username+roomID.
-	var oldKey rateKey
+	var oldKey netkey.RateKey
 	var foundByScan bool
 	if c == nil || c.auth != authChallengeSent {
 		for key, client := range r.addrMap {

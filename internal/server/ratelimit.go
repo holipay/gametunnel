@@ -1,6 +1,7 @@
 package server
 
 import (
+	"github.com/holipay/gametunnel/internal/netkey"
 	"context"
 	"net"
 	"sync"
@@ -19,31 +20,10 @@ const (
 	rateShardCount = 16
 )
 
-// rateKey is a fixed-size key for rate limiting, avoiding string allocation per packet.
-// Uses 16-byte IP to support both IPv4 (as v4-in-v6 mapped) and IPv6 addresses.
-type rateKey struct {
-	IP   [16]byte
-	Port uint16
-}
-
-func addrToRateKey(addr *net.UDPAddr) rateKey {
-	var k rateKey
-	if len(addr.IP) == net.IPv4len {
-		// v4-in-v6: 0:0:0:0:0:ffff:a.b.c.d
-		k.IP[10] = 0xff
-		k.IP[11] = 0xff
-		copy(k.IP[12:16], addr.IP)
-	} else {
-		copy(k.IP[:], addr.IP)
-	}
-	k.Port = uint16(addr.Port)
-	return k
-}
-
 // rateShard holds one shard of the rate limiter with its own mutex.
 type rateShard struct {
 	mu  sync.Mutex
-	buf [2]map[rateKey]int // double-buffer: [0]=active, [1]=stale
+	buf [2]map[netkey.RateKey]int // double-buffer: [0]=active, [1]=stale
 }
 
 // rateShardsArray is the global array of rate limiter shards.
@@ -54,7 +34,7 @@ func newRateShardsArray() *rateShardsArray {
 	var arr rateShardsArray
 	for i := range arr {
 		arr[i] = &rateShard{
-			buf: [2]map[rateKey]int{make(map[rateKey]int), make(map[rateKey]int)},
+			buf: [2]map[netkey.RateKey]int{make(map[netkey.RateKey]int), make(map[netkey.RateKey]int)},
 		}
 	}
 	return &arr
@@ -62,7 +42,7 @@ func newRateShardsArray() *rateShardsArray {
 
 // shard returns the shard index for a given rateKey.
 // Uses a simple hash of the IP bytes to distribute across shards.
-func (r *rateShardsArray) shard(key rateKey) *rateShard {
+func (r *rateShardsArray) shard(key netkey.RateKey) *rateShard {
 	// Use the last 4 bytes of the IP (IPv4 portion for v4-in-v6) for hashing.
 	// This ensures packets from the same IP always go to the same shard.
 	h := uint32(key.IP[12]) | uint32(key.IP[13])<<8 | uint32(key.IP[14])<<16 | uint32(key.IP[15])<<24
@@ -71,7 +51,7 @@ func (r *rateShardsArray) shard(key rateKey) *rateShard {
 
 // checkRate returns true if the address has not exceeded the packet rate limit.
 func (s *Server) checkRate(addr *net.UDPAddr) bool {
-	key := addrToRateKey(addr)
+	key := netkey.AddrToRateKey(addr)
 	shard := s.rateShards.shard(key)
 	shard.mu.Lock()
 	shard.buf[0][key]++

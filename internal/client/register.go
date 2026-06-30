@@ -1,6 +1,7 @@
 package client
 
 import (
+	"github.com/holipay/gametunnel/internal/netkey"
 	"context"
 	"fmt"
 	"log"
@@ -179,7 +180,7 @@ func (t *Tunnel) handleAssignIP(payload []byte) error {
 		IP:   assign.VirtualIP.Mask(net.IPMask(assign.SubnetMask)),
 		Mask: net.IPMask(assign.SubnetMask),
 	}
-	serverIPKey := ipKey(assign.ServerIP)
+	serverIPKey := netkey.IPKey(assign.ServerIP)
 
 	// Cache the hole punch packet once — reused by startHolePunch,
 	// handleHolePunchReceived, and sendP2PKeepalives.

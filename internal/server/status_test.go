@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/holipay/gametunnel/internal/i18n"
+	"github.com/holipay/gametunnel/internal/netkey"
 )
 
 // ── checkStatusToken Tests ───────────────────────────────────
@@ -254,7 +255,7 @@ func TestBuildStatusInfo_WithPlayer(t *testing.T) {
 	c := &Client{Username: "test", VirtualIP: net.IPv4(10, 10, 0, 2)}
 	c.SetLastSeen(time.Now())
 	s.defaultRoom.mu.Lock()
-	s.defaultRoom.clients[ipKey(c.VirtualIP)] = c
+	s.defaultRoom.clients[netkey.IPKey(c.VirtualIP)] = c
 	s.defaultRoom.mu.Unlock()
 
 	info := s.buildStatusInfo()
