@@ -86,8 +86,14 @@ func (d *Device) Read(buf []byte) (int, error) {
 }
 
 func (d *Device) Write(data []byte) (int, error) {
-	bufs := [1][]byte{data}
-	n, err := d.tunDev.Write(bufs[:], 0)
+	// The wireguard TUN library expects virtio-net header headroom (10 bytes)
+	// when the device has IFF_VNET_HDR enabled. Prepend a zero header so
+	// the offset parameter equals the header length.
+	const vnetHdrLen = 10
+	buf := make([]byte, vnetHdrLen+len(data))
+	copy(buf[vnetHdrLen:], data)
+	bufs := [1][]byte{buf}
+	n, err := d.tunDev.Write(bufs[:], vnetHdrLen)
 	if err != nil {
 		return 0, err
 	}
