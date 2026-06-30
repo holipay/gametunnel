@@ -329,6 +329,7 @@ func (r *Room) sendKick(to *net.UDPAddr, reason string) {
 }
 
 func (r *Room) sendKickCode(to *net.UDPAddr, code protocol.KickCode, reason string) {
+	log.Printf("[kick] sending to %s: code=%d reason=%s", to, code, reason)
 	kick := &protocol.KickPayload{Reason: reason, Code: code}
 	r.sendChecked(protocol.TypeKick, kick.Marshal(), to)
 	r.totalKicks.Add(1)
