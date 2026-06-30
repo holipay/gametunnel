@@ -194,7 +194,9 @@ func (t *Tunnel) dialServer(sAddr *net.UDPAddr) (*net.UDPConn, error) {
 		sAddr.IP = ip16
 	}
 	t.serverAddr.Store(sAddr)
-	netutil.SetSocketBuffers(conn)
+	if err := netutil.SetSocketBuffers(conn); err != nil {
+		log.Printf("set socket buffers: %v", err)
+	}
 	t.conn = conn
 	return conn, nil
 }
