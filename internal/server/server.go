@@ -386,8 +386,12 @@ func (s *Server) handlePacket(data []byte, from *net.UDPAddr) {
 	// unencrypted — verify their CRC in the encrypted fast path.
 	var msg *protocol.Message
 	if encrypted {
-		msg, _ = protocol.DecodeSkipCRC(data)
+		var err error
+		msg, err = protocol.DecodeSkipCRC(data)
 		if msg == nil {
+			if err != nil && !errors.Is(err, protocol.ErrPacketTooShort) {
+				log.Printf("failed to decode encrypted packet: %v", err)
+			}
 			return
 		}
 		if msg.Type == protocol.TypeRegister ||
