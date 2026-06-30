@@ -107,6 +107,8 @@ func (d *Device) Read(buf []byte) (int, error) {
 	}
 	sz := sizes[0]
 	if d.offset > 0 {
+		// handleVirtioRead writes data to buf[offset:]; shift to buf[0:]
+		// so the caller sees a standard IP packet starting at offset 0.
 		copy(buf, buf[d.offset:d.offset+sz])
 	}
 	return sz, nil
