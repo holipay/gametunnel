@@ -15,7 +15,8 @@ import (
 
 // register performs the registration handshake with the server.
 // It handles both passwordless and HMAC challenge-response flows.
-func (t *Tunnel) register(ctx context.Context) error {
+// conn is passed explicitly to avoid races with Connect() reassigning t.conn.
+func (t *Tunnel) register(ctx context.Context, conn *net.UDPConn) error {
 	reg := &protocol.RegisterPayload{
 		RoomID:   t.session.roomID,
 		Username: t.session.username,
@@ -24,8 +25,8 @@ func (t *Tunnel) register(ctx context.Context) error {
 	packet := protocol.EncodeChecked(protocol.TypeRegister, reg.Marshal())
 
 	deadline := 10 * time.Second
-	t.conn.SetReadDeadline(time.Now().Add(deadline))
-	defer t.conn.SetReadDeadline(time.Time{})
+	conn.SetReadDeadline(time.Now().Add(deadline))
+	defer conn.SetReadDeadline(time.Time{})
 
 	const maxRetries = 3
 	const maxAuthRounds = 3
@@ -33,7 +34,7 @@ func (t *Tunnel) register(ctx context.Context) error {
 	authRounds := 0
 	pendingPacket := packet
 
-	t.writeUDP(t.conn, pendingPacket, t.serverAddr.Load())
+	t.writeUDP(conn, pendingPacket, t.serverAddr.Load())
 
 	// Pre-allocate buffer for all readResponse calls during registration
 	respBuf := make([]byte, 1500)
@@ -46,7 +47,7 @@ func (t *Tunnel) register(ctx context.Context) error {
 		}
 
 		// Wait for response (AssignIP, AuthChallenge, or Kick)
-		msg, err := t.readResponse(ctx, respBuf)
+		msg, err := t.readResponse(ctx, conn, respBuf)
 		if err != nil {
 			if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
 				retries++
@@ -54,8 +55,8 @@ func (t *Tunnel) register(ctx context.Context) error {
 					return fmt.Errorf("%s", i18n.Format(i18n.T().LogRegFailed, maxRetries))
 				}
 				log.Printf("%s", i18n.Format(i18n.T().LogRegTimeout, retries, maxRetries))
-				t.writeUDP(t.conn, pendingPacket, t.serverAddr.Load())
-				t.conn.SetReadDeadline(time.Now().Add(deadline))
+				t.writeUDP(conn, pendingPacket, t.serverAddr.Load())
+				conn.SetReadDeadline(time.Now().Add(deadline))
 				continue
 			}
 			return err
@@ -71,16 +72,16 @@ func (t *Tunnel) register(ctx context.Context) error {
 			if authRounds > maxAuthRounds {
 				return fmt.Errorf("%s", i18n.T().ErrTooManyAuth)
 			}
-			if err := t.handleAuthChallenge(msg.Payload); err != nil {
+			if err := t.handleAuthChallenge(nil, msg.Payload); err != nil {
 				return err
 			}
-			t.conn.SetReadDeadline(time.Now().Add(deadline))
+			conn.SetReadDeadline(time.Now().Add(deadline))
 			continue
 		case protocol.TypeECDHExchange:
-			if err := t.handleECDHExchange(msg.Payload); err != nil {
+			if err := t.handleECDHExchange(nil, msg.Payload); err != nil {
 				return err
 			}
-			t.conn.SetReadDeadline(time.Now().Add(deadline))
+			conn.SetReadDeadline(time.Now().Add(deadline))
 			continue
 		case protocol.TypeKick:
 			kick, err := protocol.UnmarshalKick(msg.Payload)
@@ -94,14 +95,15 @@ func (t *Tunnel) register(ctx context.Context) error {
 
 // readResponse reads and decodes one protocol message from the server.
 // Caller must provide a reusable buffer (typically 1500 bytes).
-func (t *Tunnel) readResponse(ctx context.Context, buf []byte) (*protocol.Message, error) {
+// conn is passed explicitly to avoid races with Connect() reassigning t.conn.
+func (t *Tunnel) readResponse(ctx context.Context, conn *net.UDPConn, buf []byte) (*protocol.Message, error) {
 	select {
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	default:
 	}
 
-	n, _, err := t.conn.ReadFromUDP(buf)
+	n, _, err := conn.ReadFromUDP(buf)
 	if err != nil {
 		return nil, err
 	}
@@ -207,7 +209,7 @@ func (t *Tunnel) handleAssignIP(payload []byte) error {
 }
 
 // handleAuthChallenge responds to the server's HMAC authentication challenge.
-func (t *Tunnel) handleAuthChallenge(payload []byte) error {
+func (t *Tunnel) handleAuthChallenge(conn *net.UDPConn, payload []byte) error {
 	if t.session.roomPass == "" {
 		return fmt.Errorf("%s", i18n.T().ErrNeedPassword)
 	}
@@ -241,7 +243,13 @@ func (t *Tunnel) handleAuthChallenge(payload []byte) error {
 	}
 
 	packet := protocol.EncodeChecked(protocol.TypeAuthResponse, resp.Marshal())
-	t.writeUDP(t.conn, packet, t.serverAddr.Load())
+	if conn != nil {
+		t.writeUDP(conn, packet, t.serverAddr.Load())
+	} else if t.tcpTransport != nil {
+		if err := t.tcpTransport.Send(packet); err != nil {
+			return fmt.Errorf("tcp send auth: %w", err)
+		}
+	}
 
 	log.Printf("%s", i18n.T().LogAuthSent)
 	return nil
@@ -249,7 +257,7 @@ func (t *Tunnel) handleAuthChallenge(payload []byte) error {
 
 // handleECDHExchange processes the server's ephemeral X25519 public key.
 // Generates a client keypair, derives the shared secret, and sends ECDHConfirm.
-func (t *Tunnel) handleECDHExchange(payload []byte) error {
+func (t *Tunnel) handleECDHExchange(conn *net.UDPConn, payload []byte) error {
 	if t.session.roomPass == "" {
 		return fmt.Errorf("ECDH exchange without password")
 	}
@@ -303,7 +311,13 @@ func (t *Tunnel) handleECDHExchange(payload []byte) error {
 	copy(confirm.HMAC[:], ecdhHMAC)
 
 	packet := protocol.EncodeChecked(protocol.TypeECDHConfirm, confirm.Marshal())
-	t.writeUDP(t.conn, packet, t.serverAddr.Load())
+	if conn != nil {
+		t.writeUDP(conn, packet, t.serverAddr.Load())
+	} else if t.tcpTransport != nil {
+		if err := t.tcpTransport.Send(packet); err != nil {
+			return fmt.Errorf("tcp send ecdh: %w", err)
+		}
+	}
 
 	// Store session key for cipher creation in handleAssignIP
 	t.mu.Lock()
@@ -364,13 +378,13 @@ func (t *Tunnel) registerTCP(ctx context.Context) error {
 			if authRounds > maxAuthRounds {
 				return fmt.Errorf("%s", i18n.T().ErrTooManyAuth)
 			}
-			if err := t.handleAuthChallenge(msg.Payload); err != nil {
+			if err := t.handleAuthChallenge(nil, msg.Payload); err != nil {
 				return err
 			}
 			timer.Reset(deadline)
 			continue
 		case protocol.TypeECDHExchange:
-			if err := t.handleECDHExchange(msg.Payload); err != nil {
+			if err := t.handleECDHExchange(nil, msg.Payload); err != nil {
 				return err
 			}
 			timer.Reset(deadline)

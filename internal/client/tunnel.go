@@ -193,7 +193,7 @@ func (t *Tunnel) Connect(ctx context.Context, serverAddr string, mtu int, newTUN
 	netutil.SetSocketBuffers(conn)
 	t.conn = conn
 
-	if err := t.register(ctx); err != nil {
+	if err := t.register(ctx, conn); err != nil {
 		// UDP registration failed — try TCP fallback
 		log.Printf("[tunnel] UDP registration failed: %v, trying TCP fallback...", err)
 		tcp, tcpErr := netutil.DialTCP(serverAddr, 5*time.Second)
