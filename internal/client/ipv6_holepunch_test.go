@@ -13,12 +13,6 @@ import (
 	"github.com/holipay/gametunnel/internal/protocol"
 )
 
-// ipKeyPtr is a test helper that returns a pointer to a [16]byte IP key.
-func ipKeyPtr(ip net.IP) *[16]byte {
-	k := netkey.IPKey(ip)
-	return &k
-}
-
 // ── IPv6 Helpers ────────────────────────────────────────────────
 
 // newTestTunnelIPv6 creates a Tunnel bound to [::1] (IPv6 loopback).
