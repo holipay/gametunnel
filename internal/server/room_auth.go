@@ -230,7 +230,11 @@ func (r *Room) doRegisterClient(reg *protocol.RegisterPayload, from *net.UDPAddr
 		authRoomID:    reg.RoomID,
 		clientVersion: reg.Version,
 	}
-	c.GenerateSessionToken()
+	if err := c.GenerateSessionToken(); err != nil {
+		r.markIPFree(vip)
+		log.Printf("register: %v", err)
+		return nil, false
+	}
 	c.SetLastSeen(time.Now())
 	r.clients[netkey.IPKey(vip)] = c
 	r.addrMap[netkey.AddrToRateKey(from)] = c

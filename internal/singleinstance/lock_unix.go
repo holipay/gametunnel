@@ -17,15 +17,17 @@ type Lock struct {
 	path string
 }
 
-// Close releases the flock and removes the lock file.
+// Close releases the lock by closing the file.
+// The lock file is intentionally not removed to avoid a TOCTOU race
+// (symlink swap between unlock and unlink). Stale files are harmless —
+// the flock(2) semantics guarantee mutual exclusion, and cleanup of
+// dead PID files happens on the next Acquire.
 func (l *Lock) Close() error {
 	var err error
 	if l.file != nil {
-		// Release the flock explicitly (released automatically on close, but be polite)
 		syscall.Flock(int(l.file.Fd()), syscall.LOCK_UN)
 		err = l.file.Close()
 	}
-	os.Remove(l.path)
 	return err
 }
 

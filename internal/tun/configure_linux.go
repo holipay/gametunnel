@@ -33,7 +33,7 @@ func (d *Device) configure() error {
 	// Broadcast route
 	broadcast := make(net.IP, 4)
 	for i := range broadcast {
-		broadcast[i] = subnet[i] | ^d.subnetMask[i]
+		broadcast[i] = subnet[i] | byte(^d.subnetMask[i])
 	}
 	if err := runCmd("ip", "route", "replace", broadcast.String(), "dev", d.name, "metric", "1"); err != nil {
 		log.Printf("[tun] broadcast route warning: %v", err)
@@ -70,7 +70,7 @@ func (d *Device) CleanupRoutes() {
 
 	broadcast := make(net.IP, 4)
 	for i := range broadcast {
-		broadcast[i] = subnet[i] | ^d.subnetMask[i]
+		broadcast[i] = subnet[i] | byte(^d.subnetMask[i])
 	}
 	runCmd("ip", "route", "del", broadcast.String(), "dev", d.name)
 	runCmd("ip", "route", "del", "255.255.255.255", "dev", d.name)

@@ -68,6 +68,9 @@ func (b *TokenBucket) refill() {
 	if elapsed < 0 {
 		elapsed = 0
 	}
+	if elapsed > 1 {
+		elapsed = 1
+	}
 	b.tokens += b.rate * elapsed
 	if b.tokens > b.maxBurst {
 		b.tokens = b.maxBurst

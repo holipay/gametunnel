@@ -975,7 +975,7 @@ func TestHandleRelay_TokenValidation_OldFormat(t *testing.T) {
 		clientVersion: protocol.MinTokenVersion,
 	}
 	sender.SetLastSeen(time.Now())
-	sender.GenerateSessionToken()
+	_ = sender.GenerateSessionToken()
 
 	receiver := &Client{
 		Username:   "receiver",
@@ -1024,7 +1024,7 @@ func TestHandleRelay_TokenValidation_NewFormat(t *testing.T) {
 		clientVersion: protocol.MinTokenVersion,
 	}
 	sender.SetLastSeen(time.Now())
-	sender.GenerateSessionToken()
+	_ = sender.GenerateSessionToken()
 
 	receiver := &Client{
 		Username:   "receiver",
@@ -1074,7 +1074,7 @@ func TestHandleRelay_TokenValidation_WrongToken(t *testing.T) {
 		clientVersion: protocol.MinTokenVersion,
 	}
 	sender.SetLastSeen(time.Now())
-	sender.GenerateSessionToken()
+	_ = sender.GenerateSessionToken()
 
 	receiver := &Client{
 		Username:   "receiver",
