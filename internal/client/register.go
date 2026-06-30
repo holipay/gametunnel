@@ -194,7 +194,7 @@ func (t *Tunnel) handleAssignIP(payload []byte) error {
 	t.session.serverVersion.Store(uint32(protocol.ClearECDHFlag(assign.Version)))
 	t.session.sessionToken = assign.SessionToken
 	t.session.cachedSubnet.Store(cachedSubnet)
-	t.session.serverIPKey.Store(serverIPKey)
+	t.session.serverIPKey.Store(&serverIPKey)
 	t.nat.cachedPunchPacket.Store(cachedPunchPacket)
 	t.crypto.encCipher = encCipher
 	t.crypto.decCipher = decCipher

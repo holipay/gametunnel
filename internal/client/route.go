@@ -92,7 +92,10 @@ func (t *Tunnel) routePacket(pkt []byte, srcIP, dstIP [4]byte) {
 
 	// Single read lock snapshot for all fields needed in this call.
 	t.mu.RLock()
-	serverIPKey, _ := t.session.serverIPKey.Load().([16]byte)
+	var serverIPKey [16]byte
+	if p := t.session.serverIPKey.Load(); p != nil {
+		serverIPKey = *p
+	}
 	serverAddr := t.serverAddr.Load()
 	cachedSubnet := t.session.cachedSubnet.Load()
 	encCipher := t.crypto.encCipher

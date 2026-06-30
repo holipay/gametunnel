@@ -447,7 +447,7 @@ func TestIPv6_RoutePacket_P2PDirectWithIPv6Peer(t *testing.T) {
 
 	serverIP := net.IPv4(10, 10, 0, 1).To4()
 	tunnel.session.serverIP = serverIP
-	tunnel.session.serverIPKey.Store(netkey.IPKey(serverIP))
+	tunnel.session.serverIPKey.Store(ipKeyPtr(serverIP))
 
 	peer := &Peer{VirtualIP: peerVIP, Username: "v6peer"}
 	peer.PublicAddr.Store(peerAddr)
@@ -488,7 +488,7 @@ func TestIPv6_RoutePacket_FallbackToRelayWithIPv6Server(t *testing.T) {
 
 	serverIP := net.IPv6loopback
 	tunnel.session.serverIP = serverIP
-	tunnel.session.serverIPKey.Store(netkey.IPKey(serverIP))
+	tunnel.session.serverIPKey.Store(ipKeyPtr(serverIP))
 
 	peerVIP := net.IPv4(10, 10, 0, 3).To4()
 	// Peer exists but no DirectReach
@@ -536,7 +536,7 @@ func TestIPv6_HolePunchFlow_EndToEnd(t *testing.T) {
 
 	serverIP := net.IPv6loopback
 	tunnel.session.serverIP = serverIP
-	tunnel.session.serverIPKey.Store(netkey.IPKey(serverIP))
+	tunnel.session.serverIPKey.Store(ipKeyPtr(serverIP))
 	tunnel.session.virtualIP = net.IPv4(10, 10, 0, 2).To4()
 	tunnel.nat.cachedPunchPacket.Store(protocol.EncodeChecked(protocol.TypeHolePunch, tunnel.session.virtualIP.To4()))
 
@@ -744,7 +744,7 @@ func TestIPv6_SendHolePunchRelay_UsesIPv4VirtualIP(t *testing.T) {
 
 	serverIP := net.IPv6loopback
 	tunnel.session.serverIP = serverIP
-	tunnel.session.serverIPKey.Store(netkey.IPKey(serverIP))
+	tunnel.session.serverIPKey.Store(ipKeyPtr(serverIP))
 
 	peerVIP := net.IPv4(10, 10, 0, 3).To4()
 

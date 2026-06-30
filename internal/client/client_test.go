@@ -13,6 +13,12 @@ import (
 	"github.com/holipay/gametunnel/internal/protocol"
 )
 
+// ipKeyPtr is a test helper that returns a pointer to a [16]byte IP key.
+func ipKeyPtr(ip net.IP) *[16]byte {
+	k := netkey.IPKey(ip)
+	return &k
+}
+
 // ── Mock TunDevice ─────────────────────────────────────────────
 
 type mockTunDevice struct {
@@ -136,7 +142,7 @@ func TestRoutePacket_Broadcast(t *testing.T) {
 	tunnel, serverConn := newTestTunnel(t)
 
 	tunnel.session.serverIP = net.IPv4(10, 0, 0, 1).To4()
-	tunnel.session.serverIPKey.Store(netkey.IPKey(tunnel.session.serverIP))
+	tunnel.session.serverIPKey.Store(ipKeyPtr(tunnel.session.serverIP))
 	tunnel.session.cachedSubnet.Store(&net.IPNet{
 		IP:   net.IPv4(10, 0, 0, 0).To4(),
 		Mask: net.CIDRMask(24, 32),
@@ -176,7 +182,7 @@ func TestRoutePacket_ServerIP(t *testing.T) {
 
 	serverIP := net.IPv4(10, 0, 0, 1).To4()
 	tunnel.session.serverIP = serverIP
-	tunnel.session.serverIPKey.Store(netkey.IPKey(serverIP))
+	tunnel.session.serverIPKey.Store(ipKeyPtr(serverIP))
 
 	pkt := []byte{0x45, 0, 0, 20}
 	var srcIP, dstIP [4]byte
@@ -219,7 +225,7 @@ func TestRoutePacket_PeerP2P(t *testing.T) {
 
 	serverIP := net.IPv4(10, 0, 0, 1).To4()
 	tunnel.session.serverIP = serverIP
-	tunnel.session.serverIPKey.Store(netkey.IPKey(serverIP))
+	tunnel.session.serverIPKey.Store(ipKeyPtr(serverIP))
 
 	peerIP := net.IPv4(10, 0, 0, 3).To4()
 	peerAddr := peerConn.LocalAddr().(*net.UDPAddr)
@@ -282,7 +288,7 @@ func TestRoutePacket_PeerNilAddr(t *testing.T) {
 
 	serverIP := net.IPv4(10, 0, 0, 1).To4()
 	tunnel.session.serverIP = serverIP
-	tunnel.session.serverIPKey.Store(netkey.IPKey(serverIP))
+	tunnel.session.serverIPKey.Store(ipKeyPtr(serverIP))
 
 	// Peer exists but has no PublicAddr (hole punch not yet completed)
 	peerIP := net.IPv4(10, 0, 0, 3).To4()
@@ -322,7 +328,7 @@ func TestRoutePacket_UnknownIP(t *testing.T) {
 
 	serverIP := net.IPv4(10, 0, 0, 1).To4()
 	tunnel.session.serverIP = serverIP
-	tunnel.session.serverIPKey.Store(netkey.IPKey(serverIP))
+	tunnel.session.serverIPKey.Store(ipKeyPtr(serverIP))
 
 	pkt := []byte{0x45, 0, 0, 20}
 	srcIP := net.IPv4(10, 0, 0, 2).To4()
@@ -824,7 +830,7 @@ func TestHandleDataFromServer(t *testing.T) {
 
 	serverIP := net.IPv4(10, 0, 0, 1).To4()
 	tunnel.session.serverIP = serverIP
-	tunnel.session.serverIPKey.Store(netkey.IPKey(serverIP))
+	tunnel.session.serverIPKey.Store(ipKeyPtr(serverIP))
 
 	mock := &mockTunDevice{}
 	tunnel.tunDev.Store(mock)
@@ -2014,7 +2020,7 @@ func TestRoutePacket_BroadcastToServer(t *testing.T) {
 	tunnel.session.virtualIP = net.IPv4(10, 10, 0, 2).To4()
 	tunnel.session.subnetMask = net.CIDRMask(24, 32)
 	tunnel.session.serverIP = net.IPv4(10, 10, 0, 1).To4()
-	tunnel.session.serverIPKey.Store(netkey.IPKey(tunnel.session.serverIP))
+	tunnel.session.serverIPKey.Store(ipKeyPtr(tunnel.session.serverIP))
 	tunnel.session.cachedSubnet.Store(&net.IPNet{
 		IP:   tunnel.session.virtualIP.Mask(tunnel.session.subnetMask),
 		Mask: tunnel.session.subnetMask,
@@ -2045,7 +2051,7 @@ func TestRoutePacket_UnicastToServer(t *testing.T) {
 	tunnel.session.virtualIP = net.IPv4(10, 10, 0, 2).To4()
 	tunnel.session.subnetMask = net.CIDRMask(24, 32)
 	tunnel.session.serverIP = net.IPv4(10, 10, 0, 1).To4()
-	tunnel.session.serverIPKey.Store(netkey.IPKey(tunnel.session.serverIP))
+	tunnel.session.serverIPKey.Store(ipKeyPtr(tunnel.session.serverIP))
 	tunnel.session.cachedSubnet.Store(&net.IPNet{
 		IP:   tunnel.session.virtualIP.Mask(tunnel.session.subnetMask),
 		Mask: tunnel.session.subnetMask,
@@ -2075,7 +2081,7 @@ func TestRoutePacket_PeerFallbackToRelay(t *testing.T) {
 	tunnel.session.virtualIP = net.IPv4(10, 10, 0, 2).To4()
 	tunnel.session.subnetMask = net.CIDRMask(24, 32)
 	tunnel.session.serverIP = net.IPv4(10, 10, 0, 1).To4()
-	tunnel.session.serverIPKey.Store(netkey.IPKey(tunnel.session.serverIP))
+	tunnel.session.serverIPKey.Store(ipKeyPtr(tunnel.session.serverIP))
 	tunnel.session.cachedSubnet.Store(&net.IPNet{
 		IP:   tunnel.session.virtualIP.Mask(tunnel.session.subnetMask),
 		Mask: tunnel.session.subnetMask,
