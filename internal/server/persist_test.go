@@ -1,6 +1,7 @@
 package server
 
 import (
+	"github.com/holipay/gametunnel/internal/netkey"
 	"encoding/json"
 	"net"
 	"os"
@@ -148,7 +149,7 @@ func TestLoadState_RestoreClient(t *testing.T) {
 	}
 
 	room.mu.RLock()
-	c := room.clients[ipKey(net.IPv4(10, 10, 0, 2))]
+	c := room.clients[netkey.IPKey(net.IPv4(10, 10, 0, 2))]
 	room.mu.RUnlock()
 
 	if c == nil {
@@ -235,7 +236,7 @@ func TestLoadState_RestoreStaleWithinGrace(t *testing.T) {
 	}
 
 	room.mu.RLock()
-	c := room.clients[ipKey(net.IPv4(10, 10, 0, 2))]
+	c := room.clients[netkey.IPKey(net.IPv4(10, 10, 0, 2))]
 	room.mu.RUnlock()
 	if c == nil {
 		t.Error("stale client within grace period should be restored")
@@ -355,7 +356,7 @@ func TestSaveState_WritesValidJSON(t *testing.T) {
 	}
 	c.SetLastSeen(time.Now())
 	room.mu.Lock()
-	room.clients[ipKey(c.VirtualIP)] = c
+	room.clients[netkey.IPKey(c.VirtualIP)] = c
 	room.markIPUsed(c.VirtualIP)
 	room.mu.Unlock()
 
@@ -429,7 +430,7 @@ func TestPersistRoundTrip(t *testing.T) {
 		c := &Client{Username: name, VirtualIP: ip}
 		c.SetLastSeen(now)
 		room.mu.Lock()
-		room.clients[ipKey(ip)] = c
+		room.clients[netkey.IPKey(ip)] = c
 		room.markIPUsed(ip)
 		room.mu.Unlock()
 	}

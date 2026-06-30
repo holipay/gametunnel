@@ -1,6 +1,7 @@
 package client
 
 import (
+	"github.com/holipay/gametunnel/internal/netkey"
 	"context"
 	"log"
 	"net"
@@ -71,7 +72,7 @@ func (t *Tunnel) sendHolePunchRelay(peerIP net.IP) {
 // Uses NAT type detection and port prediction for smarter strategies.
 func (t *Tunnel) startHolePunch(ctx context.Context, peerIP net.IP) {
 	t.mu.RLock()
-	peer, ok := t.peers[ipKey(peerIP)]
+	peer, ok := t.peers[netkey.IPKey(peerIP)]
 	if !ok || peer.PublicAddr.Load() == nil {
 		t.mu.RUnlock()
 		return
@@ -151,7 +152,7 @@ func (t *Tunnel) handleHolePunchReceived(ctx context.Context, payload []byte) {
 	peerIP := net.IP(append([]byte(nil), payload[:4]...))
 
 	t.mu.RLock()
-	peer, ok := t.peers[ipKey(peerIP)]
+	peer, ok := t.peers[netkey.IPKey(peerIP)]
 	if !ok || peer.PublicAddr.Load() == nil {
 		t.mu.RUnlock()
 		return
@@ -175,7 +176,7 @@ func (t *Tunnel) handleHolePunchReceived(ctx context.Context, payload []byte) {
 // hasDirectPeerTraffic checks if we've received direct P2P traffic from a peer.
 func (t *Tunnel) hasDirectPeerTraffic(peerIP net.IP) bool {
 	t.mu.RLock()
-	peer, ok := t.peers[ipKey(peerIP)]
+	peer, ok := t.peers[netkey.IPKey(peerIP)]
 	t.mu.RUnlock()
 	if !ok {
 		return false

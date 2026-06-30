@@ -1,6 +1,7 @@
 package server
 
 import (
+	"github.com/holipay/gametunnel/internal/netkey"
 	"log"
 	"net"
 	"time"
@@ -12,7 +13,7 @@ import (
 
 func (r *Room) handleKeepAlive(from *net.UDPAddr) {
 	r.mu.RLock()
-	c := r.addrMap[addrToRateKey(from)]
+	c := r.addrMap[netkey.AddrToRateKey(from)]
 	r.mu.RUnlock()
 	if c != nil {
 		c.SetLastSeen(time.Now())
@@ -20,7 +21,7 @@ func (r *Room) handleKeepAlive(from *net.UDPAddr) {
 }
 
 func (r *Room) handleDisconnect(from *net.UDPAddr) {
-	fromKey := addrToRateKey(from)
+	fromKey := netkey.AddrToRateKey(from)
 	r.mu.Lock()
 	c := r.addrMap[fromKey]
 	if c == nil {
@@ -38,7 +39,7 @@ func (r *Room) handleDisconnect(from *net.UDPAddr) {
 		}
 	} else {
 		r.markIPFree(c.VirtualIP)
-		delete(r.clients, ipKey(c.VirtualIP))
+		delete(r.clients, netkey.IPKey(c.VirtualIP))
 		if c.PublicAddr != nil {
 			r.decrementIPConnCount(addrToConnIPKey(c.PublicAddr))
 		}
@@ -78,7 +79,7 @@ func (r *Room) CleanupStale() bool {
 		if now.Sub(c.GetLastSeen()) > 30*time.Second {
 			sc := staleClient{key: key, c: c}
 			if c.PublicAddr != nil {
-				sc.aKey = addrToRateKey(c.PublicAddr)
+				sc.aKey = netkey.AddrToRateKey(c.PublicAddr)
 				sc.connKey = addrToConnIPKey(c.PublicAddr)
 			}
 			staleClients = append(staleClients, sc)

@@ -1,6 +1,7 @@
 package server
 
 import (
+	"github.com/holipay/gametunnel/internal/netkey"
 	"fmt"
 	"log"
 	"net"
@@ -106,7 +107,7 @@ func (r *Room) handleRegister(payload []byte, from *net.UDPAddr) {
 	}
 
 	r.mu.Lock()
-	fromKey := addrToRateKey(from)
+	fromKey := netkey.AddrToRateKey(from)
 
 	if existing := r.addrMap[fromKey]; existing != nil && existing.auth == authChallengeSent {
 		// Clean up stale auth entry so the client can retry immediately
@@ -225,8 +226,8 @@ func (r *Room) doRegisterClient(reg *protocol.RegisterPayload, from *net.UDPAddr
 	}
 	c.GenerateSessionToken()
 	c.SetLastSeen(time.Now())
-	r.clients[ipKey(vip)] = c
-	r.addrMap[addrToRateKey(from)] = c
+	r.clients[netkey.IPKey(vip)] = c
+	r.addrMap[netkey.AddrToRateKey(from)] = c
 
 	log.Printf(t.LogPlayerJoin, reg.Username, from, vip, len(r.clients))
 
@@ -258,7 +259,7 @@ func (r *Room) doSendAuthChallenge(reg *protocol.RegisterPayload, from *net.UDPA
 		clientVersion: reg.Version,
 	}
 	c.SetLastSeen(time.Now())
-	r.addrMap[addrToRateKey(from)] = c
+	r.addrMap[netkey.AddrToRateKey(from)] = c
 	r.pendingAuth++
 	return challenge, true
 }
@@ -273,7 +274,7 @@ func (r *Room) handleECDHConfirm(payload []byte, from *net.UDPAddr) {
 
 	t := i18n.T()
 	r.mu.Lock()
-	fromKey := addrToRateKey(from)
+	fromKey := netkey.AddrToRateKey(from)
 	c := r.addrMap[fromKey]
 
 	if c == nil || !c.ecdhPending || c.ecdhPriv == nil {
@@ -368,7 +369,7 @@ func (r *Room) handleAuthResponse(payload []byte, from *net.UDPAddr) {
 
 	t := i18n.T()
 	r.mu.Lock()
-	fromKey := addrToRateKey(from)
+	fromKey := netkey.AddrToRateKey(from)
 	c := r.addrMap[fromKey]
 
 	// If direct address lookup fails (NAT rebinding between register and

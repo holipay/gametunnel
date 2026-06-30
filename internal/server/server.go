@@ -22,11 +22,6 @@ import (
 	"github.com/holipay/gametunnel/internal/i18n"
 )
 
-// ipKey converts an IP address to a [16]byte map key.
-// Delegates to netkey.IPKey for shared implementation.
-func ipKey(ip net.IP) [16]byte {
-	return netkey.IPKey(ip)
-}
 
 // ── Server ─────────────────────────────────────────────────────
 
@@ -59,7 +54,7 @@ type Server struct {
 	// Multi-room support
 	multiRoom   bool
 	rooms       map[string]*Room    // roomID → Room
-	addrToRoom  map[rateKey]*Room   // client addr → Room (fast routing)
+	addrToRoom  map[netkey.RateKey]*Room   // client addr → Room (fast routing)
 	roomMu      sync.RWMutex        // protects rooms + addrToRoom
 	maxRooms    int                 // max auto-created rooms (0 = unlimited)
 
@@ -195,7 +190,7 @@ func New(cfg Config) (*Server, error) {
 		rateTick:    time.NewTicker(rateInterval),
 		metricsTS:   NewMetricsTimeSeries(),
 		rooms:       make(map[string]*Room),
-		addrToRoom:  make(map[rateKey]*Room),
+		addrToRoom:  make(map[netkey.RateKey]*Room),
 		multiRoom:   cfg.MultiRoom,
 		maxRooms:    maxRooms,
 		stateDir:    cfg.StateDir,
@@ -206,7 +201,7 @@ func New(cfg Config) (*Server, error) {
 	// Wire TCP bridge routing into the send queue (must happen after s is
 	// created so the closure can reference s.tcpBridges).
 	tcpWrite := func(addr *net.UDPAddr, data []byte) bool {
-		key := addrToRateKey(addr)
+		key := netkey.AddrToRateKey(addr)
 		if b, ok := s.tcpBridges.Load(key); ok {
 			if bridge, ok := b.(*netutil.UDPTCPBridge); ok {
 				if err := bridge.Send(data); err != nil {
@@ -434,7 +429,7 @@ func (s *Server) handlePacket(data []byte, from *net.UDPAddr) {
 // ── Multi-Room Packet Routing ──────────────────────────────────
 
 func (s *Server) handlePacketMultiRoom(msg *protocol.Message, from *net.UDPAddr) {
-	fromKey := addrToRateKey(from)
+	fromKey := netkey.AddrToRateKey(from)
 
 	// For Register, we need to parse roomID first to find/create the room
 	if msg.Type == protocol.TypeRegister {
@@ -520,7 +515,7 @@ func (s *Server) handleRegisterMultiRoom(payload []byte, from *net.UDPAddr) {
 	s.roomMu.Unlock()
 
 	// Register client in the room
-	fromKey := addrToRateKey(from)
+	fromKey := netkey.AddrToRateKey(from)
 
 	room.HandlePacket(protocol.TypeRegister, payload, from)
 
@@ -580,7 +575,7 @@ func (s *Server) tcpAcceptLoop(ctx context.Context) {
 				IP:   net.IPv4(127, 0, 0, 254),
 				Port: port,
 			}
-			key = addrToRateKey(syntheticAddr)
+			key = netkey.AddrToRateKey(syntheticAddr)
 			candidate := netutil.NewUDPTCPBridge(tcp, syntheticAddr)
 			if _, loaded := s.tcpBridges.LoadOrStore(key, candidate); !loaded {
 				bridge = candidate

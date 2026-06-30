@@ -1,6 +1,7 @@
 package server
 
 import (
+	"github.com/holipay/gametunnel/internal/netkey"
 	"fmt"
 	"log"
 	"math/bits"
@@ -62,7 +63,7 @@ type Room struct {
 
 	// Per-room client state
 	clients    map[[16]byte]*Client // virtualIP → Client
-	addrMap    map[rateKey]*Client  // client endpoint → Client
+	addrMap    map[netkey.RateKey]*Client  // client endpoint → Client
 	mu         sync.RWMutex
 
 	// IP allocation (per-room, independent)
@@ -156,7 +157,7 @@ func NewRoom(cfg RoomConfig) (*Room, error) {
 		sendQueue:   cfg.SendQueue,
 		bwLimiter:   cfg.BWLimiter,
 		clients:     make(map[[16]byte]*Client),
-		addrMap:     make(map[rateKey]*Client),
+		addrMap:     make(map[netkey.RateKey]*Client),
 		ipBitmap:    make([]uint64, 4),
 		maxPending:  min(cfg.MaxPlayers*3, 512),
 		regBuf:      [2]map[connIPKey]int{make(map[connIPKey]int), make(map[connIPKey]int)},
@@ -335,7 +336,7 @@ func (r *Room) sendKickCode(to *net.UDPAddr, code protocol.KickCode, reason stri
 
 func (r *Room) sendAssignIP(vip net.IP, to *net.UDPAddr) {
 	r.mu.RLock()
-	c := r.clients[ipKey(vip)]
+	c := r.clients[netkey.IPKey(vip)]
 	var sessionToken [16]byte
 	if c != nil {
 		sessionToken = c.SessionToken

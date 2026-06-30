@@ -46,11 +46,6 @@ var ctrlTimerPool = sync.Pool{
 	New: func() interface{} { return time.NewTimer(time.Hour) },
 }
 
-// ipKey converts an IP address to a [16]byte map key.
-// Delegates to netkey.IPKey for shared implementation.
-func ipKey(ip net.IP) [16]byte {
-	return netkey.IPKey(ip)
-}
 
 // Peer represents a remote player.
 type Peer struct {

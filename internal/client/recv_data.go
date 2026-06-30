@@ -1,6 +1,7 @@
 package client
 
 import (
+	"github.com/holipay/gametunnel/internal/netkey"
 	"context"
 	"log"
 	"net"
@@ -65,7 +66,7 @@ func (t *Tunnel) handleDirectData(ctx context.Context, from *net.UDPAddr, msg *p
 	p2pCipher := t.crypto.p2pCipher
 
 	// Validate srcIP is a known peer (anti-spoofing)
-	srcKey := ipKey(dp.SrcIP)
+	srcKey := netkey.IPKey(dp.SrcIP)
 	peer, known := t.peers[srcKey]
 
 	// Snapshot session token for unencrypted P2P auth
