@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"net"
 	"testing"
 	"time"
@@ -1374,6 +1375,155 @@ func TestBandwidthLimiter_CleanupDisabled(t *testing.T) {
 	bl := NewBandwidthLimiter(0) // disabled
 	// Cleanup should not panic
 	bl.Cleanup(time.Minute)
+}
+
+// ── Broadcast Bypass Tests ─────────────────────────────────────
+
+func TestSendBypass_BroadcastReachesAllPeers(t *testing.T) {
+	r := newTestRoom("10.10.0.0/24", net.IPv4(10, 10, 0, 1))
+
+	// Sender conn (used by the send queue to transmit)
+	senderConn, _ := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 0})
+	defer senderConn.Close()
+	r.conn = senderConn
+
+	// Receiver listeners
+	rxA, _ := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 0})
+	rxB, _ := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 0})
+	defer rxA.Close()
+	defer rxB.Close()
+
+	// Tight bandwidth limiter — normal send would be blocked
+	limiter := NewBandwidthLimiter(1)
+	limiter.burst = 1
+	r.bwLimiter = limiter
+	r.sendQueue = newRateLimitedQueue(senderConn, limiter, nil)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go r.sendQueue.run(ctx)
+
+	senderAddr := &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 1000}
+
+	sender := &Client{
+		Username:  "sender",
+		VirtualIP: net.IPv4(10, 10, 0, 2),
+		PublicAddr: senderAddr,
+		auth:      authNone,
+	}
+	pA := &Client{
+		Username:  "playerA",
+		VirtualIP: net.IPv4(10, 10, 0, 3),
+		PublicAddr: rxA.LocalAddr().(*net.UDPAddr),
+		auth:      authNone,
+	}
+	pB := &Client{
+		Username:  "playerB",
+		VirtualIP: net.IPv4(10, 10, 0, 4),
+		PublicAddr: rxB.LocalAddr().(*net.UDPAddr),
+		auth:      authNone,
+	}
+
+	r.mu.Lock()
+	r.clients[netkey.IPKey(sender.VirtualIP)] = sender
+	r.clients[netkey.IPKey(pA.VirtualIP)] = pA
+	r.clients[netkey.IPKey(pB.VirtualIP)] = pB
+	r.addrMap[netkey.AddrToRateKey(senderAddr)] = sender
+	r.addrMap[netkey.AddrToRateKey(pA.PublicAddr)] = pA
+	r.addrMap[netkey.AddrToRateKey(pB.PublicAddr)] = pB
+	r.mu.Unlock()
+
+	// Build broadcast payload (dstIP = 255.255.255.255)
+	payload := make([]byte, 4+4+3)
+	copy(payload[0:4], sender.VirtualIP.To4())
+	copy(payload[4:8], net.IPv4(255, 255, 255, 255).To4())
+	copy(payload[8:], []byte{0xDE, 0xAD, 0xBE})
+
+	r.handleRelay(payload, senderAddr)
+
+	if r.totalPacketsRelay.Load() != 1 {
+		t.Fatalf("totalPacketsRelay: got %d, want 1", r.totalPacketsRelay.Load())
+	}
+
+	// Drain receiver connections and verify both got the packet
+	var gotA, gotB bool
+	deadline := time.Now().Add(1 * time.Second)
+
+	tryRead := func(c *net.UDPConn) bool {
+		c.SetReadDeadline(time.Now().Add(200 * time.Millisecond))
+		buf := make([]byte, 1500)
+		n, err := c.Read(buf)
+		return err == nil && n > 0
+	}
+
+	for time.Now().Before(deadline) {
+		if !gotA && tryRead(rxA) {
+			gotA = true
+		}
+		if !gotB && tryRead(rxB) {
+			gotB = true
+		}
+		if gotA && gotB {
+			break
+		}
+	}
+
+	if !gotA {
+		t.Error("broadcast packet not received by playerA (bandwidth limiter may be blocking)")
+	}
+	if !gotB {
+		t.Error("broadcast packet not received by playerB (bandwidth limiter may be blocking)")
+	}
+}
+
+func TestSendBypass_PeerInfoBroadcastBypassesLimiter(t *testing.T) {
+	r := newTestRoom("10.10.0.0/24", net.IPv4(10, 10, 0, 1))
+	senderConn, _ := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 0})
+	defer senderConn.Close()
+	r.conn = senderConn
+
+	rxA, _ := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 0})
+	defer rxA.Close()
+
+	limiter := NewBandwidthLimiter(1)
+	limiter.burst = 1
+	r.bwLimiter = limiter
+	r.sendQueue = newRateLimitedQueue(senderConn, limiter, nil)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go r.sendQueue.run(ctx)
+
+	pA := &Client{
+		Username:  "playerA",
+		VirtualIP: net.IPv4(10, 10, 0, 2),
+		PublicAddr: rxA.LocalAddr().(*net.UDPAddr),
+		auth:      authNone,
+	}
+
+	r.mu.Lock()
+	r.clients[netkey.IPKey(pA.VirtualIP)] = pA
+	r.addrMap[netkey.AddrToRateKey(pA.PublicAddr)] = pA
+	r.mu.Unlock()
+
+	r.sendPeerInfoBroadcast()
+
+	rxA.SetReadDeadline(time.Now().Add(1 * time.Second))
+	buf := make([]byte, 1500)
+	n, err := rxA.Read(buf)
+	if err != nil {
+		t.Fatalf("PeerInfo broadcast not received: %v (bandwidth limiter may be blocking)", err)
+	}
+	if n == 0 {
+		t.Error("PeerInfo broadcast packet is empty")
+	}
+	msg, err := protocol.DecodeChecked(buf[:n])
+	if err != nil {
+		t.Fatalf("decode PeerInfo: %v", err)
+	}
+	if msg.Type != protocol.TypePeerInfo {
+		t.Fatalf("expected TypePeerInfo, got type %d", msg.Type)
+	}
 }
 
 func TestSubUint64(t *testing.T) {
