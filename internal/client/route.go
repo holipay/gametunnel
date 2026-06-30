@@ -1,6 +1,7 @@
 package client
 
 import (
+	"github.com/holipay/gametunnel/internal/netkey"
 	"encoding/binary"
 	"hash/crc32"
 	"net"
@@ -87,7 +88,7 @@ func buildEncryptedDataPacket(srcIP, dstIP net.IP, pkt []byte, cipher *crypto.Ci
 // srcIP/dstIP use [4]byte to avoid net.IP heap escape in the caller; they
 // are converted to net.IP here where the result stays on the worker stack.
 func (t *Tunnel) routePacket(pkt []byte, srcIP, dstIP [4]byte) {
-	dstKey := ipKey(dstIP[:])
+	dstKey := netkey.IPKey(dstIP[:])
 
 	// Single read lock snapshot for all fields needed in this call.
 	t.mu.RLock()

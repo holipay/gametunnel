@@ -1,6 +1,7 @@
 package server
 
 import (
+	"github.com/holipay/gametunnel/internal/netkey"
 	"context"
 	"crypto/hmac"
 	"log"
@@ -50,7 +51,7 @@ func (s *Server) cleanupStaleClients() {
 // disconnected (room removed from addrMap but addrToRoom was not updated).
 func (s *Server) cleanupStaleAddrToRoom() {
 	type roomEntry struct {
-		key  rateKey
+		key  netkey.RateKey
 		room *Room
 	}
 
@@ -63,12 +64,12 @@ func (s *Server) cleanupStaleAddrToRoom() {
 	}
 	s.roomMu.RUnlock()
 
-	byRoom := make(map[*Room][]rateKey)
+	byRoom := make(map[*Room][]netkey.RateKey)
 	for _, e := range entries {
 		byRoom[e.room] = append(byRoom[e.room], e.key)
 	}
 
-	var stale []rateKey
+	var stale []netkey.RateKey
 	for room, keys := range byRoom {
 		room.mu.RLock()
 		for _, k := range keys {
@@ -163,7 +164,7 @@ func (s *Server) handleRebind(payload []byte, from *net.UDPAddr) {
 		return
 	}
 
-	vipKey := ipKey(req.VirtualIP)
+	vipKey := netkey.IPKey(req.VirtualIP)
 
 	// Search all rooms for the client with this virtual IP
 	var foundRoom *Room
@@ -223,7 +224,7 @@ func (s *Server) handleRebind(payload []byte, from *net.UDPAddr) {
 	}
 
 	// Migration valid — update the client's address
-	newKey := addrToRateKey(from)
+	newKey := netkey.AddrToRateKey(from)
 
 	// Snapshot username before releasing lock to avoid data race
 	username := foundClient.Username
@@ -238,7 +239,7 @@ func (s *Server) handleRebind(payload []byte, from *net.UDPAddr) {
 	// Remove old addrMap entry if client had a prior address (may be nil
 	// for restored/persisted clients that never completed registration).
 	if clientPublicAddr != nil {
-		delete(foundRoom.addrMap, addrToRateKey(clientPublicAddr))
+		delete(foundRoom.addrMap, netkey.AddrToRateKey(clientPublicAddr))
 	}
 	// Update client address
 	foundClient.PublicAddr = from
@@ -251,7 +252,7 @@ func (s *Server) handleRebind(payload []byte, from *net.UDPAddr) {
 	if s.multiRoom {
 		s.roomMu.Lock()
 		if clientPublicAddr != nil {
-			delete(s.addrToRoom, addrToRateKey(clientPublicAddr))
+			delete(s.addrToRoom, netkey.AddrToRateKey(clientPublicAddr))
 		}
 		s.addrToRoom[newKey] = foundRoom
 		s.roomMu.Unlock()

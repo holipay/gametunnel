@@ -1,6 +1,7 @@
 package server
 
 import (
+	"github.com/holipay/gametunnel/internal/netkey"
 	"net"
 	"testing"
 
@@ -22,10 +23,10 @@ func BenchmarkHandleRelay(b *testing.B) {
 	vipB := net.IPv4(10, 10, 0, 3).To4()
 
 	r.mu.Lock()
-	r.clients[ipKey(vipA)] = &Client{VirtualIP: vipA, PublicAddr: addrA, Username: "A"}
-	r.clients[ipKey(vipB)] = &Client{VirtualIP: vipB, PublicAddr: addrB, Username: "B"}
-	r.addrMap[addrToRateKey(addrA)] = r.clients[ipKey(vipA)]
-	r.addrMap[addrToRateKey(addrB)] = r.clients[ipKey(vipB)]
+	r.clients[netkey.IPKey(vipA)] = &Client{VirtualIP: vipA, PublicAddr: addrA, Username: "A"}
+	r.clients[netkey.IPKey(vipB)] = &Client{VirtualIP: vipB, PublicAddr: addrB, Username: "B"}
+	r.addrMap[netkey.AddrToRateKey(addrA)] = r.clients[netkey.IPKey(vipA)]
+	r.addrMap[netkey.AddrToRateKey(addrB)] = r.clients[netkey.IPKey(vipB)]
 	r.mu.Unlock()
 
 	// Build relay payload: srcIP(4) + dstIP(4) + data
@@ -51,7 +52,7 @@ func BenchmarkAddrToRateKey(b *testing.B) {
 	addr := &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 12345}
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		addrToRateKey(addr)
+		netkey.AddrToRateKey(addr)
 	}
 }
 

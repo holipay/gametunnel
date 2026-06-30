@@ -1,6 +1,7 @@
 package server
 
 import (
+	"github.com/holipay/gametunnel/internal/netkey"
 	"context"
 	"net"
 	"testing"
@@ -128,7 +129,7 @@ func TestRateLimitedQueue_ControlBypassesBandwidthLimit(t *testing.T) {
 func TestRoomSendQueue_PriorityInheritance(t *testing.T) {
 	r := &Room{
 		clients:     make(map[[16]byte]*Client),
-		addrMap:     make(map[rateKey]*Client),
+		addrMap:     make(map[netkey.RateKey]*Client),
 		ipConnCount: make(map[connIPKey]int),
 		done:        make(chan struct{}),
 	}

@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/holipay/gametunnel/internal/netkey"
 	"github.com/holipay/gametunnel/internal/protocol"
 )
 
@@ -15,7 +16,7 @@ func newTestRoom(subnetStr string, serverIP net.IP) *Room {
 	sq := newRateLimitedQueue(conn, nil, nil)
 	r := &Room{
 		clients:     make(map[[16]byte]*Client),
-		addrMap:     make(map[rateKey]*Client),
+		addrMap:     make(map[netkey.RateKey]*Client),
 		subnet:      subnet,
 		serverIP:    serverIP,
 		sendQueue:   sq,
@@ -43,7 +44,7 @@ func TestNextAvailableIP(t *testing.T) {
 	// Allocate .2, next should be .3
 	ip2 := net.IPv4(10, 10, 0, 2)
 	r.markIPUsed(ip2)
-	r.clients[ipKey(ip2)] = &Client{VirtualIP: ip2}
+	r.clients[netkey.IPKey(ip2)] = &Client{VirtualIP: ip2}
 	ip = r.nextAvailableIP()
 	if !ip.Equal(net.IPv4(10, 10, 0, 3)) {
 		t.Errorf("second IP: got %v, want 10.10.0.3", ip)
@@ -57,7 +58,7 @@ func TestNextAvailableIPSkipsServer(t *testing.T) {
 	for i := 2; i <= 254; i++ {
 		ip := net.IPv4(10, 10, 0, byte(i))
 		r.markIPUsed(ip)
-		r.clients[ipKey(ip)] = &Client{VirtualIP: ip}
+		r.clients[netkey.IPKey(ip)] = &Client{VirtualIP: ip}
 	}
 
 	ip := r.nextAvailableIP()
@@ -73,7 +74,7 @@ func TestNextAvailableIPExhausted(t *testing.T) {
 	for i := 2; i <= 254; i++ {
 		ip := net.IPv4(10, 10, 0, byte(i))
 		r.markIPUsed(ip)
-		r.clients[ipKey(ip)] = &Client{VirtualIP: ip}
+		r.clients[netkey.IPKey(ip)] = &Client{VirtualIP: ip}
 	}
 
 	ip := r.nextAvailableIP()
@@ -90,8 +91,8 @@ func TestNextAvailableIPSkipsGaps(t *testing.T) {
 	ip4 := net.IPv4(10, 10, 0, 4)
 	r.markIPUsed(ip2)
 	r.markIPUsed(ip4)
-	r.clients[ipKey(ip2)] = &Client{VirtualIP: ip2}
-	r.clients[ipKey(ip4)] = &Client{VirtualIP: ip4}
+	r.clients[netkey.IPKey(ip2)] = &Client{VirtualIP: ip2}
+	r.clients[netkey.IPKey(ip4)] = &Client{VirtualIP: ip4}
 
 	ip := r.nextAvailableIP()
 	if !ip.Equal(net.IPv4(10, 10, 0, 3)) {
@@ -101,7 +102,7 @@ func TestNextAvailableIPSkipsGaps(t *testing.T) {
 
 func TestAddrToRateKey(t *testing.T) {
 	addr := &net.UDPAddr{IP: net.IPv4(192, 168, 1, 100), Port: 12345}
-	k := addrToRateKey(addr)
+	k := netkey.AddrToRateKey(addr)
 	// IPv4 is mapped to v4-in-v6 format in 16-byte key
 	expected := [16]byte{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff, 192, 168, 1, 100}
 	if k.IP != expected {
@@ -138,7 +139,7 @@ func TestRateLimit(t *testing.T) {
 func TestIPKey(t *testing.T) {
 	// IPv4 should map to v4-in-v6
 	ip4 := net.IPv4(10, 10, 0, 1)
-	k4 := ipKey(ip4)
+	k4 := netkey.IPKey(ip4)
 	expected4 := [16]byte{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff, 10, 10, 0, 1}
 	if k4 != expected4 {
 		t.Errorf("IPv4 key: got %v, want %v", k4, expected4)
@@ -146,7 +147,7 @@ func TestIPKey(t *testing.T) {
 
 	// Same IP as 16-byte should produce same key
 	ip4as16 := ip4.To16()
-	k4as16 := ipKey(ip4as16)
+	k4as16 := netkey.IPKey(ip4as16)
 	if k4as16 != k4 {
 		t.Errorf("IPv4-as-16 key mismatch: %v != %v", k4as16, k4)
 	}
@@ -163,7 +164,7 @@ func TestClientCount(t *testing.T) {
 
 	ip := net.IPv4(10, 10, 0, 2)
 	r.mu.Lock()
-	r.clients[ipKey(ip)] = &Client{VirtualIP: ip, Username: "player1"}
+	r.clients[netkey.IPKey(ip)] = &Client{VirtualIP: ip, Username: "player1"}
 	r.mu.Unlock()
 
 	if r.ClientCount() != 1 {
@@ -188,8 +189,8 @@ func TestCleanupStale(t *testing.T) {
 	c.SetLastSeen(oldTime)
 
 	r.mu.Lock()
-	r.clients[ipKey(c.VirtualIP)] = c
-	r.addrMap[addrToRateKey(addr)] = c
+	r.clients[netkey.IPKey(c.VirtualIP)] = c
+	r.addrMap[netkey.AddrToRateKey(addr)] = c
 	r.markIPUsed(c.VirtualIP)
 	r.mu.Unlock()
 
@@ -200,7 +201,7 @@ func TestCleanupStale(t *testing.T) {
 	}
 
 	r.mu.RLock()
-	_, ok := r.clients[ipKey(c.VirtualIP)]
+	_, ok := r.clients[netkey.IPKey(c.VirtualIP)]
 	r.mu.RUnlock()
 
 	if ok {
@@ -223,8 +224,8 @@ func TestCleanupStale_NoStaleClients(t *testing.T) {
 	c.SetLastSeen(recentTime)
 
 	r.mu.Lock()
-	r.clients[ipKey(c.VirtualIP)] = c
-	r.addrMap[addrToRateKey(addr)] = c
+	r.clients[netkey.IPKey(c.VirtualIP)] = c
+	r.addrMap[netkey.AddrToRateKey(addr)] = c
 	r.markIPUsed(c.VirtualIP)
 	r.mu.Unlock()
 
@@ -235,7 +236,7 @@ func TestCleanupStale_NoStaleClients(t *testing.T) {
 	}
 
 	r.mu.RLock()
-	_, ok := r.clients[ipKey(c.VirtualIP)]
+	_, ok := r.clients[netkey.IPKey(c.VirtualIP)]
 	r.mu.RUnlock()
 
 	if !ok {
@@ -259,14 +260,14 @@ func TestRoomHandleKeepAlive(t *testing.T) {
 	c.SetLastSeen(oldTime)
 
 	r.mu.Lock()
-	r.clients[ipKey(c.VirtualIP)] = c
-	r.addrMap[addrToRateKey(addr)] = c
+	r.clients[netkey.IPKey(c.VirtualIP)] = c
+	r.addrMap[netkey.AddrToRateKey(addr)] = c
 	r.mu.Unlock()
 
 	r.handleKeepAlive(addr)
 
 	r.mu.RLock()
-	updated := r.addrMap[addrToRateKey(addr)]
+	updated := r.addrMap[netkey.AddrToRateKey(addr)]
 	r.mu.RUnlock()
 
 	if updated.GetLastSeen().Equal(oldTime) {
@@ -294,16 +295,16 @@ func TestRoomHandleDisconnect(t *testing.T) {
 	c.SetLastSeen(time.Now())
 
 	r.mu.Lock()
-	r.clients[ipKey(vip)] = c
-	r.addrMap[addrToRateKey(addr)] = c
+	r.clients[netkey.IPKey(vip)] = c
+	r.addrMap[netkey.AddrToRateKey(addr)] = c
 	r.markIPUsed(vip)
 	r.mu.Unlock()
 
 	r.handleDisconnect(addr)
 
 	r.mu.RLock()
-	_, okClient := r.clients[ipKey(vip)]
-	_, okAddr := r.addrMap[addrToRateKey(addr)]
+	_, okClient := r.clients[netkey.IPKey(vip)]
+	_, okAddr := r.addrMap[netkey.AddrToRateKey(addr)]
 	r.mu.RUnlock()
 
 	if okClient {
@@ -332,7 +333,7 @@ func TestBuildRoomStatus(t *testing.T) {
 	c.SetLastSeen(time.Now())
 
 	r.mu.Lock()
-	r.clients[ipKey(c.VirtualIP)] = c
+	r.clients[netkey.IPKey(c.VirtualIP)] = c
 	r.mu.Unlock()
 
 	status := r.BuildRoomStatus()
@@ -521,7 +522,7 @@ func TestSnapshotState(t *testing.T) {
 	c.SetLastSeen(time.Now())
 
 	r.mu.Lock()
-	r.clients[ipKey(c.VirtualIP)] = c
+	r.clients[netkey.IPKey(c.VirtualIP)] = c
 	r.markIPUsed(c.VirtualIP)
 	r.mu.Unlock()
 
@@ -559,7 +560,7 @@ func TestSnapshotState_SkipsAuthChallenge(t *testing.T) {
 	c.SetLastSeen(time.Now())
 
 	r.mu.Lock()
-	r.clients[ipKey(c.VirtualIP)] = c
+	r.clients[netkey.IPKey(c.VirtualIP)] = c
 	r.mu.Unlock()
 
 	state := r.SnapshotState()
@@ -760,14 +761,14 @@ func TestHandlePacket_KeepAlive(t *testing.T) {
 	c.SetLastSeen(time.Now().Add(-1 * time.Minute))
 
 	r.mu.Lock()
-	r.clients[ipKey(c.VirtualIP)] = c
-	r.addrMap[addrToRateKey(addr)] = c
+	r.clients[netkey.IPKey(c.VirtualIP)] = c
+	r.addrMap[netkey.AddrToRateKey(addr)] = c
 	r.mu.Unlock()
 
 	r.HandlePacket(protocol.TypeKeepAlive, []byte{}, addr)
 
 	r.mu.RLock()
-	updated := r.addrMap[addrToRateKey(addr)]
+	updated := r.addrMap[netkey.AddrToRateKey(addr)]
 	r.mu.RUnlock()
 
 	if updated.GetLastSeen().Before(time.Now().Add(-10 * time.Second)) {
@@ -791,8 +792,8 @@ func TestHandlePacket_PeerRequest(t *testing.T) {
 	c.SetLastSeen(time.Now())
 
 	r.mu.Lock()
-	r.clients[ipKey(c.VirtualIP)] = c
-	r.addrMap[addrToRateKey(addr)] = c
+	r.clients[netkey.IPKey(c.VirtualIP)] = c
+	r.addrMap[netkey.AddrToRateKey(addr)] = c
 	r.mu.Unlock()
 
 	// Should not panic
@@ -815,15 +816,15 @@ func TestHandlePacket_Disconnect(t *testing.T) {
 	c.SetLastSeen(time.Now())
 
 	r.mu.Lock()
-	r.clients[ipKey(c.VirtualIP)] = c
-	r.addrMap[addrToRateKey(addr)] = c
+	r.clients[netkey.IPKey(c.VirtualIP)] = c
+	r.addrMap[netkey.AddrToRateKey(addr)] = c
 	r.markIPUsed(c.VirtualIP)
 	r.mu.Unlock()
 
 	r.HandlePacket(protocol.TypeDisconnect, []byte{}, addr)
 
 	r.mu.RLock()
-	_, ok := r.clients[ipKey(c.VirtualIP)]
+	_, ok := r.clients[netkey.IPKey(c.VirtualIP)]
 	r.mu.RUnlock()
 
 	if ok {
@@ -858,10 +859,10 @@ func TestHandleRelay_Unicast(t *testing.T) {
 	receiver.SetLastSeen(time.Now())
 
 	r.mu.Lock()
-	r.clients[ipKey(sender.VirtualIP)] = sender
-	r.clients[ipKey(receiver.VirtualIP)] = receiver
-	r.addrMap[addrToRateKey(senderAddr)] = sender
-	r.addrMap[addrToRateKey(receiverAddr)] = receiver
+	r.clients[netkey.IPKey(sender.VirtualIP)] = sender
+	r.clients[netkey.IPKey(receiver.VirtualIP)] = receiver
+	r.addrMap[netkey.AddrToRateKey(senderAddr)] = sender
+	r.addrMap[netkey.AddrToRateKey(receiverAddr)] = receiver
 	r.mu.Unlock()
 
 	// Build relay payload: srcIP(4) + dstIP(4) + data
@@ -910,12 +911,12 @@ func TestHandleRelay_Broadcast(t *testing.T) {
 	receiver2.SetLastSeen(time.Now())
 
 	r.mu.Lock()
-	r.clients[ipKey(sender.VirtualIP)] = sender
-	r.clients[ipKey(receiver1.VirtualIP)] = receiver1
-	r.clients[ipKey(receiver2.VirtualIP)] = receiver2
-	r.addrMap[addrToRateKey(senderAddr)] = sender
-	r.addrMap[addrToRateKey(receiver1Addr)] = receiver1
-	r.addrMap[addrToRateKey(receiver2Addr)] = receiver2
+	r.clients[netkey.IPKey(sender.VirtualIP)] = sender
+	r.clients[netkey.IPKey(receiver1.VirtualIP)] = receiver1
+	r.clients[netkey.IPKey(receiver2.VirtualIP)] = receiver2
+	r.addrMap[netkey.AddrToRateKey(senderAddr)] = sender
+	r.addrMap[netkey.AddrToRateKey(receiver1Addr)] = receiver1
+	r.addrMap[netkey.AddrToRateKey(receiver2Addr)] = receiver2
 	r.mu.Unlock()
 
 	// Build broadcast payload (dstIP = 255.255.255.255)
@@ -985,10 +986,10 @@ func TestHandleRelay_TokenValidation_OldFormat(t *testing.T) {
 	receiver.SetLastSeen(time.Now())
 
 	r.mu.Lock()
-	r.clients[ipKey(sender.VirtualIP)] = sender
-	r.clients[ipKey(receiver.VirtualIP)] = receiver
-	r.addrMap[addrToRateKey(senderAddr)] = sender
-	r.addrMap[addrToRateKey(receiverAddr)] = receiver
+	r.clients[netkey.IPKey(sender.VirtualIP)] = sender
+	r.clients[netkey.IPKey(receiver.VirtualIP)] = receiver
+	r.addrMap[netkey.AddrToRateKey(senderAddr)] = sender
+	r.addrMap[netkey.AddrToRateKey(receiverAddr)] = receiver
 	r.mu.Unlock()
 
 	// Old format (no formatVer): srcIP(4) + dstIP(4) + flags(1) + token(16) + data
@@ -1034,10 +1035,10 @@ func TestHandleRelay_TokenValidation_NewFormat(t *testing.T) {
 	receiver.SetLastSeen(time.Now())
 
 	r.mu.Lock()
-	r.clients[ipKey(sender.VirtualIP)] = sender
-	r.clients[ipKey(receiver.VirtualIP)] = receiver
-	r.addrMap[addrToRateKey(senderAddr)] = sender
-	r.addrMap[addrToRateKey(receiverAddr)] = receiver
+	r.clients[netkey.IPKey(sender.VirtualIP)] = sender
+	r.clients[netkey.IPKey(receiver.VirtualIP)] = receiver
+	r.addrMap[netkey.AddrToRateKey(senderAddr)] = sender
+	r.addrMap[netkey.AddrToRateKey(receiverAddr)] = receiver
 	r.mu.Unlock()
 
 	// New format (v1.8+): srcIP(4) + dstIP(4) + formatVer(1) + flags(1) + token(16) + data
@@ -1084,10 +1085,10 @@ func TestHandleRelay_TokenValidation_WrongToken(t *testing.T) {
 	receiver.SetLastSeen(time.Now())
 
 	r.mu.Lock()
-	r.clients[ipKey(sender.VirtualIP)] = sender
-	r.clients[ipKey(receiver.VirtualIP)] = receiver
-	r.addrMap[addrToRateKey(senderAddr)] = sender
-	r.addrMap[addrToRateKey(receiverAddr)] = receiver
+	r.clients[netkey.IPKey(sender.VirtualIP)] = sender
+	r.clients[netkey.IPKey(receiver.VirtualIP)] = receiver
+	r.addrMap[netkey.AddrToRateKey(senderAddr)] = sender
+	r.addrMap[netkey.AddrToRateKey(receiverAddr)] = receiver
 	r.mu.Unlock()
 
 	// New format with WRONG token
@@ -1134,10 +1135,10 @@ func TestHandleHolePunch_Valid(t *testing.T) {
 	dst.SetLastSeen(time.Now())
 
 	r.mu.Lock()
-	r.clients[ipKey(src.VirtualIP)] = src
-	r.clients[ipKey(dst.VirtualIP)] = dst
-	r.addrMap[addrToRateKey(srcAddr)] = src
-	r.addrMap[addrToRateKey(dstAddr)] = dst
+	r.clients[netkey.IPKey(src.VirtualIP)] = src
+	r.clients[netkey.IPKey(dst.VirtualIP)] = dst
+	r.addrMap[netkey.AddrToRateKey(srcAddr)] = src
+	r.addrMap[netkey.AddrToRateKey(dstAddr)] = dst
 	r.mu.Unlock()
 
 	// Build hole punch payload: dstIP(4)
@@ -1185,8 +1186,8 @@ func TestHandlePong_Valid(t *testing.T) {
 	c.SetLastSeen(time.Now())
 
 	r.mu.Lock()
-	r.clients[ipKey(c.VirtualIP)] = c
-	r.addrMap[addrToRateKey(addr)] = c
+	r.clients[netkey.IPKey(c.VirtualIP)] = c
+	r.addrMap[netkey.AddrToRateKey(addr)] = c
 	r.mu.Unlock()
 
 	// Build pong payload with recent timestamp
@@ -1194,7 +1195,7 @@ func TestHandlePong_Valid(t *testing.T) {
 	r.handlePong(ping.Marshal(), addr)
 
 	r.mu.RLock()
-	updated := r.addrMap[addrToRateKey(addr)]
+	updated := r.addrMap[netkey.AddrToRateKey(addr)]
 	r.mu.RUnlock()
 
 	if updated.RTT <= 0 {
@@ -1215,8 +1216,8 @@ func TestHandlePong_InvalidTimestamp(t *testing.T) {
 	c.SetLastSeen(time.Now())
 
 	r.mu.Lock()
-	r.clients[ipKey(c.VirtualIP)] = c
-	r.addrMap[addrToRateKey(addr)] = c
+	r.clients[netkey.IPKey(c.VirtualIP)] = c
+	r.addrMap[netkey.AddrToRateKey(addr)] = c
 	r.mu.Unlock()
 
 	// Future timestamp (invalid)
@@ -1224,7 +1225,7 @@ func TestHandlePong_InvalidTimestamp(t *testing.T) {
 	r.handlePong(ping.Marshal(), addr)
 
 	r.mu.RLock()
-	updated := r.addrMap[addrToRateKey(addr)]
+	updated := r.addrMap[netkey.AddrToRateKey(addr)]
 	r.mu.RUnlock()
 
 	if updated.RTT != 0 {
