@@ -18,7 +18,7 @@ import (
 type session struct {
 	virtualIP    net.IP
 	serverIP     net.IP
-	serverIPKey  atomic.Value    // stores [16]byte
+	serverIPKey  atomic.Pointer[[16]byte]
 	subnetMask   net.IPMask
 	cachedSubnet atomic.Pointer[net.IPNet]
 	sessionToken [16]byte
