@@ -10,10 +10,14 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"net"
+	"net/http"
+	_ "net/http/pprof"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 
 	"github.com/holipay/gametunnel/internal/auth"
@@ -42,6 +46,9 @@ func main() {
 	bandwidthLimit := flag.Int("bandwidth", 0, "per-client outbound bandwidth limit in bytes/sec (0 = default 10Mbps)")
 	tcpAddr := flag.String("tcp-addr", "", "TCP listen address for fallback (e.g. :4700), empty = disabled")
 	langFlag := flag.String("lang", "zh", "language (zh or en)")
+	verboseFlag := flag.Bool("verbose", false, "enable verbose relay logging")
+	logFileFlag := flag.String("log-file", "", "log file path (empty = stderr only)")
+	pprofAddrFlag := flag.String("pprof-addr", "", "pprof HTTP address (e.g. localhost:6060), empty = disabled")
 	versionFlag := flag.Bool("version", false, "show version")
 	flag.Parse()
 
@@ -53,6 +60,15 @@ func main() {
 	// Set language
 	i18n.Set(i18n.ParseLang(*langFlag))
 	t := i18n.T()
+
+	// ====== Log file setup ======
+	if *logFileFlag != "" {
+		f, err := setupServerLog(*logFileFlag)
+		if err != nil {
+			log.Fatalf("open log file: %v", err)
+		}
+		defer f.Close()
+	}
 
 	// ====== Single-instance check ======
 	lock, err := singleinstance.Acquire("GameTunnel-Server")
@@ -87,9 +103,25 @@ func main() {
 		MultiRoom:      *multiRoom,
 		BandwidthLimit: *bandwidthLimit,
 		TCPAddr:        *tcpAddr,
+		Verbose:        *verboseFlag,
 	})
 	if err != nil {
 		log.Fatalf(t.ServerStartFail, err)
+	}
+
+	// ====== pprof HTTP server ======
+	if *pprofAddrFlag != "" {
+		pprofLn, err := net.Listen("tcp", *pprofAddrFlag)
+		if err != nil {
+			log.Fatalf("pprof listen: %v", err)
+		}
+		s.SetPprofListener(pprofLn)
+		go func() {
+			log.Printf("pprof listening on %s", pprofLn.Addr())
+			if err := http.Serve(pprofLn, nil); err != nil {
+				log.Printf("pprof server: %v", err)
+			}
+		}()
 	}
 
 	// Graceful shutdown
@@ -128,4 +160,32 @@ func main() {
 
 	s.Run(ctx)
 	log.Println(t.ServerShutdown)
+}
+
+const maxLogSize = 1 * 1024 * 1024 // 1 MB
+
+// setupServerLog opens a log file and redirects log output to both the file and stderr.
+// Rotation is simple: when the file exceeds maxLogSize, it's renamed to .1 before reuse.
+func setupServerLog(path string) (*os.File, error) {
+	dir := filepath.Dir(path)
+	if dir != "" {
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			return nil, fmt.Errorf("create log dir: %w", err)
+		}
+	}
+
+	backup := path + ".1"
+	if info, err := os.Stat(path); err == nil && info.Size() > maxLogSize {
+		os.Remove(backup)
+		if err := os.Rename(path, backup); err != nil {
+			log.Printf("rotate log: %v", err)
+		}
+	}
+
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
+	if err != nil {
+		return nil, err
+	}
+	log.SetOutput(io.MultiWriter(f, os.Stderr))
+	return f, nil
 }
