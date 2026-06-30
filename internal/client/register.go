@@ -73,13 +73,13 @@ func (t *Tunnel) register(ctx context.Context, conn *net.UDPConn) error {
 			if authRounds > maxAuthRounds {
 				return fmt.Errorf("%s", i18n.T().ErrTooManyAuth)
 			}
-			if err := t.handleAuthChallenge(nil, msg.Payload); err != nil {
+			if err := t.handleAuthChallenge(conn, msg.Payload); err != nil {
 				return err
 			}
 			conn.SetReadDeadline(time.Now().Add(deadline))
 			continue
 		case protocol.TypeECDHExchange:
-			if err := t.handleECDHExchange(nil, msg.Payload); err != nil {
+			if err := t.handleECDHExchange(conn, msg.Payload); err != nil {
 				return err
 			}
 			conn.SetReadDeadline(time.Now().Add(deadline))
