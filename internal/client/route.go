@@ -98,7 +98,6 @@ func (t *Tunnel) routePacket(pkt []byte, srcIP, dstIP [4]byte) {
 	}
 	serverAddr := t.serverAddr.Load()
 	cachedSubnet := t.session.cachedSubnet.Load()
-	encCipher := t.crypto.encCipher
 	p2pCipher := t.crypto.p2pCipher
 	serverVersion := t.session.serverVersion.Load()
 	var token [16]byte
@@ -119,13 +118,13 @@ func (t *Tunnel) routePacket(pkt []byte, srcIP, dstIP [4]byte) {
 
 	// Fast path: check server destination first (most common for relay)
 	if dstKey == serverIPKey {
-		t.sendToServer(pkt, srcNet, dstNet, encCipher, token, serverAddr)
+		t.sendToServer(pkt, srcNet, dstNet, p2pCipher, token, serverAddr)
 		return
 	}
 
 	// Broadcast/multicast: relay to all peers via server
 	if cachedSubnet != nil && netutil.IsRelayTarget(dstNet, cachedSubnet) {
-		t.sendToServer(pkt, srcNet, dstNet, encCipher, token, serverAddr)
+		t.sendToServer(pkt, srcNet, dstNet, p2pCipher, token, serverAddr)
 		return
 	}
 
@@ -140,7 +139,7 @@ func (t *Tunnel) routePacket(pkt []byte, srcIP, dstIP [4]byte) {
 		t.sendUDP(packet, peerAddr)
 	} else {
 		// Fallback: relay through server.
-		t.sendToServer(pkt, srcNet, dstNet, encCipher, token, serverAddr)
+		t.sendToServer(pkt, srcNet, dstNet, p2pCipher, token, serverAddr)
 	}
 }
 

@@ -151,17 +151,12 @@ func (t *Tunnel) handleAssignIP(payload []byte) error {
 	// Initialize end-to-end encryption if password is set
 	var encCipher, decCipher, p2pCipher *crypto.Cipher
 	if t.session.roomPass != "" {
-		// Use ECDH session key if negotiated, otherwise fall back to password-derived key
-		var key []byte
-		t.mu.RLock()
-		if protocol.IsECDHNegotiated(assign.Version) && t.crypto.ecdhSessionKey != nil {
-			key = t.crypto.ecdhSessionKey
-		}
-		t.mu.RUnlock()
-
-		if key == nil {
-			key = auth.DeriveKey(t.session.roomPass, t.session.roomID)
-		}
+		// Always use the password-derived key for client-to-client encryption.
+		// ECDH session keys are unique per client-server pair, so they cannot be
+		// used for relay or P2P paths where both endpoints are different clients.
+		// The server relays encrypted payloads transparently without decrypting,
+		// so the sender and receiver must share the same key.
+		key := auth.DeriveKey(t.session.roomPass, t.session.roomID)
 		if key == nil {
 			return fmt.Errorf("%s", i18n.T().ErrDeriveKeyFailed)
 		}

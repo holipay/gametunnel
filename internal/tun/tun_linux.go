@@ -17,6 +17,7 @@ type Device struct {
 	subnetMask     net.IPMask
 	serverPublicIP net.IP
 	mtu            int
+	offset         int // virtioNetHdrLen when vnetHdr is enabled, else 0
 }
 
 func New(cfg Config) (*Device, error) {
@@ -50,6 +51,10 @@ func New(cfg Config) (*Device, error) {
 		mtu:            cfg.MTU,
 	}
 
+	if tunDev.BatchSize() > 1 {
+		dev.offset = 10 // virtioNetHdr size
+	}
+
 	if err := dev.configure(); err != nil {
 		tunDev.Close()
 		return nil, fmt.Errorf("configure TUN: %w", err)
@@ -65,11 +70,29 @@ func (d *Device) MTU() int { return d.mtu }
 
 // ReadBatch reads up to batchSize packets from the TUN device in a single syscall.
 func (d *Device) ReadBatch(bufs [][]byte, sizes []int) (int, error) {
-	return d.tunDev.Read(bufs, sizes, 0)
+	n, err := d.tunDev.Read(bufs, sizes, d.offset)
+	if err != nil {
+		return 0, err
+	}
+	if d.offset > 0 {
+		for i := 0; i < n; i++ {
+			copy(bufs[i], bufs[i][d.offset:d.offset+sizes[i]])
+		}
+	}
+	return n, nil
 }
 
 // WriteBatch writes multiple packets to the TUN device in a single syscall.
 func (d *Device) WriteBatch(bufs [][]byte) (int, error) {
+	if d.offset > 0 {
+		padded := make([][]byte, len(bufs))
+		for i, b := range bufs {
+			p := make([]byte, d.offset+len(b))
+			copy(p[d.offset:], b)
+			padded[i] = p
+		}
+		return d.tunDev.Write(padded, d.offset)
+	}
 	return d.tunDev.Write(bufs, 0)
 }
 
@@ -77,17 +100,33 @@ func (d *Device) WriteBatch(bufs [][]byte) (int, error) {
 func (d *Device) Read(buf []byte) (int, error) {
 	bufs := [1][]byte{buf}
 	sizes := [1]int{}
-	n, err := d.tunDev.Read(bufs[:], sizes[:], 0)
+	n, err := d.tunDev.Read(bufs[:], sizes[:], d.offset)
 	if err != nil {
 		return 0, err
 	}
 	if n == 0 {
 		return 0, nil
 	}
-	return sizes[0], nil
+	sz := sizes[0]
+	if d.offset > 0 {
+		// handleVirtioRead writes data to buf[offset:]; shift to buf[0:]
+		// so the caller sees a standard IP packet starting at offset 0.
+		copy(buf, buf[d.offset:d.offset+sz])
+	}
+	return sz, nil
 }
 
 func (d *Device) Write(data []byte) (int, error) {
+	if d.offset > 0 {
+		buf := make([]byte, d.offset+len(data))
+		copy(buf[d.offset:], data)
+		bufs := [1][]byte{buf}
+		_, err := d.tunDev.Write(bufs[:], d.offset)
+		if err != nil {
+			return 0, err
+		}
+		return len(data), nil
+	}
 	bufs := [1][]byte{data}
 	n, err := d.tunDev.Write(bufs[:], 0)
 	if err != nil {
