@@ -78,13 +78,16 @@ func (r *Room) checkCapacityAndDuplicate(username, roomID string) checkResult {
 func (r *Room) handleRegister(payload []byte, from *net.UDPAddr) {
 	reg, err := protocol.UnmarshalRegister(payload)
 	if err != nil {
+		log.Printf("[register] failed to parse from %s: %v", from, err)
 		return
 	}
 
 	t := i18n.T()
+	log.Printf("[register] request from %s: user=%s room=%s ver=%d", from, reg.Username, reg.RoomID, reg.Version)
 
 	// Version compatibility check
 	if !protocol.IsCompatible(reg.Version, protocol.AppVersion) {
+		log.Printf("[register] version mismatch from %s: client=%d server=%d", from, reg.Version, protocol.AppVersion)
 		r.sendKickCode(from, protocol.KickCodeVersionMismatch, fmt.Sprintf(t.KickVersionMismatch,
 			reg.Version,
 			protocol.AppVersion))
@@ -92,16 +95,19 @@ func (r *Room) handleRegister(payload []byte, from *net.UDPAddr) {
 	}
 
 	if utf8.RuneCountInString(reg.Username) == 0 || utf8.RuneCountInString(reg.Username) > maxUsernameLen {
+		log.Printf("[register] invalid username %q from %s", reg.Username, from)
 		r.sendKick(from, t.KickInvalidName)
 		return
 	}
 	if len(reg.RoomID) == 0 || len(reg.RoomID) > maxRoomIDLen {
+		log.Printf("[register] invalid roomID %q from %s", reg.RoomID, from)
 		r.sendKick(from, t.KickInvalidRoom)
 		return
 	}
 
 	clientIP := addrToConnIPKey(from)
 	if !r.checkRegRate(from) {
+		log.Printf("[register] rate limited: %s (user=%s)", from, reg.Username)
 		r.sendKick(from, t.KickRateLimit)
 		return
 	}
@@ -269,6 +275,7 @@ func (r *Room) doSendAuthChallenge(reg *protocol.RegisterPayload, from *net.UDPA
 func (r *Room) handleECDHConfirm(payload []byte, from *net.UDPAddr) {
 	confirm, err := protocol.UnmarshalECDHConfirm(payload)
 	if err != nil {
+		log.Printf("[ecdh] failed to parse ECDHConfirm from %s: %v", from, err)
 		return
 	}
 
@@ -278,9 +285,11 @@ func (r *Room) handleECDHConfirm(payload []byte, from *net.UDPAddr) {
 	c := r.addrMap[fromKey]
 
 	if c == nil || !c.ecdhPending || c.ecdhPriv == nil {
+		log.Printf("[ecdh] ECDHConfirm from %s: client not found or not in ECDH state (c=%v ecdhPending=%v)", from, c != nil, c != nil && c.ecdhPending)
 		r.mu.Unlock()
 		return
 	}
+	log.Printf("[ecdh] received ECDHConfirm from %s: user=%s", from, c.Username)
 
 	// Verify HMAC over both public keys (prevents MITM)
 	authKey := r.getAuthKey(c.authRoomID)
@@ -361,11 +370,14 @@ func (r *Room) handleECDHConfirm(payload []byte, from *net.UDPAddr) {
 func (r *Room) handleAuthResponse(payload []byte, from *net.UDPAddr) {
 	resp, err := protocol.UnmarshalAuthResponse(payload)
 	if err != nil {
+		log.Printf("[auth] failed to parse AuthResponse from %s: %v", from, err)
 		return
 	}
 	if len(resp.HMAC) != auth.HMACSize {
+		log.Printf("[auth] invalid HMAC length from %s: got %d, want %d", from, len(resp.HMAC), auth.HMACSize)
 		return
 	}
+	log.Printf("[auth] received AuthResponse from %s: user=%s room=%s", from, resp.Username, resp.RoomID)
 
 	t := i18n.T()
 	r.mu.Lock()
@@ -390,12 +402,10 @@ func (r *Room) handleAuthResponse(payload []byte, from *net.UDPAddr) {
 	}
 
 	if c == nil || c.auth != authChallengeSent {
-		// If c == nil, the entry was already cleaned up (e.g. by CleanupStale
-		// which already rolled back ipConnCount). Don't double-decrement.
-		// Only rollback if c exists but has wrong auth state (genuine anomaly).
-		// Use c.PublicAddr (original registration address) for decrement,
-		// matching the increment in handleRegister.
-		if c != nil {
+		if c == nil {
+			log.Printf("[auth] client not found in addrMap for %s (user=%s room=%s), scan=%v", from, resp.Username, resp.RoomID, foundByScan)
+		} else {
+			log.Printf("[auth] auth state mismatch for %s: got %d, want %d (user=%s)", from, c.auth, authChallengeSent, c.Username)
 			r.decrementIPConnCount(addrToConnIPKey(c.PublicAddr))
 		}
 		r.mu.Unlock()
@@ -404,6 +414,7 @@ func (r *Room) handleAuthResponse(payload []byte, from *net.UDPAddr) {
 	}
 
 	if time.Since(c.challengeAt) > 15*time.Second {
+		log.Printf("[auth] challenge expired for %s: age=%v (user=%s)", from, time.Since(c.challengeAt), c.Username)
 		r.cleanupPendingAuth(fromKey, oldKey, foundByScan, c)
 		r.mu.Unlock()
 		r.sendKick(from, t.KickAuthTimeout)
@@ -412,6 +423,7 @@ func (r *Room) handleAuthResponse(payload []byte, from *net.UDPAddr) {
 
 	authKey := r.getAuthKey(c.authRoomID)
 	if authKey == nil {
+		log.Printf("[auth] authKey is nil for roomID=%s (user=%s from=%s)", c.authRoomID, c.Username, from)
 		r.cleanupPendingAuth(fromKey, oldKey, foundByScan, c)
 		r.mu.Unlock()
 		r.sendKick(from, t.KickInternalError)
@@ -422,6 +434,8 @@ func (r *Room) handleAuthResponse(payload []byte, from *net.UDPAddr) {
 	// NOT the auth response source address. NAT rebinding may have changed
 	// the client's observed address between registration and auth response.
 	if !auth.VerifyHMAC(authKey, resp.HMAC, c.challenge, resp.RoomID, resp.Username, c.PublicAddr) {
+		log.Printf("[auth] HMAC verification FAILED for %s: user=%s room=%s regAddr=%s fromAddr=%s",
+			from, resp.Username, resp.RoomID, c.PublicAddr, from)
 		r.cleanupPendingAuth(fromKey, oldKey, foundByScan, c)
 		r.mu.Unlock()
 		log.Printf(t.LogAuthFail, resp.Username, from)
@@ -436,9 +450,7 @@ func (r *Room) handleAuthResponse(payload []byte, from *net.UDPAddr) {
 	// doesn't leave state partially modified.
 	switch r.checkCapacityAndDuplicate(resp.Username, resp.RoomID) {
 	case checkRoomFull:
-		// Decrement for the ORIGINAL registration address (c.PublicAddr),
-		// NOT the current `from`. NAT rebinding may have changed the
-		// client's observed address between registration and auth response.
+		log.Printf("[auth] room full, rejecting %s from %s", resp.Username, from)
 		if c.PublicAddr != nil {
 			r.decrementIPConnCount(addrToConnIPKey(c.PublicAddr))
 		}
@@ -446,6 +458,7 @@ func (r *Room) handleAuthResponse(payload []byte, from *net.UDPAddr) {
 		r.sendKick(from, t.KickRoomFull)
 		return
 	case checkDuplicate:
+		log.Printf("[auth] duplicate name %s from %s", resp.Username, from)
 		if c.PublicAddr != nil {
 			r.decrementIPConnCount(addrToConnIPKey(c.PublicAddr))
 		}
