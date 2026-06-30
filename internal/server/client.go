@@ -3,6 +3,7 @@ package server
 import (
 	"crypto/ecdh"
 	"crypto/rand"
+	"log"
 	"net"
 	"sync/atomic"
 	"time"
@@ -72,7 +73,9 @@ func (c *Client) SetLastSeen(t time.Time) {
 
 // GenerateSessionToken fills the client's SessionToken with 16 random bytes.
 func (c *Client) GenerateSessionToken() {
-	rand.Read(c.SessionToken[:])
+	if _, err := rand.Read(c.SessionToken[:]); err != nil {
+		log.Printf("failed to generate session token: %v", err)
+	}
 }
 
 // HasSessionToken returns true if the client has a non-zero session token.
