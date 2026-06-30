@@ -120,7 +120,7 @@ func (r *Room) handleRelay(payload []byte, from *net.UDPAddr) {
 		// and already bounded by the sender's own rate — per-recipient
 		// limiting just adds latency for no benefit.
 		for _, addr := range targets {
-			r.sendCheckedRaw(encoded, addr)
+			r.sendCheckedRawBypass(encoded, addr)
 		}
 	} else {
 		for _, addr := range targets {
@@ -199,7 +199,7 @@ func (r *Room) sendPeerInfoBroadcast() {
 
 	encoded := r.getEncodedPeerInfo()
 	for _, addr := range targets {
-		r.sendCheckedRaw(encoded, addr)
+		r.sendCheckedRawBypass(encoded, addr)
 	}
 }
 

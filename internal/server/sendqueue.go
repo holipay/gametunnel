@@ -219,6 +219,12 @@ func (rlq *rateLimitedQueue) send(data []byte, addr *net.UDPAddr, priority sendP
 	return false
 }
 
+// sendBypass enqueues a packet bypassing the bandwidth limiter.
+// Used for broadcast relay data that must reach all peers for game discovery.
+func (rlq *rateLimitedQueue) sendBypass(data []byte, addr *net.UDPAddr) bool {
+	return rlq.sq.send(data, addr, priorityLow)
+}
+
 func (rlq *rateLimitedQueue) run(ctx context.Context) {
 	rlq.sq.run(ctx)
 }
