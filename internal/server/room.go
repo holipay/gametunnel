@@ -302,6 +302,15 @@ func (r *Room) sendCheckedRaw(data []byte, to *net.UDPAddr) {
 	}
 }
 
+// sendCheckedRawBypass sends relay data bypassing the bandwidth limiter.
+// Used for broadcast relay packets (game discovery) that must reach all peers.
+func (r *Room) sendCheckedRawBypass(data []byte, to *net.UDPAddr) {
+	if !r.sendQueue.sendBypass(data, to) {
+		r.sendErrors.Add(1)
+		r.logSendError("queue full")
+	}
+}
+
 // logSendError logs send errors with rate limiting.
 // Instead of logging every error (or only powers of 2), it logs
 // a summary every sendErrorLogInterval when errors are occurring.
