@@ -150,9 +150,33 @@ func (t *Tunnel) Connect(ctx context.Context, serverAddr string, mtu int, newTUN
 	// Reset disconnectOnce so Disconnect() can send leave packet on each attempt.
 	t.disconnectOnce.Store(&sync.Once{})
 
-	// Cancel previous Connect's goroutines and wait for them to exit
-	// before starting new ones. This prevents duplicate packet processing
-	// when Connect is called rapidly (e.g. quick reconnect).
+	t.stopPreviousRun()
+
+	conn, err := t.dialServer(sAddr)
+	if err != nil {
+		return err
+	}
+
+	if err := t.registerWithFallback(ctx, serverAddr, conn); err != nil {
+		return err
+	}
+
+	t.probeNAT(conn, sAddr)
+
+	if err := t.ensureTUN(mtu); err != nil {
+		conn.Close()
+		if t.tcpTransport != nil {
+			t.tcpTransport.Close()
+			t.tcpTransport = nil
+		}
+		return err
+	}
+
+	return t.startRelayLoops(ctx, conn, sAddr)
+}
+
+// stopPreviousRun cancels and waits for the previous Connect's goroutines.
+func (t *Tunnel) stopPreviousRun() {
 	if t.runCancel != nil {
 		t.runCancel()
 	}
@@ -165,36 +189,32 @@ func (t *Tunnel) Connect(ctx context.Context, serverAddr string, mtu int, newTUN
 			log.Printf("[tunnel] old goroutines did not exit within 5s, proceeding anyway")
 		}
 	}
+}
 
-	// Close old conn to release the file descriptor and unblock
-	// the old receiveFromServer goroutine before creating a new one.
+// dialServer creates a dual-stack UDP connection and normalizes the server address.
+func (t *Tunnel) dialServer(sAddr *net.UDPAddr) (*net.UDPConn, error) {
 	if t.conn != nil {
 		t.conn.Close()
 	}
-	// Bind to [::] (dual-stack IPv6 socket) so the client can send UDP
-	// packets to both IPv4 and IPv6 peer addresses. An IPv4-only socket
-	// (0.0.0.0) cannot send to IPv6 destinations, which breaks hole
-	// punching when the server reports IPv6 peer addresses.
+
 	bindAddr := &net.UDPAddr{IP: net.IPv6zero, Port: 0}
 	conn, err := net.ListenUDP("udp", bindAddr)
 	if err != nil {
-		return fmt.Errorf("%s", i18n.Format(i18n.T().ErrBindUDP, err))
+		return nil, fmt.Errorf("%s", i18n.Format(i18n.T().ErrBindUDP, err))
 	}
 
-	// Normalize serverAddr.IP to 16 bytes so that IP comparisons with
-	// addresses received on the IPv6 socket (always 16 bytes) work
-	// correctly. IPv4 addresses become IPv4-mapped IPv6 (::ffff:x.x.x.x).
 	if ip16 := sAddr.IP.To16(); ip16 != nil {
 		sAddr.IP = ip16
 	}
 	t.serverAddr.Store(sAddr)
-	// Tune UDP socket buffers for high-throughput gaming.
-	// Ignoring errors — non-Linux platforms may not support this.
 	netutil.SetSocketBuffers(conn)
 	t.conn = conn
+	return conn, nil
+}
 
+// registerWithFallback tries UDP registration, falls back to TCP on failure.
+func (t *Tunnel) registerWithFallback(ctx context.Context, serverAddr string, conn *net.UDPConn) error {
 	if err := t.register(ctx); err != nil {
-		// UDP registration failed — try TCP fallback
 		log.Printf("[tunnel] UDP registration failed: %v, trying TCP fallback...", err)
 		tcp, tcpErr := netutil.DialTCP(serverAddr, 5*time.Second)
 		if tcpErr != nil {
@@ -202,7 +222,6 @@ func (t *Tunnel) Connect(ctx context.Context, serverAddr string, mtu int, newTUN
 			return fmt.Errorf("%s (TCP fallback also failed: %v)", i18n.Format(i18n.T().ErrRegisterFailed, err), tcpErr)
 		}
 		t.tcpTransport = tcp
-		// TCP registration uses the same protocol over TCP
 		if regErr := t.registerTCP(ctx); regErr != nil {
 			tcp.Close()
 			conn.Close()
@@ -210,39 +229,35 @@ func (t *Tunnel) Connect(ctx context.Context, serverAddr string, mtu int, newTUN
 		}
 		log.Printf("[tunnel] connected via TCP fallback")
 	}
+	return nil
+}
 
-	// ── NAT type probe (synchronous, before receiveFromServer) ─────
-	// Must complete before starting receiveFromServer to avoid both
-	// reading from the same conn simultaneously (race condition).
-	// Skip if already probed in a previous session.
+// probeNAT performs NAT type detection synchronously before receiveFromServer starts.
+func (t *Tunnel) probeNAT(conn *net.UDPConn, sAddr *net.UDPAddr) {
 	t.mu.RLock()
 	alreadyProbed := t.nat.probeResult != nil
 	t.mu.RUnlock()
-	if t.tcpTransport == nil && !alreadyProbed {
-		result, err := nat.ProbeNATType(conn, sAddr)
-		if err != nil {
-			log.Printf("[nat-probe] probe failed: %v", err)
-		} else {
-			t.mu.Lock()
-			t.nat.probeResult = result
-			t.nat.portPredictor = nat.PortPredictorFromNATProbe([]*nat.NATProbeResult{result})
-			t.mu.Unlock()
-			log.Printf("[nat-probe] NAT type: %d, external: %s:%d, RTT: %v",
-				result.Type, result.ExternalIP, result.ExternalPort, result.RTT)
-		}
+
+	if t.tcpTransport != nil || alreadyProbed {
+		return
 	}
 
-	// ── TUN device: reuse or create ─────────────────────────────────
-	if err := t.ensureTUN(mtu); err != nil {
-		conn.Close()
-		if t.tcpTransport != nil {
-			t.tcpTransport.Close()
-			t.tcpTransport = nil
-		}
-		return err
+	result, err := nat.ProbeNATType(conn, sAddr)
+	if err != nil {
+		log.Printf("[nat-probe] probe failed: %v", err)
+		return
 	}
 
-	// ── Start relay goroutines ──────────────────────────────────────
+	t.mu.Lock()
+	t.nat.probeResult = result
+	t.nat.portPredictor = nat.PortPredictorFromNATProbe([]*nat.NATProbeResult{result})
+	t.mu.Unlock()
+	log.Printf("[nat-probe] NAT type: %d, external: %s:%d, RTT: %v",
+		result.Type, result.ExternalIP, result.ExternalPort, result.RTT)
+}
+
+// startRelayLoops starts all relay goroutines and blocks until shutdown.
+func (t *Tunnel) startRelayLoops(ctx context.Context, conn *net.UDPConn, sAddr *net.UDPAddr) error {
 	runCtx, runCancel := context.WithCancel(ctx)
 	t.runCancel = runCancel
 	t.runDone = make(chan struct{})
@@ -279,9 +294,6 @@ func (t *Tunnel) Connect(ctx context.Context, serverAddr string, mtu int, newTUN
 
 	<-runCtx.Done()
 
-	// Wait for all goroutines to finish before returning, so the next
-	// Connect call doesn't start new goroutines while old ones are
-	// still running.
 	go func() {
 		t.runWg.Wait()
 		close(t.runDone)
