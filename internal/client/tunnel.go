@@ -208,7 +208,7 @@ func (t *Tunnel) dialServer(sAddr *net.UDPAddr) (*net.UDPConn, error) {
 
 // registerWithFallback tries UDP registration, falls back to TCP on failure.
 func (t *Tunnel) registerWithFallback(ctx context.Context, serverAddr string, conn *net.UDPConn) error {
-	if err := t.register(ctx); err != nil {
+	if err := t.register(ctx, conn); err != nil {
 		log.Printf("[tunnel] UDP registration failed: %v, trying TCP fallback...", err)
 		tcp, tcpErr := netutil.DialTCP(serverAddr, 5*time.Second)
 		if tcpErr != nil {
