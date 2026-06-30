@@ -27,6 +27,9 @@ func New(cfg Config) (*Device, error) {
 	if cfg.MTU <= 0 {
 		cfg.MTU = DefaultMTU
 	}
+	if err := validateConfig(&cfg); err != nil {
+		return nil, err
+	}
 	if cfg.VirtualIP.To4() == nil {
 		return nil, fmt.Errorf("virtual IP must be an IPv4 address")
 	}

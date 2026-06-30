@@ -40,7 +40,9 @@ func DialTCP(addr string, timeout time.Duration) (*TCPTransport, error) {
 	}
 	// Set TCP_NODELAY for low latency (disable Nagle's algorithm)
 	if tc, ok := conn.(*net.TCPConn); ok {
-		tc.SetNoDelay(true)
+		if err := tc.SetNoDelay(true); err != nil {
+			log.Printf("set TCP_NODELAY: %v", err)
+		}
 	}
 	return NewTCPTransport(conn), nil
 }
@@ -135,7 +137,9 @@ func (tl *TCPListener) Accept() (*TCPTransport, error) {
 		return nil, err
 	}
 	if tc, ok := conn.(*net.TCPConn); ok {
-		tc.SetNoDelay(true)
+		if err := tc.SetNoDelay(true); err != nil {
+			log.Printf("set TCP_NODELAY on accept: %v", err)
+		}
 	}
 	return NewTCPTransport(conn), nil
 }
