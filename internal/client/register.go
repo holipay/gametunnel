@@ -26,8 +26,14 @@ func (t *Tunnel) register(ctx context.Context, conn *net.UDPConn) error {
 	packet := protocol.EncodeChecked(protocol.TypeRegister, reg.Marshal())
 
 	deadline := 10 * time.Second
-	conn.SetReadDeadline(time.Now().Add(deadline))
-	defer conn.SetReadDeadline(time.Time{})
+	if err := conn.SetReadDeadline(time.Now().Add(deadline)); err != nil {
+		log.Printf("register set read deadline: %v", err)
+	}
+	defer func() {
+		if err := conn.SetReadDeadline(time.Time{}); err != nil {
+			log.Printf("register clear read deadline: %v", err)
+		}
+	}()
 
 	const maxRetries = 3
 	const maxAuthRounds = 3

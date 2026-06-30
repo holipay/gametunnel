@@ -9,11 +9,11 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/holipay/gametunnel/internal/protocol"
 	"github.com/holipay/gametunnel/internal/i18n"
+	"github.com/holipay/gametunnel/internal/nat"
 	"github.com/holipay/gametunnel/internal/netutil"
 	"github.com/holipay/gametunnel/internal/pool"
-	"github.com/holipay/gametunnel/internal/nat"
+	"github.com/holipay/gametunnel/internal/protocol"
 )
 
 // sendJob is a single UDP send request, consumed by the dedicated sendLoop goroutine.
@@ -38,13 +38,6 @@ const tunChanSize = 2048
 // tunWorkers is the number of goroutines processing TUN packets.
 // 4 workers allow encryption + marshal to overlap with TUN reads.
 const tunWorkers = 4
-
-// ctrlTimerPool reuses timers for sendCtrl to avoid per-call allocation.
-// Timers are Reset before use and drained after use to ensure clean state.
-var ctrlTimerPool = sync.Pool{
-	New: func() interface{} { return time.NewTimer(time.Hour) },
-}
-
 
 // Peer represents a remote player.
 type Peer struct {
@@ -201,7 +194,9 @@ func (t *Tunnel) dialServer(sAddr *net.UDPAddr) (*net.UDPConn, error) {
 		sAddr.IP = ip16
 	}
 	t.serverAddr.Store(sAddr)
-	netutil.SetSocketBuffers(conn)
+	if err := netutil.SetSocketBuffers(conn); err != nil {
+		log.Printf("set socket buffers: %v", err)
+	}
 	t.conn = conn
 	return conn, nil
 }
@@ -580,27 +575,18 @@ func (t *Tunnel) sendUDP(data []byte, addr *net.UDPAddr) {
 }
 
 // sendCtrl enqueues a control packet (keepalive, pong, peer request, hole punch).
-// Control packets use a separate high-priority channel with a short blocking window
-// to avoid dropping critical keepalive packets under burst load.
+// Uses a non-blocking send to avoid cascading delays when multiple goroutines
+// contend for the ctrl channel. Under burst load, drops are preferred over
+// blocking caller goroutines (which would delay keepalive timers, etc.).
 func (t *Tunnel) sendCtrl(data []byte, addr *net.UDPAddr) {
-	timer := ctrlTimerPool.Get().(*time.Timer)
-	timer.Reset(50 * time.Millisecond)
 	select {
 	case t.ctrlCh <- sendJob{data: data, addr: addr}:
-	case <-timer.C:
-		// Channel full after 50ms — drop to avoid blocking caller indefinitely
+	default:
 		n := t.sendErrors.Add(1)
 		if n == 1 || n%100 == 0 {
 			log.Printf("%s", i18n.Format(i18n.T().LogSendFail, n, fmt.Errorf("ctrl channel full")))
 		}
 	}
-	if !timer.Stop() {
-		select {
-		case <-timer.C:
-		default:
-		}
-	}
-	ctrlTimerPool.Put(timer)
 }
 
 // tunWorker processes TUN packets from the tunCh channel.

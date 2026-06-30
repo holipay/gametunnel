@@ -27,7 +27,9 @@ func AppDataDir() string {
 // Creates it if it doesn't exist.
 func GameTunnelDir() string {
 	dir := filepath.Join(AppDataDir(), "GameTunnel")
-	os.MkdirAll(dir, 0755)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return "."
+	}
 	return dir
 }
 

@@ -113,7 +113,7 @@ func (s *Server) loadState() error {
 		}
 
 		octet := ip.To4()[3]
-		if octet < 2 || octet >= 255 {
+		if octet < 2 || octet == 255 {
 			continue
 		}
 

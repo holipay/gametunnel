@@ -11,19 +11,21 @@ import (
 )
 
 type Device struct {
-	tunDev          tun.Device
-	name            string
-	virtualIP       net.IP
-	subnetMask      net.IPMask
-	serverPublicIP  net.IP
-	mtu             int
-	physicalGateway string
-	offset          int // virtioNetHdrLen when vnetHdr is enabled, else 0
+	tunDev         tun.Device
+	name           string
+	virtualIP      net.IP
+	subnetMask     net.IPMask
+	serverPublicIP net.IP
+	mtu            int
+	offset         int // virtioNetHdrLen when vnetHdr is enabled, else 0
 }
 
 func New(cfg Config) (*Device, error) {
 	if cfg.MTU <= 0 {
 		cfg.MTU = DefaultMTU
+	}
+	if err := validateConfig(&cfg); err != nil {
+		return nil, err
 	}
 	if cfg.VirtualIP.To4() == nil {
 		return nil, fmt.Errorf("virtual IP must be an IPv4 address")

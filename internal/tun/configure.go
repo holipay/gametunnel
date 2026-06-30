@@ -73,7 +73,7 @@ func (d *Device) configure() error {
 	// ── Step 6: 子网广播（如 10.10.0.255）──
 	subnetBroadcast := net.IP(make([]byte, 4))
 	for i := 0; i < 4; i++ {
-		subnetBroadcast[i] = subnet[i] | ^d.subnetMask[i]
+		subnetBroadcast[i] = subnet[i] | byte(^d.subnetMask[i])
 	}
 	if err := RunCmd("route", "add",
 		subnetBroadcast.String(), "mask", mask, ip, "metric", "1"); err != nil {
@@ -200,7 +200,7 @@ func (d *Device) ReconfigureRoutes() {
 	// Subnet broadcast
 	subnetBroadcast := net.IP(make([]byte, 4))
 	for i := 0; i < 4; i++ {
-		subnetBroadcast[i] = subnet[i] | ^d.subnetMask[i]
+		subnetBroadcast[i] = subnet[i] | byte(^d.subnetMask[i])
 	}
 	RunCmd("route", "add",
 		subnetBroadcast.String(), "mask", mask, ip, "metric", "1")
@@ -378,7 +378,7 @@ func (d *Device) CleanupRoutes() {
 	// Remove subnet broadcast
 	subnetBroadcast := net.IP(make([]byte, 4))
 	for i := 0; i < 4; i++ {
-		subnetBroadcast[i] = subnet[i] | ^d.subnetMask[i]
+		subnetBroadcast[i] = subnet[i] | byte(^d.subnetMask[i])
 	}
 	RunCmd("route", "delete", subnetBroadcast.String())
 

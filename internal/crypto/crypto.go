@@ -88,7 +88,9 @@ func NewCipher(key []byte, dirTag []byte) (*Cipher, error) {
 		aead:   aead,
 		dirTag: append([]byte(nil), dirTag...),
 	}
-	c.initCounter()
+	if err := c.initCounter(); err != nil {
+		return nil, err
+	}
 	return c, nil
 }
 
@@ -98,19 +100,20 @@ func NewCipher(key []byte, dirTag []byte) (*Cipher, error) {
 // both sides would start at counter=0, producing identical nonces — fatal
 // for ChaCha20-Poly1305. A 48-bit random space gives >281 trillion possible
 // starting values, making collision probability negligible.
-func (c *Cipher) initCounter() {
+func (c *Cipher) initCounter() error {
 	max := new(big.Int).SetInt64(1 << 48)
 	n, err := rand.Int(rand.Reader, max)
 	if err != nil {
 		// Fallback: use lower 48 bits of a random 8-byte read
 		var b [8]byte
 		if _, err := rand.Read(b[:]); err != nil {
-			panic(fmt.Sprintf("crypto: cannot generate random nonce: %v", err))
+			return fmt.Errorf("crypto: cannot generate random nonce: %w", err)
 		}
 		c.counter.Store(binary.LittleEndian.Uint64(b[:]) & ((1 << 48) - 1))
-		return
+		return nil
 	}
 	c.counter.Store(n.Uint64())
+	return nil
 }
 
 // makeNonce builds a 12-byte nonce: 8-byte counter + 4-byte direction tag.

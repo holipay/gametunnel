@@ -881,13 +881,22 @@ func TestHandleRelay_Unicast(t *testing.T) {
 
 func TestHandleRelay_Broadcast(t *testing.T) {
 	r := newTestRoom("10.10.0.0/24", net.IPv4(10, 10, 0, 1))
-	conn, _ := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 0})
-	r.conn = conn
-	defer conn.Close()
 
-	senderAddr := &net.UDPAddr{IP: net.IPv4(1, 2, 3, 4), Port: 1000}
-	receiver1Addr := &net.UDPAddr{IP: net.IPv4(1, 2, 3, 5), Port: 2000}
-	receiver2Addr := &net.UDPAddr{IP: net.IPv4(1, 2, 3, 6), Port: 3000}
+	senderConn, _ := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 0})
+	defer senderConn.Close()
+	r.conn = senderConn
+	r.sendQueue = newRateLimitedQueue(senderConn, nil, nil)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go r.sendQueue.run(ctx)
+
+	rxA, _ := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 0})
+	rxB, _ := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 0})
+	defer rxA.Close()
+	defer rxB.Close()
+
+	senderAddr := &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 1000}
 
 	sender := &Client{
 		Username:  "sender",
@@ -896,31 +905,116 @@ func TestHandleRelay_Broadcast(t *testing.T) {
 		auth:      authNone,
 	}
 	sender.SetLastSeen(time.Now())
-	receiver1 := &Client{
-		Username:  "receiver1",
+	pA := &Client{
+		Username:  "playerA",
 		VirtualIP: net.IPv4(10, 10, 0, 3),
-		PublicAddr: receiver1Addr,
+		PublicAddr: rxA.LocalAddr().(*net.UDPAddr),
 		auth:      authNone,
 	}
-	receiver1.SetLastSeen(time.Now())
-	receiver2 := &Client{
-		Username:  "receiver2",
+	pA.SetLastSeen(time.Now())
+	pB := &Client{
+		Username:  "playerB",
 		VirtualIP: net.IPv4(10, 10, 0, 4),
-		PublicAddr: receiver2Addr,
+		PublicAddr: rxB.LocalAddr().(*net.UDPAddr),
 		auth:      authNone,
 	}
-	receiver2.SetLastSeen(time.Now())
+	pB.SetLastSeen(time.Now())
 
 	r.mu.Lock()
 	r.clients[netkey.IPKey(sender.VirtualIP)] = sender
-	r.clients[netkey.IPKey(receiver1.VirtualIP)] = receiver1
-	r.clients[netkey.IPKey(receiver2.VirtualIP)] = receiver2
+	r.clients[netkey.IPKey(pA.VirtualIP)] = pA
+	r.clients[netkey.IPKey(pB.VirtualIP)] = pB
 	r.addrMap[netkey.AddrToRateKey(senderAddr)] = sender
-	r.addrMap[netkey.AddrToRateKey(receiver1Addr)] = receiver1
-	r.addrMap[netkey.AddrToRateKey(receiver2Addr)] = receiver2
+	r.addrMap[netkey.AddrToRateKey(pA.PublicAddr)] = pA
+	r.addrMap[netkey.AddrToRateKey(pB.PublicAddr)] = pB
 	r.mu.Unlock()
 
-	// Build broadcast payload (dstIP = 255.255.255.255)
+	payload := make([]byte, 4+4+3)
+	copy(payload[0:4], sender.VirtualIP.To4())
+	copy(payload[4:8], net.IPv4(255, 255, 255, 255).To4())
+	copy(payload[8:], []byte{0xDE, 0xAD, 0xBE})
+
+	r.handleRelay(payload, senderAddr)
+
+	if r.totalPacketsRelay.Load() != 1 {
+		t.Fatalf("totalPacketsRelay: got %d, want 1", r.totalPacketsRelay.Load())
+	}
+
+	gotA := false
+	gotB := false
+	deadline := time.Now().Add(1 * time.Second)
+
+	for time.Now().Before(deadline) {
+		if !gotA {
+			rxA.SetReadDeadline(time.Now().Add(200 * time.Millisecond))
+			buf := make([]byte, 1500)
+			_, err := rxA.Read(buf)
+			if err == nil {
+				gotA = true
+			}
+		}
+		if !gotB {
+			rxB.SetReadDeadline(time.Now().Add(200 * time.Millisecond))
+			buf := make([]byte, 1500)
+			_, err := rxB.Read(buf)
+			if err == nil {
+				gotB = true
+			}
+		}
+		if gotA && gotB {
+			break
+		}
+	}
+
+	if !gotA {
+		t.Error("broadcast packet not received by playerA")
+	}
+	if !gotB {
+		t.Error("broadcast packet not received by playerB")
+	}
+}
+
+func TestHandleRelay_BroadcastExcludesSelf(t *testing.T) {
+	r := newTestRoom("10.10.0.0/24", net.IPv4(10, 10, 0, 1))
+	conn, _ := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 0})
+	defer conn.Close()
+	r.conn = conn
+	r.sendQueue = newRateLimitedQueue(conn, nil, nil)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go r.sendQueue.run(ctx)
+
+	senderRx, _ := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 0})
+	defer senderRx.Close()
+	rx, _ := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 0})
+	defer rx.Close()
+
+	senderAddr := senderRx.LocalAddr().(*net.UDPAddr)
+	receiverAddr := rx.LocalAddr().(*net.UDPAddr)
+
+	sender := &Client{
+		Username:  "sender",
+		VirtualIP: net.IPv4(10, 10, 0, 2),
+		PublicAddr: senderAddr,
+		auth:      authNone,
+	}
+	sender.SetLastSeen(time.Now())
+	receiver := &Client{
+		Username:  "receiver",
+		VirtualIP: net.IPv4(10, 10, 0, 3),
+		PublicAddr: receiverAddr,
+		auth:      authNone,
+	}
+	receiver.SetLastSeen(time.Now())
+
+	r.mu.Lock()
+	r.clients[netkey.IPKey(sender.VirtualIP)] = sender
+	r.clients[netkey.IPKey(receiver.VirtualIP)] = receiver
+	r.addrMap[netkey.AddrToRateKey(senderAddr)] = sender
+	r.addrMap[netkey.AddrToRateKey(receiverAddr)] = receiver
+	r.mu.Unlock()
+
 	payload := make([]byte, 4+4+3)
 	copy(payload[0:4], sender.VirtualIP.To4())
 	copy(payload[4:8], net.IPv4(255, 255, 255, 255).To4())
@@ -929,7 +1023,147 @@ func TestHandleRelay_Broadcast(t *testing.T) {
 	r.handleRelay(payload, senderAddr)
 
 	if r.totalPacketsRelay.Load() != 1 {
-		t.Errorf("totalPacketsRelay: got %d, want 1", r.totalPacketsRelay.Load())
+		t.Fatalf("totalPacketsRelay: got %d, want 1", r.totalPacketsRelay.Load())
+	}
+
+	rx.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+	buf := make([]byte, 1500)
+	_, err := rx.Read(buf)
+	if err != nil {
+		t.Error("broadcast should reach the receiver, got:", err)
+	}
+
+	senderRx.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+	n, err := senderRx.Read(make([]byte, 1500))
+	if err == nil {
+		t.Errorf("sender should not receive its own broadcast, got %d bytes", n)
+	}
+}
+
+func TestHandleRelay_BroadcastExcludesNilAddr(t *testing.T) {
+	r := newTestRoom("10.10.0.0/24", net.IPv4(10, 10, 0, 1))
+	conn, _ := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 0})
+	defer conn.Close()
+	r.conn = conn
+	r.sendQueue = newRateLimitedQueue(conn, nil, nil)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go r.sendQueue.run(ctx)
+
+	rx, _ := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 0})
+	defer rx.Close()
+
+	senderAddr := &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 1000}
+
+	sender := &Client{
+		Username:  "sender",
+		VirtualIP: net.IPv4(10, 10, 0, 2),
+		PublicAddr: senderAddr,
+		auth:      authNone,
+	}
+	sender.SetLastSeen(time.Now())
+	visible := &Client{
+		Username:  "visible",
+		VirtualIP: net.IPv4(10, 10, 0, 3),
+		PublicAddr: rx.LocalAddr().(*net.UDPAddr),
+		auth:      authNone,
+	}
+	visible.SetLastSeen(time.Now())
+	invisible := &Client{
+		Username:  "invisible",
+		VirtualIP: net.IPv4(10, 10, 0, 4),
+		PublicAddr: nil,
+		auth:      authNone,
+	}
+	invisible.SetLastSeen(time.Now())
+
+	r.mu.Lock()
+	r.clients[netkey.IPKey(sender.VirtualIP)] = sender
+	r.clients[netkey.IPKey(visible.VirtualIP)] = visible
+	r.clients[netkey.IPKey(invisible.VirtualIP)] = invisible
+	r.addrMap[netkey.AddrToRateKey(senderAddr)] = sender
+	r.addrMap[netkey.AddrToRateKey(visible.PublicAddr)] = visible
+	r.mu.Unlock()
+
+	payload := make([]byte, 4+4+3)
+	copy(payload[0:4], sender.VirtualIP.To4())
+	copy(payload[4:8], net.IPv4(255, 255, 255, 255).To4())
+	copy(payload[8:], []byte{0x01, 0x02, 0x03})
+
+	r.handleRelay(payload, senderAddr)
+
+	if r.totalPacketsRelay.Load() != 1 {
+		t.Errorf("totalPacketsRelay: got %d, want 1 (nil-addr client excluded)", r.totalPacketsRelay.Load())
+	}
+
+	rx.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+	buf := make([]byte, 1500)
+	_, err := rx.Read(buf)
+	if err != nil {
+		t.Error("visible client should receive broadcast, got:", err)
+	}
+}
+
+func TestHandleRelay_EncryptedRoom(t *testing.T) {
+	r := newTestRoom("10.10.0.0/24", net.IPv4(10, 10, 0, 1))
+	r.roomPass = "supersecret"
+	conn, _ := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 0})
+	defer conn.Close()
+	r.conn = conn
+	r.sendQueue = newRateLimitedQueue(conn, nil, nil)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go r.sendQueue.run(ctx)
+
+	rx, _ := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 0})
+	defer rx.Close()
+
+	senderAddr := &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 1000}
+
+	sender := &Client{
+		Username:  "sender",
+		VirtualIP: net.IPv4(10, 10, 0, 2),
+		PublicAddr: senderAddr,
+		auth:      authNone,
+	}
+	sender.SetLastSeen(time.Now())
+	receiver := &Client{
+		Username:  "receiver",
+		VirtualIP: net.IPv4(10, 10, 0, 3),
+		PublicAddr: rx.LocalAddr().(*net.UDPAddr),
+		auth:      authNone,
+	}
+	receiver.SetLastSeen(time.Now())
+
+	r.mu.Lock()
+	r.clients[netkey.IPKey(sender.VirtualIP)] = sender
+	r.clients[netkey.IPKey(receiver.VirtualIP)] = receiver
+	r.addrMap[netkey.AddrToRateKey(senderAddr)] = sender
+	r.addrMap[netkey.AddrToRateKey(receiver.PublicAddr)] = receiver
+	r.mu.Unlock()
+
+	payload := make([]byte, 4+4+10)
+	copy(payload[0:4], sender.VirtualIP.To4())
+	copy(payload[4:8], net.IPv4(255, 255, 255, 255).To4())
+	for i := 8; i < len(payload); i++ {
+		payload[i] = 0xAA
+	}
+
+	r.handleRelay(payload, senderAddr)
+
+	// Read and verify the packet size matches Encode format (no CRC).
+	// Encode: header(2) + payload = 2 + 18 = 20 bytes
+	// EncodeChecked: header(2) + payload + CRC(4) = 2 + 18 + 4 = 24 bytes
+	rx.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+	buf := make([]byte, 1500)
+	n, err := rx.Read(buf)
+	if err != nil {
+		t.Fatal("broadcast not received:", err)
+	}
+	if n != 2+len(payload) {
+		t.Errorf("encrypted room: got %d bytes, want %d (no CRC expected)", n, 2+len(payload))
 	}
 }
 
@@ -976,7 +1210,7 @@ func TestHandleRelay_TokenValidation_OldFormat(t *testing.T) {
 		clientVersion: protocol.MinTokenVersion,
 	}
 	sender.SetLastSeen(time.Now())
-	sender.GenerateSessionToken()
+	_ = sender.GenerateSessionToken()
 
 	receiver := &Client{
 		Username:   "receiver",
@@ -1025,7 +1259,7 @@ func TestHandleRelay_TokenValidation_NewFormat(t *testing.T) {
 		clientVersion: protocol.MinTokenVersion,
 	}
 	sender.SetLastSeen(time.Now())
-	sender.GenerateSessionToken()
+	_ = sender.GenerateSessionToken()
 
 	receiver := &Client{
 		Username:   "receiver",
@@ -1075,7 +1309,7 @@ func TestHandleRelay_TokenValidation_WrongToken(t *testing.T) {
 		clientVersion: protocol.MinTokenVersion,
 	}
 	sender.SetLastSeen(time.Now())
-	sender.GenerateSessionToken()
+	_ = sender.GenerateSessionToken()
 
 	receiver := &Client{
 		Username:   "receiver",

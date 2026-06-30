@@ -7,14 +7,11 @@ import (
 )
 
 const (
-	// metricsWindow is how long we keep time-series data.
-	metricsWindow = 1 * time.Hour
-
 	// metricsInterval is how often we take a snapshot.
 	metricsInterval = 1 * time.Minute
 
 	// metricsSlots is the number of slots in the ring buffer.
-	// 1 hour / 1 minute = 60 slots.
+	// Ring covers 1 hour at 1 minute intervals.
 	metricsSlots = 60
 )
 

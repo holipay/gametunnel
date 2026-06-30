@@ -79,7 +79,7 @@ func buildEncryptedDataPacket(srcIP, dstIP net.IP, pkt []byte, cipher *crypto.Ci
 
 	dst = dst[:off]
 	dst = cipher.EncryptTo(dst, pkt)
-	return dst[:len(dst)]
+	return dst
 }
 
 // routePacket determines how to route an outgoing IP packet.

@@ -84,6 +84,9 @@ type Server struct {
 	// TCP fallback listener for clients behind strict firewalls
 	tcpListener *netutil.TCPListener // nil when TCP is disabled
 
+	// pprof listener for runtime profiling (nil when disabled)
+	pprofListener net.Listener
+
 	// TCP bridge routing
 	tcpPortCounter atomic.Uint32    // unique port assignment for TCP clients
 	tcpBridges     sync.Map         // rateKey → *UDPTCPBridge
@@ -350,7 +353,18 @@ func (s *Server) Close() error {
 		s.tcpListener.Close()
 	}
 
+	// Close pprof listener (if enabled)
+	if s.pprofListener != nil {
+		s.pprofListener.Close()
+	}
+
 	return s.conn.Close()
+}
+
+// SetPprofListener sets the pprof HTTP listener for runtime profiling.
+// Must be called before Run(). The listener is closed on Server.Close().
+func (s *Server) SetPprofListener(l net.Listener) {
+	s.pprofListener = l
 }
 
 // ── Worker Pool ────────────────────────────────────────────────
@@ -386,8 +400,12 @@ func (s *Server) handlePacket(data []byte, from *net.UDPAddr) {
 	// unencrypted — verify their CRC in the encrypted fast path.
 	var msg *protocol.Message
 	if encrypted {
-		msg, _ = protocol.DecodeSkipCRC(data)
+		var err error
+		msg, err = protocol.DecodeSkipCRC(data)
 		if msg == nil {
+			if err != nil && !errors.Is(err, protocol.ErrPacketTooShort) {
+				log.Printf("failed to decode encrypted packet: %v", err)
+			}
 			return
 		}
 		if msg.Type == protocol.TypeRegister ||

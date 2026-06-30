@@ -33,7 +33,7 @@ func (d *Device) configure() error {
 	// Broadcast route
 	broadcast := make(net.IP, 4)
 	for i := range broadcast {
-		broadcast[i] = subnet[i] | ^d.subnetMask[i]
+		broadcast[i] = subnet[i] | byte(^d.subnetMask[i])
 	}
 	if err := runCmd("ip", "route", "replace", broadcast.String(), "dev", d.name, "metric", "1"); err != nil {
 		log.Printf("[tun] broadcast route warning: %v", err)
@@ -66,13 +66,21 @@ func (d *Device) CleanupRoutes() {
 	maskBits, _ := d.subnetMask.Size()
 	subnet := d.virtualIP.Mask(d.subnetMask)
 
-	runCmd("ip", "route", "del", fmt.Sprintf("%s/%d", subnet, maskBits), "dev", d.name)
+	if err := runCmd("ip", "route", "del", fmt.Sprintf("%s/%d", subnet, maskBits), "dev", d.name); err != nil {
+		log.Printf("[tun] cleanup subnet route: %v", err)
+	}
 
 	broadcast := make(net.IP, 4)
 	for i := range broadcast {
-		broadcast[i] = subnet[i] | ^d.subnetMask[i]
+		broadcast[i] = subnet[i] | byte(^d.subnetMask[i])
 	}
-	runCmd("ip", "route", "del", broadcast.String(), "dev", d.name)
-	runCmd("ip", "route", "del", "255.255.255.255", "dev", d.name)
-	runCmd("ip", "route", "del", "224.0.0.251", "dev", d.name)
+	if err := runCmd("ip", "route", "del", broadcast.String(), "dev", d.name); err != nil {
+		log.Printf("[tun] cleanup broadcast route: %v", err)
+	}
+	if err := runCmd("ip", "route", "del", "255.255.255.255", "dev", d.name); err != nil {
+		log.Printf("[tun] cleanup global broadcast route: %v", err)
+	}
+	if err := runCmd("ip", "route", "del", "224.0.0.251", "dev", d.name); err != nil {
+		log.Printf("[tun] cleanup mDNS route: %v", err)
+	}
 }
