@@ -985,10 +985,12 @@ func TestHandleRelay_BroadcastExcludesSelf(t *testing.T) {
 	defer cancel()
 	go r.sendQueue.run(ctx)
 
+	senderRx, _ := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 0})
+	defer senderRx.Close()
 	rx, _ := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 0})
 	defer rx.Close()
 
-	senderAddr := &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 1000}
+	senderAddr := senderRx.LocalAddr().(*net.UDPAddr)
 	receiverAddr := rx.LocalAddr().(*net.UDPAddr)
 
 	sender := &Client{
@@ -1029,6 +1031,12 @@ func TestHandleRelay_BroadcastExcludesSelf(t *testing.T) {
 	_, err := rx.Read(buf)
 	if err != nil {
 		t.Error("broadcast should reach the receiver, got:", err)
+	}
+
+	senderRx.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+	n, err := senderRx.Read(make([]byte, 1500))
+	if err == nil {
+		t.Errorf("sender should not receive its own broadcast, got %d bytes", n)
 	}
 }
 
