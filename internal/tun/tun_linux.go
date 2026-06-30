@@ -11,13 +11,12 @@ import (
 )
 
 type Device struct {
-	tunDev          tun.Device
-	name            string
-	virtualIP       net.IP
-	subnetMask      net.IPMask
-	serverPublicIP  net.IP
-	mtu             int
-	physicalGateway string
+	tunDev         tun.Device
+	name           string
+	virtualIP      net.IP
+	subnetMask     net.IPMask
+	serverPublicIP net.IP
+	mtu            int
 }
 
 func New(cfg Config) (*Device, error) {

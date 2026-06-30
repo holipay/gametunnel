@@ -60,6 +60,13 @@ func (l *clientSendLimiter) allowSlow(size int) bool {
 		elapsed = 0
 	}
 
+	// Cap elapsed to 1s to prevent overflow in elapsed * rate.
+	// A 1-second refill is generous — at 1 GB/s that's 1 GB worth of tokens,
+	// which is far above any reasonable burst limit.
+	if elapsed > 1 {
+		elapsed = 1
+	}
+
 	// Refill tokens
 	tokens := l.tokens.Load()
 	tokens += int64(elapsed * float64(l.rate))

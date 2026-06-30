@@ -159,8 +159,7 @@ func (tl *TCPListener) Close() error {
 // 2. Writes outbound packets (destined for this client) back to TCP
 type UDPTCPBridge struct {
 	tcp        *TCPTransport
-	virtualIP  net.IP        // the client's assigned virtual IP
-	remoteAddr *net.UDPAddr  // synthetic address for protocol compatibility
+	remoteAddr *net.UDPAddr // synthetic address for protocol compatibility
 	done       chan struct{}
 }
 
