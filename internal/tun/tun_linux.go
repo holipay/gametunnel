@@ -68,7 +68,16 @@ func (d *Device) MTU() int { return d.mtu }
 
 // ReadBatch reads up to batchSize packets from the TUN device in a single syscall.
 func (d *Device) ReadBatch(bufs [][]byte, sizes []int) (int, error) {
-	return d.tunDev.Read(bufs, sizes, d.offset)
+	n, err := d.tunDev.Read(bufs, sizes, d.offset)
+	if err != nil {
+		return 0, err
+	}
+	if d.offset > 0 {
+		for i := 0; i < n; i++ {
+			copy(bufs[i], bufs[i][d.offset:d.offset+sizes[i]])
+		}
+	}
+	return n, nil
 }
 
 // WriteBatch writes multiple packets to the TUN device in a single syscall.
@@ -96,7 +105,11 @@ func (d *Device) Read(buf []byte) (int, error) {
 	if n == 0 {
 		return 0, nil
 	}
-	return sizes[0], nil
+	sz := sizes[0]
+	if d.offset > 0 {
+		copy(buf, buf[d.offset:d.offset+sz])
+	}
+	return sz, nil
 }
 
 func (d *Device) Write(data []byte) (int, error) {
