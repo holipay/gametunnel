@@ -39,6 +39,14 @@ func (d *Device) configure() error {
 		log.Printf("[tun] broadcast route warning: %v", err)
 	}
 
+	// Global broadcast 255.255.255.255
+	// Many LAN games (StarCraft, Age of Empires, etc.) send UDP discovery
+	// broadcasts to 255.255.255.255 instead of the subnet broadcast.
+	// Without this route the packet goes out the physical NIC instead of TUN.
+	if err := runCmd("ip", "route", "replace", "255.255.255.255", "dev", d.name, "metric", "1"); err != nil {
+		log.Printf("[tun] global broadcast route warning: %v", err)
+	}
+
 	// mDNS multicast
 	if err := runCmd("ip", "route", "replace", "224.0.0.251", "dev", d.name, "metric", "1"); err != nil {
 		log.Printf("[tun] mDNS route warning: %v", err)
@@ -65,5 +73,6 @@ func (d *Device) CleanupRoutes() {
 		broadcast[i] = subnet[i] | ^d.subnetMask[i]
 	}
 	runCmd("ip", "route", "del", broadcast.String(), "dev", d.name)
+	runCmd("ip", "route", "del", "255.255.255.255", "dev", d.name)
 	runCmd("ip", "route", "del", "224.0.0.251", "dev", d.name)
 }
