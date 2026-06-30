@@ -35,7 +35,7 @@ func (r *Room) getAuthKey(roomID string) []byte {
 // from the registration address — decrementing `from` would leave the original
 // address's count permanently incremented (memory leak) and the current address's
 // count negative (blocking future registrations from that IP).
-func (r *Room) cleanupPendingAuth(fromKey, oldKey rateKey, foundByScan bool, c *Client) {
+func (r *Room) cleanupPendingAuth(fromKey, oldKey netkey.RateKey, foundByScan bool, c *Client) {
 	deleteKey := fromKey
 	if foundByScan {
 		deleteKey = oldKey
@@ -374,7 +374,7 @@ func (r *Room) handleAuthResponse(payload []byte, from *net.UDPAddr) {
 
 	// If direct address lookup fails (NAT rebinding between register and
 	// auth response), scan pending auth clients by username+roomID.
-	var oldKey rateKey
+	var oldKey netkey.RateKey
 	var foundByScan bool
 	if c == nil || c.auth != authChallengeSent {
 		for key, client := range r.addrMap {

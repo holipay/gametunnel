@@ -64,12 +64,12 @@ func (r *Room) CleanupStale() bool {
 	r.mu.RLock()
 	type staleClient struct {
 		key    [16]byte
-		aKey   rateKey
+		aKey   netkey.RateKey
 		connKey connIPKey
 		c      *Client
 	}
 	type staleAuth struct {
-		key     rateKey
+		key     netkey.RateKey
 		connKey connIPKey
 		c       *Client
 	}

@@ -563,7 +563,7 @@ func (s *Server) tcpAcceptLoop(ctx context.Context) {
 		// address is distinct in rateKey/addrMap lookups.
 		// Create bridge first, then atomically register it to avoid TOCTOU.
 		var bridge *netutil.UDPTCPBridge
-		var key rateKey
+		var key netkey.RateKey
 		var port int
 		const maxPortAttempts = 65536
 		for attempt := 0; attempt < maxPortAttempts; attempt++ {

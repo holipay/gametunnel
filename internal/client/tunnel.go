@@ -13,7 +13,6 @@ import (
 	"github.com/holipay/gametunnel/internal/i18n"
 	"github.com/holipay/gametunnel/internal/netutil"
 	"github.com/holipay/gametunnel/internal/pool"
-	"github.com/holipay/gametunnel/internal/netkey"
 	"github.com/holipay/gametunnel/internal/nat"
 )
 

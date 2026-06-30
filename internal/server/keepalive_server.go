@@ -51,7 +51,7 @@ func (s *Server) cleanupStaleClients() {
 // disconnected (room removed from addrMap but addrToRoom was not updated).
 func (s *Server) cleanupStaleAddrToRoom() {
 	type roomEntry struct {
-		key  rateKey
+		key  netkey.RateKey
 		room *Room
 	}
 
@@ -64,12 +64,12 @@ func (s *Server) cleanupStaleAddrToRoom() {
 	}
 	s.roomMu.RUnlock()
 
-	byRoom := make(map[*Room][]rateKey)
+	byRoom := make(map[*Room][]netkey.RateKey)
 	for _, e := range entries {
 		byRoom[e.room] = append(byRoom[e.room], e.key)
 	}
 
-	var stale []rateKey
+	var stale []netkey.RateKey
 	for room, keys := range byRoom {
 		room.mu.RLock()
 		for _, k := range keys {
