@@ -66,7 +66,11 @@ func (np *NATProber) Probe(probeID byte, timeout time.Duration) (*NATProbeResult
 	if err := np.conn.SetReadDeadline(time.Now().Add(timeout)); err != nil {
 		return nil, fmt.Errorf("set deadline: %w", err)
 	}
-	defer np.conn.SetReadDeadline(time.Time{})
+	defer func() {
+		if err := np.conn.SetReadDeadline(time.Time{}); err != nil {
+			log.Printf("natprobe clear deadline: %v", err)
+		}
+	}()
 
 	buf := make([]byte, 1500)
 	for {
