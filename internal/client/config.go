@@ -6,9 +6,11 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/holipay/gametunnel/internal/i18n"
+	"github.com/holipay/gametunnel/internal/iniconfig"
 	"github.com/holipay/gametunnel/internal/paths"
 	"github.com/holipay/gametunnel/internal/tun"
 )
@@ -173,64 +175,31 @@ func CreateDefaultConfig() string {
 
 // loadINI parses a key=value config file into cfg. Returns true if file exists.
 func loadINI(path string, cfg *Config) bool {
-	data, err := os.ReadFile(path)
-	if err != nil {
+	m, ok := iniconfig.ParseFile(path)
+	if !ok {
 		return false
 	}
-	var portOnly string
-	for _, line := range strings.Split(string(data), "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-		parts := strings.SplitN(line, "=", 2)
-		if len(parts) != 2 {
-			continue
-		}
-		key := strings.TrimSpace(parts[0])
-		value := strings.TrimSpace(parts[1])
-		switch key {
-		case "server":
-			cfg.ServerAddr = value
-		case "port":
-			portOnly = value
-		case "name":
-			if value != "" {
-				cfg.PlayerName = value
-			}
-		case "room":
-			if value != "" {
-				cfg.RoomID = value
-			}
-		case "password":
-			cfg.RoomPassword = value
-		case "lang":
-			if value != "" {
-				cfg.Lang = value
-			}
-		case "mtu":
-			var v int
-			if _, err := fmt.Sscanf(value, "%d", &v); err == nil && v >= MinMTU && v <= MaxMTU {
-				cfg.MTU = v
-			}
+	if v := m["server"]; v != "" {
+		cfg.ServerAddr = v
+	}
+	if v := m["name"]; v != "" {
+		cfg.PlayerName = v
+	}
+	if v := m["room"]; v != "" {
+		cfg.RoomID = v
+	}
+	if v := m["password"]; v != "" {
+		cfg.RoomPassword = v
+	}
+	if v := m["lang"]; v != "" {
+		cfg.Lang = v
+	}
+	if v := m["mtu"]; v != "" {
+		if mtu, err := strconv.Atoi(v); err == nil && mtu >= MinMTU && mtu <= MaxMTU {
+			cfg.MTU = mtu
 		}
 	}
-	// Combine server and port if both are specified separately
-	if cfg.ServerAddr != "" && portOnly != "" {
-		host, _, err := net.SplitHostPort(cfg.ServerAddr)
-		if err != nil {
-			// Server address has no port yet — append it.
-			// Strip brackets from IPv6 addresses to avoid double-bracketing.
-			addr := cfg.ServerAddr
-			if strings.HasPrefix(addr, "[") && strings.HasSuffix(addr, "]") {
-				addr = addr[1 : len(addr)-1]
-			}
-			cfg.ServerAddr = net.JoinHostPort(addr, portOnly)
-		} else {
-			// Server address already has port — keep it
-			_ = host
-		}
-	}
+	cfg.ServerAddr = iniconfig.CombinePort(cfg.ServerAddr, m["port"])
 	return true
 }
 
