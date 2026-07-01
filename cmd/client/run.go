@@ -2,18 +2,16 @@ package main
 
 import (
 	"fmt"
-	"io"
 	"log"
 	"net"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"syscall"
 
 	"github.com/holipay/gametunnel/internal/auth"
 	"github.com/holipay/gametunnel/internal/client"
 	"github.com/holipay/gametunnel/internal/i18n"
-	"github.com/holipay/gametunnel/internal/paths"
+	"github.com/holipay/gametunnel/internal/logfile"
 )
 
 // Build info, set at build time via -ldflags.
@@ -26,7 +24,7 @@ var (
 // run is the cross-platform entry point. It loads config, connects to the
 // server, and blocks until SIGINT/SIGTERM.
 func run(cfg *client.Config, tunFactory func(client.TunConfig) (client.TunDevice, error)) {
-	logFile := setupLog()
+	logFile := logfile.Setup()
 	defer func() {
 		if logFile != os.Stderr {
 			logFile.Close()
@@ -67,35 +65,6 @@ func run(cfg *client.Config, tunFactory func(client.TunConfig) (client.TunDevice
 	fmt.Printf("\nReceived %v, disconnecting...\n", sig)
 	app.Disconnect()
 	fmt.Println("Disconnected.")
-}
-
-// maxLogSize is the maximum log file size before rotation (1 MB).
-const maxLogSize = 1 * 1024 * 1024
-
-func setupLog() *os.File {
-	logDir := paths.GameTunnelDir()
-	if err := os.MkdirAll(logDir, 0755); err != nil {
-		log.SetOutput(os.Stderr)
-		log.Printf("create log dir: %v", err)
-		return os.Stderr
-	}
-	logPath := filepath.Join(logDir, "gametunnel.log")
-	logBackup := filepath.Join(logDir, "gametunnel.log.1")
-
-	if info, err := os.Stat(logPath); err == nil && info.Size() > maxLogSize {
-		os.Remove(logBackup)
-		if err := os.Rename(logPath, logBackup); err != nil {
-			log.Printf("rotate log: %v", err)
-		}
-	}
-
-	f, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
-	if err != nil {
-		log.SetOutput(os.Stderr)
-		return os.Stderr
-	}
-	log.SetOutput(io.MultiWriter(f, os.Stderr))
-	return f
 }
 
 // parseHostIP extracts the IP from an address string (e.g. "1.2.3.4:4700" or "[::1]:4700").

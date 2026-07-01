@@ -90,6 +90,9 @@ type Server struct {
 	// TCP bridge routing
 	tcpPortCounter atomic.Uint32    // unique port assignment for TCP clients
 	tcpBridges     sync.Map         // rateKey → *UDPTCPBridge
+
+	// Server readiness signal
+	ready chan struct{} // closed when Run() enters the main read loop
 }
 
 // pktJob represents a packet to be processed by the worker pool.
@@ -199,6 +202,7 @@ func New(cfg Config) (*Server, error) {
 		stateDir:    cfg.StateDir,
 		bwLimiter:   bwLimiter,
 		roomPass:    cfg.RoomPass,
+		ready:       make(chan struct{}),
 	}
 
 	// Wire TCP bridge routing into the send queue (must happen after s is
@@ -294,6 +298,10 @@ func (s *Server) Run(ctx context.Context) {
 		go s.tcpAcceptLoop(ctx)
 	}
 
+	// Signal readiness — the server's UDP socket is bound and all
+	// background goroutines have been launched.
+	close(s.ready)
+
 	buf := make([]byte, 65535)
 	for {
 		n, remoteAddr, err := s.conn.ReadFromUDP(buf)
@@ -365,6 +373,12 @@ func (s *Server) Close() error {
 // Must be called before Run(). The listener is closed on Server.Close().
 func (s *Server) SetPprofListener(l net.Listener) {
 	s.pprofListener = l
+}
+
+// WaitReady blocks until the server's Run() has entered its main read loop
+// and all background goroutines have been started.
+func (s *Server) WaitReady() {
+	<-s.ready
 }
 
 // ── Worker Pool ────────────────────────────────────────────────

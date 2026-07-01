@@ -4,6 +4,7 @@ package main
 
 import (
 	"fmt"
+	"log"
 	"net"
 	"os"
 	"path/filepath"
@@ -16,23 +17,16 @@ import (
 	"github.com/holipay/gametunnel/internal/tun"
 )
 
-func init() {
+func main() {
+	defer writeCrashLog()
+
 	windows.SetConsoleOutputCP(65001)
 
-	// Request admin rights if not elevated (needed for TUN device)
+	// Request admin rights if not elevated (needed for TUN device).
 	requestAdmin()
-}
 
-func newTUNFactory(serverPublicIP net.IP) func(client.TunConfig) (client.TunDevice, error) {
-	return func(tunCfg client.TunConfig) (client.TunDevice, error) {
-		return tun.New(tun.Config{
-			VirtualIP:      tunCfg.VirtualIP,
-			SubnetMask:     tunCfg.SubnetMask,
-			ServerIP:       tunCfg.ServerIP,
-			ServerPublicIP: serverPublicIP,
-			MTU:            tunCfg.MTU,
-		})
-	}
+	cfg, tunFactory, s := parseAndStart()
+	run(cfg, tunFactory, s)
 }
 
 func requestAdmin() {
@@ -75,4 +69,16 @@ func writeCrashLog() {
 	fmt.Fprintf(f, "=== Crash %s ===\n", "GameTunnel Host")
 	fmt.Fprintf(f, "Panic: %v\n\n", r)
 	fmt.Fprintf(f, "Stack:\n%s\n", debug.Stack())
+}
+
+func newTUNFactory(serverListenIP net.IP) func(client.TunConfig) (client.TunDevice, error) {
+	return func(tunCfg client.TunConfig) (client.TunDevice, error) {
+		return tun.New(tun.Config{
+			VirtualIP:      tunCfg.VirtualIP,
+			SubnetMask:     tunCfg.SubnetMask,
+			ServerIP:       tunCfg.ServerIP,
+			ServerPublicIP: serverListenIP,
+			MTU:            tunCfg.MTU,
+		})
+	}
 }

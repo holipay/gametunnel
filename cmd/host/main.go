@@ -13,21 +13,17 @@ import (
 	"context"
 	"flag"
 	"fmt"
-	"io"
 	"log"
 	"net"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"syscall"
-	"time"
 
 	"github.com/holipay/gametunnel/internal/auth"
 	"github.com/holipay/gametunnel/internal/client"
 	"github.com/holipay/gametunnel/internal/i18n"
-	"github.com/holipay/gametunnel/internal/paths"
+	"github.com/holipay/gametunnel/internal/logfile"
 	"github.com/holipay/gametunnel/internal/server"
-	"github.com/holipay/gametunnel/internal/singleinstance"
 )
 
 // Build info, set at build time via -ldflags.
@@ -37,21 +33,36 @@ var (
 	BuildTime = "unknown"
 )
 
-func main() {
-	// Server flags
-	addr := flag.String("addr", ":4700", "server listen address (UDP)")
-	subnetStr := flag.String("subnet", "10.10.0.0/24", "virtual subnet (CIDR)")
-	maxPlayers := flag.Int("max", 10, "max players")
-	roomPass := flag.String("password", "", "room password (empty = no auth)")
-	tcpAddr := flag.String("tcp-addr", "", "TCP listen address for fallback (e.g. :4700), empty = disabled")
-	verboseFlag := flag.Bool("verbose", false, "enable verbose relay logging")
+const defaultPort = ":4700"
 
-	// Client flags
-	nameFlag := flag.String("name", "", "player name (default: hostname)")
-	roomFlag := flag.String("room", "default", "room ID")
-	langFlag := flag.String("lang", "zh", "language (zh or en)")
+// hostFlags holds the parsed CLI flags for both server and client sides.
+type hostFlags struct {
+	addr       string
+	subnetStr  string
+	maxPlayers int
+	roomPass   string
+	tcpAddr    string
+	verbose    bool
+	nameFlag   string
+	roomFlag   string
+	langFlag   string
+}
 
-	// Common flags
+// parseAndStart parses CLI flags, creates the server, and starts it.
+// Returns the client config, TUN factory, and server for shutdown.
+func parseAndStart() (*client.Config, func(client.TunConfig) (client.TunDevice, error), *server.Server) {
+	var f hostFlags
+
+	flag.StringVar(&f.addr, "addr", defaultPort, "server listen address (UDP)")
+	flag.StringVar(&f.subnetStr, "subnet", "10.10.0.0/24", "virtual subnet (CIDR)")
+	flag.IntVar(&f.maxPlayers, "max", 10, "max players")
+	flag.StringVar(&f.roomPass, "password", "", "room password (empty = no auth)")
+	flag.StringVar(&f.tcpAddr, "tcp-addr", "", "TCP listen address for fallback (e.g. :4700), empty = disabled")
+	flag.BoolVar(&f.verbose, "verbose", false, "enable verbose relay logging")
+	flag.StringVar(&f.nameFlag, "name", "", "player name (default: hostname)")
+	flag.StringVar(&f.roomFlag, "room", "default", "room ID")
+	flag.StringVar(&f.langFlag, "lang", "zh", "language (zh or en)")
+
 	versionFlag := flag.Bool("version", false, "show version")
 	flag.Parse()
 
@@ -60,108 +71,95 @@ func main() {
 		os.Exit(0)
 	}
 
-	// Set language
-	i18n.Set(i18n.ParseLang(*langFlag))
-
-	// Single-instance check
-	lock, err := singleinstance.Acquire("GameTunnel-Host")
-	if err != nil {
-		log.Fatalf("single instance: %v", err)
-	}
-	defer lock.Close()
+	i18n.Set(i18n.ParseLang(f.langFlag))
 
 	// Parse subnet
-	_, subnet, err := net.ParseCIDR(*subnetStr)
+	_, subnet, err := net.ParseCIDR(f.subnetStr)
 	if err != nil {
-		log.Fatalf("invalid subnet %q: %v", *subnetStr, err)
+		log.Fatalf("invalid subnet %q: %v", f.subnetStr, err)
 	}
 
 	// Password strength warning
-	if _, warnings := auth.CheckPasswordStrength(*roomPass); len(warnings) > 0 {
+	if _, warnings := auth.CheckPasswordStrength(f.roomPass); len(warnings) > 0 {
 		for _, w := range warnings {
 			log.Printf("[auth] %s", w)
 		}
 	}
 
 	// Resolve player name
-	playerName := *nameFlag
+	playerName := f.nameFlag
 	if playerName == "" {
 		hostname, _ := os.Hostname()
 		playerName = hostname
 	}
 
-	// Setup logging
-	logFile := setupLog()
-	defer func() {
-		if logFile != os.Stderr {
-			logFile.Close()
-		}
-	}()
-
-	// Print banner
-	printBanner(*addr, subnet, *maxPlayers, *roomPass, playerName, *roomFlag)
-
-	// Graceful shutdown context
+	// Start server
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
-
-	// ====== Start server ======
 	s, err := server.New(server.Config{
-		Addr:       *addr,
+		Addr:       f.addr,
 		Subnet:     subnet,
-		MaxPlayers: *maxPlayers,
-		RoomPass:   *roomPass,
+		MaxPlayers: f.maxPlayers,
+		RoomPass:   f.roomPass,
 		Version:    Version,
-		Lang:       i18n.ParseLang(*langFlag),
-		TCPAddr:    *tcpAddr,
-		Verbose:    *verboseFlag,
+		Lang:       i18n.ParseLang(f.langFlag),
+		TCPAddr:    f.tcpAddr,
+		Verbose:    f.verbose,
 	})
 	if err != nil {
 		log.Fatalf("server start: %v", err)
 	}
 
 	go s.Run(ctx)
-	log.Printf("[host] server started on %s", *addr)
+	s.WaitReady()
+	log.Printf("[host] server started on %s", f.addr)
 
-	// Wait for server to bind the UDP port
-	for i := 0; i < 50; i++ {
-		conn, err := net.DialTimeout("udp", "127.0.0.1"+*addr, 10*time.Millisecond)
-		if err == nil {
-			conn.Close()
-			break
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-
-	// ====== Start client ======
-	serverAddr := "127.0.0.1" + extractPort(*addr)
-	serverPublicIP := net.ParseIP("127.0.0.1")
+	// Build client config
+	serverAddr := "127.0.0.1" + extractPort(f.addr)
+	serverListenIP := net.ParseIP("127.0.0.1")
 
 	clientCfg := &client.Config{
 		ServerAddr:   serverAddr,
 		PlayerName:   playerName,
-		RoomID:       *roomFlag,
-		RoomPassword: *roomPass,
-		Lang:         *langFlag,
+		RoomID:       f.roomFlag,
+		RoomPassword: f.roomPass,
+		Lang:         f.langFlag,
+		MTU:          client.DefaultMTU,
+	}
+	if err := clientCfg.Validate(); err != nil {
+		log.Fatalf("client config: %v", err)
 	}
 
-	app := client.NewApp(clientCfg)
-	app.SetTUNFactory(newTUNFactory(serverPublicIP))
+	return clientCfg, newTUNFactory(serverListenIP), s
+}
 
-	log.Printf("[host] connecting client to %s as %q (room: %s)", serverAddr, playerName, *roomFlag)
-	app.Connect(clientCfg)
+// run is the shared entry point called from platform-specific main().
+func run(cfg *client.Config, tunFactory func(client.TunConfig) (client.TunDevice, error), s *server.Server) {
+	logFile := logfile.Setup()
+	defer func() {
+		if logFile != os.Stderr {
+			logFile.Close()
+		}
+	}()
 
-	// ====== Wait for signal ======
+	printBanner(cfg.ServerAddr, cfg.RoomPassword, cfg.PlayerName, cfg.RoomID)
+
+	app := client.NewApp(cfg)
+	app.SetTUNFactory(tunFactory)
+
+	log.Printf("[host] connecting client to %s as %q (room: %s)", cfg.ServerAddr, cfg.PlayerName, cfg.RoomID)
+	app.Connect(cfg)
+
+	// Wait for signal
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 	sig := <-sigCh
 	fmt.Printf("\nReceived %v, shutting down...\n", sig)
 
 	// Shutdown order: client first, then server
 	app.Disconnect()
 	log.Printf("[host] client disconnected")
-	cancel()
 	s.Close()
 	log.Printf("[host] server stopped")
 	fmt.Println("GameTunnel Host stopped.")
@@ -171,12 +169,12 @@ func main() {
 func extractPort(addr string) string {
 	_, port, err := net.SplitHostPort(addr)
 	if err != nil {
-		return ":4700"
+		return defaultPort
 	}
 	return ":" + port
 }
 
-func printBanner(addr string, subnet *net.IPNet, maxPlayers int, password, playerName, room string) {
+func printBanner(addr, password, playerName, room string) {
 	authStatus := "No auth"
 	if password != "" {
 		authStatus = "HMAC auth"
@@ -185,38 +183,10 @@ func printBanner(addr string, subnet *net.IPNet, maxPlayers int, password, playe
 	log.Printf("════════════════════════════════════════════════════════════")
 	log.Printf("  GameTunnel Host %s", Version)
 	log.Printf("════════════════════════════════════════════════════════════")
-	log.Printf("  Server:  %s (subnet: %s, max: %d, auth: %s)", addr, subnet, maxPlayers, authStatus)
 	log.Printf("  Client:  %s (room: %s)", playerName, room)
+	log.Printf("  Auth:    %s", authStatus)
 	log.Printf("  Version: %s (commit: %s)", Version, Commit)
 	log.Printf("════════════════════════════════════════════════════════════")
-	log.Printf("  Other players connect to your public IP on port %s", extractPort(addr))
+	log.Printf("  Other players connect to your public IP on port %s", addr)
 	log.Printf("════════════════════════════════════════════════════════════")
-}
-
-const maxLogSize = 1 * 1024 * 1024
-
-func setupLog() *os.File {
-	logDir := paths.GameTunnelDir()
-	if err := os.MkdirAll(logDir, 0755); err != nil {
-		log.SetOutput(os.Stderr)
-		log.Printf("create log dir: %v", err)
-		return os.Stderr
-	}
-	logPath := filepath.Join(logDir, "gametunnel.log")
-	logBackup := filepath.Join(logDir, "gametunnel.log.1")
-
-	if info, err := os.Stat(logPath); err == nil && info.Size() > maxLogSize {
-		os.Remove(logBackup)
-		if err := os.Rename(logPath, logBackup); err != nil {
-			log.Printf("rotate log: %v", err)
-		}
-	}
-
-	f, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
-	if err != nil {
-		log.SetOutput(os.Stderr)
-		return os.Stderr
-	}
-	log.SetOutput(io.MultiWriter(f, os.Stderr))
-	return f
 }
