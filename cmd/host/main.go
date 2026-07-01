@@ -21,6 +21,7 @@ import (
 
 	"github.com/holipay/gametunnel/internal/auth"
 	"github.com/holipay/gametunnel/internal/client"
+	"github.com/holipay/gametunnel/internal/hostconfig"
 	"github.com/holipay/gametunnel/internal/i18n"
 	"github.com/holipay/gametunnel/internal/logfile"
 	"github.com/holipay/gametunnel/internal/server"
@@ -49,20 +50,23 @@ type hostFlags struct {
 	langFlag   string
 }
 
-// parseAndStart parses CLI flags, creates the server, and starts it.
-// Returns the client config, TUN factory, and server for shutdown.
+// parseAndStart parses CLI flags (overriding config file values), creates
+// the server, and starts it. Returns the client config, TUN factory, and server.
 func parseAndStart() (*client.Config, func(client.TunConfig) (client.TunDevice, error), *server.Server) {
+	// Load config file first — CLI flags override file values
+	cfg := hostconfig.LoadHostConfig()
+
 	var f hostFlags
 
-	flag.StringVar(&f.addr, "addr", defaultPort, "server listen address (UDP)")
-	flag.StringVar(&f.subnetStr, "subnet", "10.10.0.0/24", "virtual subnet (CIDR)")
-	flag.IntVar(&f.maxPlayers, "max", 10, "max players")
-	flag.StringVar(&f.roomPass, "password", "", "room password (empty = no auth)")
-	flag.StringVar(&f.tcpAddr, "tcp-addr", "", "TCP listen address for fallback (e.g. :4700), empty = disabled")
-	flag.BoolVar(&f.verbose, "verbose", false, "enable verbose relay logging")
-	flag.StringVar(&f.nameFlag, "name", "", "player name (default: hostname)")
-	flag.StringVar(&f.roomFlag, "room", "default", "room ID")
-	flag.StringVar(&f.langFlag, "lang", "zh", "language (zh or en)")
+	flag.StringVar(&f.addr, "addr", cfg.Addr, "server listen address (UDP)")
+	flag.StringVar(&f.subnetStr, "subnet", cfg.Subnet, "virtual subnet (CIDR)")
+	flag.IntVar(&f.maxPlayers, "max", cfg.MaxPlayers, "max players")
+	flag.StringVar(&f.roomPass, "password", cfg.RoomPass, "room password (empty = no auth)")
+	flag.StringVar(&f.tcpAddr, "tcp-addr", cfg.TCPAddr, "TCP listen address for fallback (e.g. :4700), empty = disabled")
+	flag.BoolVar(&f.verbose, "verbose", cfg.Verbose, "enable verbose relay logging")
+	flag.StringVar(&f.nameFlag, "name", cfg.PlayerName, "player name (default: hostname)")
+	flag.StringVar(&f.roomFlag, "room", cfg.RoomID, "room ID")
+	flag.StringVar(&f.langFlag, "lang", cfg.Lang, "language (zh or en)")
 
 	versionFlag := flag.Bool("version", false, "show version")
 	flag.Parse()
