@@ -317,6 +317,17 @@ All protocol packets include a CRC32 checksum; corrupted or tampered packets are
 
 - **No replay protection**: The protocol has no sequence numbers; CRC32 does not prevent replay attacks.
 
+### Server Protections
+
+- HMAC challenge-response authentication (password never transmitted)
+- End-to-end encryption (ChaCha20-Poly1305, password-derived key)
+- Rate limiting: 500 packets/sec per client
+- Registration rate limit: 5 registrations per IP per second
+- Per-IP connection limit: default 3 (configurable via `-max-per-ip`)
+- Unauthenticated connection cap: max players × 3
+- Source IP binding: relayed packets' srcIP must match the sender's virtual IP (prevents IP spoofing)
+- Username / room ID length limit: 32 characters
+
 ### TCP Fallback
 
 When UDP is blocked by firewalls, the client automatically falls back to TCP:
@@ -329,17 +340,6 @@ gtunnel-server -addr :4700 -tcp-addr :4700
 ```
 
 TCP fallback uses a transparent transport bridge — the game protocol is unaffected.
-
-### Server Protections
-
-- HMAC challenge-response authentication (password never transmitted)
-- End-to-end encryption (ChaCha20-Poly1305, password-derived key)
-- Rate limiting: 500 packets/sec per client
-- Registration rate limit: 5 registrations per IP per second
-- Per-IP connection limit: default 3 (configurable via `-max-per-ip`)
-- Unauthenticated connection cap: max players × 3
-- Source IP binding: relayed packets' srcIP must match the sender's virtual IP (prevents IP spoofing)
-- Username / room ID length limit: 32 characters
 
 ## How It Works
 
