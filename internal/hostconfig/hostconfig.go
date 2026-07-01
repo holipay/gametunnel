@@ -2,12 +2,11 @@
 package hostconfig
 
 import (
-	"fmt"
-	"net"
 	"os"
 	"path/filepath"
-	"strings"
+	"strconv"
 
+	"github.com/holipay/gametunnel/internal/iniconfig"
 	"github.com/holipay/gametunnel/internal/paths"
 )
 
@@ -52,68 +51,39 @@ func LoadHostConfig() *HostConfig {
 
 // loadHostINI parses a key=value config file into cfg. Returns true if file exists.
 func loadHostINI(path string, cfg *HostConfig) bool {
-	data, err := os.ReadFile(path)
-	if err != nil {
+	m, ok := iniconfig.ParseFile(path)
+	if !ok {
 		return false
 	}
-	var portOnly string
-	for _, line := range strings.Split(string(data), "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-		parts := strings.SplitN(line, "=", 2)
-		if len(parts) != 2 {
-			continue
-		}
-		key := strings.TrimSpace(parts[0])
-		value := strings.TrimSpace(parts[1])
-		switch key {
-		case "addr":
-			if value != "" {
-				cfg.Addr = value
-			}
-		case "subnet":
-			if value != "" {
-				cfg.Subnet = value
-			}
-		case "max":
-			var v int
-			if _, err := fmt.Sscanf(value, "%d", &v); err == nil && v > 0 {
-				cfg.MaxPlayers = v
-			}
-		case "password":
-			cfg.RoomPass = value
-		case "tcp-addr":
-			cfg.TCPAddr = value
-		case "verbose":
-			cfg.Verbose = value == "true" || value == "1"
-		case "name":
-			if value != "" {
-				cfg.PlayerName = value
-			}
-		case "room":
-			if value != "" {
-				cfg.RoomID = value
-			}
-		case "lang":
-			if value != "" {
-				cfg.Lang = value
-			}
-		case "port":
-			portOnly = value
+	if v := m["addr"]; v != "" {
+		cfg.Addr = v
+	}
+	if v := m["subnet"]; v != "" {
+		cfg.Subnet = v
+	}
+	if v := m["max"]; v != "" {
+		if max, err := strconv.Atoi(v); err == nil && max > 0 {
+			cfg.MaxPlayers = max
 		}
 	}
-	// Combine addr and port if addr has no port yet.
-	// If addr already includes a port (e.g. ":5000"), port= is ignored.
-	if cfg.Addr != "" && portOnly != "" {
-		if _, _, err := net.SplitHostPort(cfg.Addr); err != nil {
-			addr := cfg.Addr
-			if strings.HasPrefix(addr, "[") && strings.HasSuffix(addr, "]") {
-				addr = addr[1 : len(addr)-1]
-			}
-			cfg.Addr = net.JoinHostPort(addr, portOnly)
-		}
+	if v := m["password"]; v != "" {
+		cfg.RoomPass = v
 	}
+	if v := m["tcp-addr"]; v != "" {
+		cfg.TCPAddr = v
+	}
+	if v := m["verbose"]; v != "" {
+		cfg.Verbose = v == "true" || v == "1"
+	}
+	if v := m["name"]; v != "" {
+		cfg.PlayerName = v
+	}
+	if v := m["room"]; v != "" {
+		cfg.RoomID = v
+	}
+	if v := m["lang"]; v != "" {
+		cfg.Lang = v
+	}
+	cfg.Addr = iniconfig.CombinePort(cfg.Addr, m["port"])
 	return true
 }

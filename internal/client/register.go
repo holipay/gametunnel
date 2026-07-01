@@ -1,7 +1,6 @@
 package client
 
 import (
-	"github.com/holipay/gametunnel/internal/netkey"
 	"context"
 	"fmt"
 	"log"
@@ -9,9 +8,10 @@ import (
 	"time"
 
 	"github.com/holipay/gametunnel/internal/auth"
-	"github.com/holipay/gametunnel/internal/protocol"
 	"github.com/holipay/gametunnel/internal/crypto"
 	"github.com/holipay/gametunnel/internal/i18n"
+	"github.com/holipay/gametunnel/internal/netkey"
+	"github.com/holipay/gametunnel/internal/protocol"
 )
 
 // register performs the registration handshake with the server.
@@ -36,14 +36,12 @@ func (t *Tunnel) register(ctx context.Context, conn *net.UDPConn) error {
 	}()
 
 	const maxRetries = 3
-	const maxAuthRounds = 3
 	retries := 0
 	authRounds := 0
 	pendingPacket := packet
 
 	t.writeUDP(conn, pendingPacket, t.serverAddr.Load())
 
-	// Pre-allocate buffer for all readResponse calls during registration
 	respBuf := make([]byte, 1500)
 
 	for {
@@ -53,7 +51,6 @@ func (t *Tunnel) register(ctx context.Context, conn *net.UDPConn) error {
 		default:
 		}
 
-		// Wait for response (AssignIP, AuthChallenge, or Kick)
 		msg, err := t.readResponse(ctx, conn, respBuf)
 		if err != nil {
 			if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
@@ -71,38 +68,100 @@ func (t *Tunnel) register(ctx context.Context, conn *net.UDPConn) error {
 
 		retries = 0
 
-		switch msg.Type {
-		case protocol.TypeAssignIP:
-			return t.handleAssignIP(msg.Payload)
-		case protocol.TypeAuthChallenge:
-			authRounds++
-			if authRounds > maxAuthRounds {
-				return fmt.Errorf("%s", i18n.T().ErrTooManyAuth)
-			}
-			if err := t.handleAuthChallenge(conn, msg.Payload); err != nil {
-				return err
-			}
-			conn.SetReadDeadline(time.Now().Add(deadline))
-			continue
-		case protocol.TypeECDHExchange:
-			if err := t.handleECDHExchange(conn, msg.Payload); err != nil {
-				return err
-			}
-			conn.SetReadDeadline(time.Now().Add(deadline))
-			continue
-		case protocol.TypeKick:
-			kick, err := protocol.UnmarshalKick(msg.Payload)
-			if err != nil || kick == nil {
-				return fmt.Errorf("%s", i18n.T().ErrRejected)
-			}
-			return fmt.Errorf("%s", i18n.Format(i18n.T().ErrRejected, kick.Reason))
+		done, err := t.handleRegResponse(msg, conn, deadline, &authRounds)
+		if err != nil {
+			return err
 		}
+		if done {
+			return nil
+		}
+		conn.SetReadDeadline(time.Now().Add(deadline))
 	}
 }
 
+// registerTCP performs registration over TCP transport.
+// Used when UDP is blocked (e.g. strict firewalls).
+func (t *Tunnel) registerTCP(ctx context.Context) error {
+	reg := &protocol.RegisterPayload{
+		RoomID:   t.session.roomID,
+		Username: t.session.username,
+		Version:  protocol.AppVersion,
+	}
+	packet := protocol.EncodeChecked(protocol.TypeRegister, reg.Marshal())
+
+	if err := t.tcpTransport.Send(packet); err != nil {
+		return fmt.Errorf("tcp send register: %w", err)
+	}
+
+	deadline := 10 * time.Second
+	timer := time.NewTimer(deadline)
+	defer timer.Stop()
+
+	authRounds := 0
+
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-timer.C:
+			return fmt.Errorf("TCP registration timeout")
+		default:
+		}
+
+		data, err := t.tcpTransport.Receive()
+		if err != nil {
+			return fmt.Errorf("tcp receive: %w", err)
+		}
+
+		msg, err := protocol.DecodeChecked(data)
+		if err != nil {
+			continue
+		}
+
+		done, err := t.handleRegResponse(msg, nil, deadline, &authRounds)
+		if err != nil {
+			return err
+		}
+		if done {
+			return nil
+		}
+		timer.Reset(deadline)
+	}
+}
+
+// handleRegResponse processes a single registration response message.
+// Returns done=true if the registration is complete (assigned IP or kicked).
+// conn is nil for TCP transport.
+func (t *Tunnel) handleRegResponse(msg *protocol.Message, conn *net.UDPConn, deadline time.Duration, authRounds *int) (done bool, err error) {
+	const maxAuthRounds = 3
+	switch msg.Type {
+	case protocol.TypeAssignIP:
+		return true, t.handleAssignIP(msg.Payload)
+	case protocol.TypeAuthChallenge:
+		*authRounds++
+		if *authRounds > maxAuthRounds {
+			return true, fmt.Errorf("%s", i18n.T().ErrTooManyAuth)
+		}
+		if err := t.handleAuthChallenge(conn, msg.Payload); err != nil {
+			return false, err
+		}
+		return false, nil
+	case protocol.TypeECDHExchange:
+		if err := t.handleECDHExchange(conn, msg.Payload); err != nil {
+			return false, err
+		}
+		return false, nil
+	case protocol.TypeKick:
+		kick, err := protocol.UnmarshalKick(msg.Payload)
+		if err != nil || kick == nil {
+			return true, fmt.Errorf("%s", i18n.T().ErrRejected)
+		}
+		return true, fmt.Errorf("%s", i18n.Format(i18n.T().ErrRejected, kick.Reason))
+	}
+	return false, nil
+}
+
 // readResponse reads and decodes one protocol message from the server.
-// Caller must provide a reusable buffer (typically 1500 bytes).
-// conn is passed explicitly to avoid races with Connect() reassigning t.conn.
 func (t *Tunnel) readResponse(ctx context.Context, conn *net.UDPConn, buf []byte) (*protocol.Message, error) {
 	select {
 	case <-ctx.Done():
@@ -328,75 +387,4 @@ func (t *Tunnel) handleECDHExchange(conn *net.UDPConn, payload []byte) error {
 
 	log.Printf("[ecdh] session key negotiated")
 	return nil
-}
-
-// registerTCP performs registration over TCP transport.
-// Used when UDP is blocked (e.g. strict firewalls).
-// The protocol is identical to UDP registration but uses TCP framing.
-func (t *Tunnel) registerTCP(ctx context.Context) error {
-	reg := &protocol.RegisterPayload{
-		RoomID:   t.session.roomID,
-		Username: t.session.username,
-		Version:  protocol.AppVersion,
-	}
-	packet := protocol.EncodeChecked(protocol.TypeRegister, reg.Marshal())
-
-	if err := t.tcpTransport.Send(packet); err != nil {
-		return fmt.Errorf("tcp send register: %w", err)
-	}
-
-	// Read response via TCP
-	deadline := 10 * time.Second
-	timer := time.NewTimer(deadline)
-	defer timer.Stop()
-
-	const maxAuthRounds = 3
-	authRounds := 0
-
-	for {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-timer.C:
-			return fmt.Errorf("TCP registration timeout")
-		default:
-		}
-
-		data, err := t.tcpTransport.Receive()
-		if err != nil {
-			return fmt.Errorf("tcp receive: %w", err)
-		}
-
-		msg, err := protocol.DecodeChecked(data)
-		if err != nil {
-			continue
-		}
-
-		switch msg.Type {
-		case protocol.TypeAssignIP:
-			return t.handleAssignIP(msg.Payload)
-		case protocol.TypeAuthChallenge:
-			authRounds++
-			if authRounds > maxAuthRounds {
-				return fmt.Errorf("%s", i18n.T().ErrTooManyAuth)
-			}
-			if err := t.handleAuthChallenge(nil, msg.Payload); err != nil {
-				return err
-			}
-			timer.Reset(deadline)
-			continue
-		case protocol.TypeECDHExchange:
-			if err := t.handleECDHExchange(nil, msg.Payload); err != nil {
-				return err
-			}
-			timer.Reset(deadline)
-			continue
-		case protocol.TypeKick:
-			kick, err := protocol.UnmarshalKick(msg.Payload)
-			if err != nil || kick == nil {
-				return fmt.Errorf("%s", i18n.T().ErrRejected)
-			}
-			return fmt.Errorf("%s", i18n.Format(i18n.T().ErrRejected, kick.Reason))
-		}
-	}
 }
