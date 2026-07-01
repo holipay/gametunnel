@@ -104,18 +104,15 @@ func loadHostINI(path string, cfg *HostConfig) bool {
 			portOnly = value
 		}
 	}
-	// Combine addr and port if both are specified separately
+	// Combine addr and port if addr has no port yet.
+	// If addr already includes a port (e.g. ":5000"), port= is ignored.
 	if cfg.Addr != "" && portOnly != "" {
-		host, _, err := net.SplitHostPort(cfg.Addr)
-		if err != nil {
-			// Addr has no port yet — append it
+		if _, _, err := net.SplitHostPort(cfg.Addr); err != nil {
 			addr := cfg.Addr
 			if strings.HasPrefix(addr, "[") && strings.HasSuffix(addr, "]") {
 				addr = addr[1 : len(addr)-1]
 			}
 			cfg.Addr = net.JoinHostPort(addr, portOnly)
-		} else {
-			_ = host
 		}
 	}
 	return true
