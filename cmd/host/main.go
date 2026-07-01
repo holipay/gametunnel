@@ -24,6 +24,7 @@ import (
 	"github.com/holipay/gametunnel/internal/i18n"
 	"github.com/holipay/gametunnel/internal/logfile"
 	"github.com/holipay/gametunnel/internal/server"
+	"github.com/holipay/gametunnel/internal/singleinstance"
 )
 
 // Build info, set at build time via -ldflags.
@@ -93,10 +94,15 @@ func parseAndStart() (*client.Config, func(client.TunConfig) (client.TunDevice, 
 		playerName = hostname
 	}
 
-	// Start server
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	// Single-instance check
+	lock, err := singleinstance.Acquire("GameTunnel-Host")
+	if err != nil {
+		log.Fatalf("single instance: %v", err)
+	}
+	defer lock.Close()
 
+	// Start server — use Background context since the server manages its
+	// own lifecycle via Close(); the caller must not cancel this context.
 	s, err := server.New(server.Config{
 		Addr:       f.addr,
 		Subnet:     subnet,
@@ -111,7 +117,7 @@ func parseAndStart() (*client.Config, func(client.TunConfig) (client.TunDevice, 
 		log.Fatalf("server start: %v", err)
 	}
 
-	go s.Run(ctx)
+	go s.Run(context.Background())
 	s.WaitReady()
 	log.Printf("[host] server started on %s", f.addr)
 

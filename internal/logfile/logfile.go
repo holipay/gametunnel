@@ -10,11 +10,11 @@ import (
 	"github.com/holipay/gametunnel/internal/paths"
 )
 
-// MaxLogSize is the maximum log file size before rotation (1 MB).
-const MaxLogSize = 1 * 1024 * 1024
+// maxLogSize is the maximum log file size before rotation (1 MB).
+const maxLogSize = 1 * 1024 * 1024
 
 // Setup creates the log directory, rotates the log file if it exceeds
-// MaxLogSize, and sets log output to both the file and stderr.
+// maxLogSize, and sets log output to both the file and stderr.
 // Returns the log file handle (caller must close).
 func Setup() *os.File {
 	logDir := paths.GameTunnelDir()
@@ -26,7 +26,7 @@ func Setup() *os.File {
 	logPath := filepath.Join(logDir, "gametunnel.log")
 	logBackup := filepath.Join(logDir, "gametunnel.log.1")
 
-	if info, err := os.Stat(logPath); err == nil && info.Size() > MaxLogSize {
+	if info, err := os.Stat(logPath); err == nil && info.Size() > maxLogSize {
 		os.Remove(logBackup)
 		if err := os.Rename(logPath, logBackup); err != nil {
 			log.Printf("rotate log: %v", err)
