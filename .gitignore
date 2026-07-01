@@ -12,3 +12,4 @@ nul
 /server
 /host
 vendor/
+*.syso

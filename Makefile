@@ -7,9 +7,10 @@
 
 BINARY_DIR := bin
 SERVER := $(BINARY_DIR)/gtunnel-server-linux-amd64
-VERSION    := $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
-COMMIT     := $(shell git rev-parse --short HEAD 2>/dev/null || echo "unknown")
-BUILD_TIME := $(shell date -u '+%Y-%m-%dT%H:%M:%SZ')
+VERSION       := $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
+COMMIT        := $(shell git rev-parse --short HEAD 2>/dev/null || echo "unknown")
+BUILD_TIME    := $(shell date -u '+%Y-%m-%dT%H:%M:%SZ')
+GEN_VERSIONINFO := scripts/gen-versioninfo.sh
 LDFLAGS    := -ldflags "-s -w \
 	-X main.Version=$(VERSION) \
 	-X main.Commit=$(COMMIT) \
@@ -33,11 +34,15 @@ server-linux-armv7:
 
 server-windows-amd64:
 	@mkdir -p $(BINARY_DIR)
+	$(GEN_VERSIONINFO) cmd/server "gtunnel-server-windows-amd64.exe" "GameTunnel Server" $(VERSION) 64
 	CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -mod=vendor $(LDFLAGS) -o $(BINARY_DIR)/gtunnel-server-windows-amd64.exe ./cmd/server
+	@rm -f cmd/server/versioninfo.syso
 
 server-windows-x86:
 	@mkdir -p $(BINARY_DIR)
+	$(GEN_VERSIONINFO) cmd/server "gtunnel-server-windows-x86.exe" "GameTunnel Server (x86)" $(VERSION) 32
 	CGO_ENABLED=0 GOOS=windows GOARCH=386 go build -mod=vendor $(LDFLAGS) -o $(BINARY_DIR)/gtunnel-server-windows-x86.exe ./cmd/server
+	@rm -f cmd/server/versioninfo.syso
 
 # ── Server (OpenWrt) ──────────────────────────────────────────
 # 中高端 OpenWrt 设备：NanoPi R2S/R4S/R5S, 树莓派 4/5, GL.iNet 等
@@ -60,11 +65,15 @@ install-server: server
 
 client:
 	@mkdir -p $(BINARY_DIR)
+	$(GEN_VERSIONINFO) cmd/client "gtunnel-client.exe" "GameTunnel Client" $(VERSION) 64
 	CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -mod=vendor $(LDFLAGS) -o $(BINARY_DIR)/gtunnel-client.exe ./cmd/client
+	@rm -f cmd/client/versioninfo.syso
 
 client-windows-x86:
 	@mkdir -p $(BINARY_DIR)
+	$(GEN_VERSIONINFO) cmd/client "gtunnel-client.exe" "GameTunnel Client (x86)" $(VERSION) 32
 	CGO_ENABLED=0 GOOS=windows GOARCH=386 go build -mod=vendor $(LDFLAGS) -o $(BINARY_DIR)/gtunnel-client-windows-x86.exe ./cmd/client
+	@rm -f cmd/client/versioninfo.syso
 
 # 所有平台客户端
 client-all: client client-windows-x86
@@ -85,7 +94,9 @@ host-linux-amd64:
 
 host-windows-amd64:
 	@mkdir -p $(BINARY_DIR)
+	$(GEN_VERSIONINFO) cmd/host "gtunnel-host.exe" "GameTunnel Host" $(VERSION) 64
 	CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -mod=vendor $(LDFLAGS) -o $(BINARY_DIR)/gtunnel-host.exe ./cmd/host
+	@rm -f cmd/host/versioninfo.syso
 
 # ── Dev / Test ─────────────────────────────────────────────────
 
@@ -163,3 +174,4 @@ release-openwrt: server-openwrt-arm64 server-openwrt-armv7
 
 clean:
 	rm -rf $(BINARY_DIR)
+	rm -f cmd/client/versioninfo.syso cmd/host/versioninfo.syso cmd/server/versioninfo.syso
