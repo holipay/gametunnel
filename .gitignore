@@ -10,4 +10,5 @@ nul
 .mimocode/
 /client
 /server
+/host
 vendor/
