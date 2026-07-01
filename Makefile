@@ -3,7 +3,7 @@
 # Server: Linux / OpenWrt
 # Client: Windows
 
-.PHONY: all server client client-all clean install-server release release-client release-server release-openwrt test bench server-openwrt server-openwrt-arm64 server-openwrt-armv7 vendor vendor-check
+.PHONY: all server client host client-all clean install-server release release-client release-server release-openwrt test bench server-openwrt server-openwrt-arm64 server-openwrt-armv7 vendor vendor-check
 
 BINARY_DIR := bin
 SERVER := $(BINARY_DIR)/gtunnel-server-linux-amd64
@@ -72,6 +72,20 @@ client-all: client client-windows-x86
 client-linux-amd64:
 	@mkdir -p $(BINARY_DIR)
 	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -mod=vendor $(LDFLAGS) -o $(BINARY_DIR)/gtunnel-client-linux-amd64 ./cmd/client
+
+# ── Host (Server + Client) ─────────────────────────────────────
+
+host:
+	@mkdir -p $(BINARY_DIR)
+	CGO_ENABLED=0 go build -mod=vendor $(LDFLAGS) -o $(BINARY_DIR)/gtunnel-host ./cmd/host
+
+host-linux-amd64:
+	@mkdir -p $(BINARY_DIR)
+	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -mod=vendor $(LDFLAGS) -o $(BINARY_DIR)/gtunnel-host-linux-amd64 ./cmd/host
+
+host-windows-amd64:
+	@mkdir -p $(BINARY_DIR)
+	CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -mod=vendor $(LDFLAGS) -o $(BINARY_DIR)/gtunnel-host.exe ./cmd/host
 
 # ── Dev / Test ─────────────────────────────────────────────────
 
