@@ -93,6 +93,51 @@ lang=en
 
 Once connected, launch your game and enter LAN mode.
 
+### Host Mode
+
+One player runs both server and client in a single process. Other players connect directly to the host's public IP. No separate VPS required.
+
+```bash
+# Build
+go build -o gtunnel-host ./cmd/host
+
+# Run (requires root for TUN device)
+sudo ./gtunnel-host -password myroom -name HostPlayer
+```
+
+Config file `host.ini` (located next to the executable):
+
+```ini
+# Server config
+addr=:4700
+subnet=10.10.0.0/24
+max=10
+password=myroom
+tcp-addr=
+verbose=false
+
+# Client config
+name=HostPlayer
+room=default
+lang=en
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `-addr` | `:4700` | Server listen address |
+| `-subnet` | `10.10.0.0/24` | Virtual subnet |
+| `-max` | `10` | Max players |
+| `-password` | _(empty)_ | Room password |
+| `-tcp-addr` | _(empty)_ | TCP fallback listen address (empty = disabled) |
+| `-verbose` | `false` | Verbose logging |
+| `-name` | Computer name | Player name |
+| `-room` | `default` | Room ID |
+| `-lang` | `zh` | Language |
+
+Config priority: CLI flags > `host.ini` > defaults
+
+After starting, other players set `server=host-public-ip:4700` in their `config.ini` to connect.
+
 ## Status Page
 
 The server includes a built-in HTTP status page for viewing online players, latency, packet loss, and other real-time information.
@@ -251,9 +296,10 @@ The password is never transmitted over the network. Even if a MITM intercepts th
 
 #### End-to-End Encryption (E2E Encryption)
 
-With a password set, all game data is automatically encrypted with **ChaCha20-Poly1305**:
+With a password set, all game data is automatically encrypted with **ChaCha20-Poly1305**, with **ECDH** forward secrecy:
 
 - **Key derivation**: HKDF-SHA256(password, info="GameTunnel:"+roomID) → 32-byte key
+- **Forward secrecy**: ECDH (X25519) key exchange — ephemeral key pairs generated per connection
 - **Algorithm**: ChaCha20-Poly1305 (AEAD, 256-bit key + 128-bit auth tag)
 - **Nonce design**: 8-byte incrementing counter + 4-byte direction tag (prevents nonce reuse between send/receive)
 - **Server transparency**: Server only relays encrypted bytes — it cannot decrypt game data
@@ -270,7 +316,19 @@ All protocol packets include a CRC32 checksum; corrupted or tampered packets are
 ### Known Limitations
 
 - **No replay protection**: The protocol has no sequence numbers; CRC32 does not prevent replay attacks.
-- **No forward secrecy**: If the password is compromised, historical traffic can be decrypted. Use WireGuard for forward secrecy.
+
+### TCP Fallback
+
+When UDP is blocked by firewalls, the client automatically falls back to TCP:
+
+```bash
+# Server: enable TCP fallback
+gtunnel-server -addr :4700 -tcp-addr :4700
+
+# Client: automatically attempts TCP after UDP failure
+```
+
+TCP fallback uses a transparent transport bridge — the game protocol is unaffected.
 
 ### Server Protections
 
@@ -292,14 +350,15 @@ Player A (10.10.0.2)           Player B (10.10.0.3)
   │  (10.10.0.2/24)                │  (10.10.0.3/24)
   │                                │
   └──UDP tunnel──►  Public VPS  ◄──UDP tunnel──┘
-                   (10.10.0.1)
-                   Signaling + Relay + Broadcast
+                   (10.10.0.1)         │
+                   Signaling + Relay    └── TCP fallback (when UDP is blocked)
 ```
 
 - Everyone gets a 10.10.0.x virtual IP
 - UDP broadcasts are forwarded by the server to all players in the same room
 - Automatic UDP hole punching for P2P direct connection
 - Falls back to server relay if hole punching fails (acceptable latency for ≤10 players)
+- Automatically falls back to TCP when UDP is blocked by firewalls
 
 ### P2P Direct Connection (UDP Hole Punching)
 
@@ -330,6 +389,7 @@ gtunnel-server -addr :4700 -subnet 10.10.0.0/24 -max 10 -password secret
 | `-subnet` | `10.10.0.0/24` | Virtual subnet (only /24 supported) |
 | `-max` | `10` | Max players |
 | `-password` | _(empty)_ | Room password (empty = no auth, no encryption) |
+| `-tcp-addr` | _(empty)_ | TCP fallback listen address (e.g. `:4700`, empty = disabled) |
 | `-rooms` | `false` | Multi-room mode (each room gets independent subnet) |
 | `-bandwidth` | `0` | Per-client outbound bandwidth limit in bytes/sec (0 = default 10Mbps) |
 | `-state-dir` | _(disabled)_ | Room state persistence directory (survives restarts) |
@@ -432,6 +492,9 @@ A: Linux requires root privileges to create a virtual NIC. Run with `sudo ./gtun
 **Q: How do I check server status?**
 A: Use `-status-addr :4701` to enable the status page, then access via browser or curl. See the "Status Page" section above.
 
+**Q: What is host mode? How is it different from running a separate server?**
+A: Host mode (`gtunnel-host`) combines the server and client into a single process. The host player is both server and client — other players connect directly to the host's public IP. Ideal when you don't have a separate VPS. Note: the host player also needs root privileges for the TUN device.
+
 ## Development
 
 ### Requirements
@@ -444,6 +507,7 @@ A: Use `-status-addr :4701` to enable the status page, then access via browser o
 # Build directly with go (recommended, no make needed)
 go build -o bin/gtunnel-server ./cmd/server
 go build -o bin/gtunnel-client.exe ./cmd/client     # Linux native build
+go build -o bin/gtunnel-host ./cmd/host              # Host mode
 GOOS=windows GOARCH=amd64 go build -o bin/gtunnel-client.exe ./cmd/client  # cross-compile for Windows
 
 # Or use make (convenient for batch builds and releases)
