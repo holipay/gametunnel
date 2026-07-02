@@ -48,6 +48,15 @@ type hostFlags struct {
 	nameFlag   string
 	roomFlag   string
 	langFlag   string
+	// Server-side flags
+	maxPerIP       int
+	bandwidthLimit int
+	stateDir       string
+	statusAddr     string
+	statusToken    string
+	multiRoom      bool
+	maxRooms       int
+	logFile        string
 }
 
 // parseAndStart parses CLI flags (overriding config file values), creates
@@ -67,6 +76,14 @@ func parseAndStart() (*client.Config, func(client.TunConfig) (client.TunDevice, 
 	flag.StringVar(&f.nameFlag, "name", cfg.PlayerName, "player name (default: hostname)")
 	flag.StringVar(&f.roomFlag, "room", cfg.RoomID, "room ID")
 	flag.StringVar(&f.langFlag, "lang", cfg.Lang, "language (zh or en)")
+	flag.IntVar(&f.maxPerIP, "max-per-ip", cfg.MaxPerIP, "max connections per IP")
+	flag.IntVar(&f.bandwidthLimit, "bandwidth-limit", cfg.BandwidthLimit, "per-client bandwidth limit (bytes/sec, 0 = unlimited)")
+	flag.StringVar(&f.stateDir, "state-dir", cfg.StateDir, "state persistence directory (empty = disabled)")
+	flag.StringVar(&f.statusAddr, "status-addr", cfg.StatusAddr, "status page HTTP address (empty = disabled)")
+	flag.StringVar(&f.statusToken, "status-token", cfg.StatusToken, "status page access token (empty = no auth)")
+	flag.BoolVar(&f.multiRoom, "rooms", cfg.MultiRoom, "enable multi-room mode")
+	flag.IntVar(&f.maxRooms, "max-rooms", cfg.MaxRooms, "max auto-created rooms in multi-room mode")
+	flag.StringVar(&f.logFile, "log-file", cfg.LogFile, "log file path (empty = stderr only)")
 
 	versionFlag := flag.Bool("version", false, "show version")
 	flag.Parse()
@@ -108,14 +125,21 @@ func parseAndStart() (*client.Config, func(client.TunConfig) (client.TunDevice, 
 	// Start server — use Background context since the server manages its
 	// own lifecycle via Close(); the caller must not cancel this context.
 	s, err := server.New(server.Config{
-		Addr:       f.addr,
-		Subnet:     subnet,
-		MaxPlayers: f.maxPlayers,
-		RoomPass:   f.roomPass,
-		Version:    Version,
-		Lang:       i18n.ParseLang(f.langFlag),
-		TCPAddr:    f.tcpAddr,
-		Verbose:    f.verbose,
+		Addr:          f.addr,
+		Subnet:        subnet,
+		MaxPlayers:    f.maxPlayers,
+		RoomPass:      f.roomPass,
+		Version:       Version,
+		Lang:          i18n.ParseLang(f.langFlag),
+		TCPAddr:       f.tcpAddr,
+		Verbose:       f.verbose,
+		MaxPerIP:       f.maxPerIP,
+		BandwidthLimit: f.bandwidthLimit,
+		StateDir:       f.stateDir,
+		StatusAddr:     f.statusAddr,
+		StatusToken:    f.statusToken,
+		MultiRoom:      f.multiRoom,
+		MaxRooms:       f.maxRooms,
 	})
 	if err != nil {
 		log.Fatalf("server start: %v", err)
@@ -136,6 +160,8 @@ func parseAndStart() (*client.Config, func(client.TunConfig) (client.TunDevice, 
 		RoomPassword: f.roomPass,
 		Lang:         f.langFlag,
 		MTU:          client.DefaultMTU,
+		LogFile:      f.logFile,
+		Verbose:      f.verbose,
 	}
 	if err := clientCfg.Validate(); err != nil {
 		log.Fatalf("client config: %v", err)
@@ -146,7 +172,7 @@ func parseAndStart() (*client.Config, func(client.TunConfig) (client.TunDevice, 
 
 // run is the shared entry point called from platform-specific main().
 func run(cfg *client.Config, tunFactory func(client.TunConfig) (client.TunDevice, error), s *server.Server) {
-	logFile := logfile.Setup()
+	logFile := logfile.Setup(cfg.LogFile)
 	defer func() {
 		if logFile != os.Stderr {
 			logFile.Close()

@@ -15,16 +15,21 @@ const maxLogSize = 1 * 1024 * 1024
 
 // Setup creates the log directory, rotates the log file if it exceeds
 // maxLogSize, and sets log output to both the file and stderr.
+// If path is empty, defaults to [GameTunnelDir]/gametunnel.log.
 // Returns the log file handle (caller must close).
-func Setup() *os.File {
-	logDir := paths.GameTunnelDir()
-	if err := os.MkdirAll(logDir, 0755); err != nil {
+func Setup(path string) *os.File {
+	if path == "" {
+		logDir := paths.GameTunnelDir()
+		path = filepath.Join(logDir, "gametunnel.log")
+	}
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0755); err != nil {
 		log.SetOutput(os.Stderr)
 		log.Printf("create log dir: %v", err)
 		return os.Stderr
 	}
-	logPath := filepath.Join(logDir, "gametunnel.log")
-	logBackup := filepath.Join(logDir, "gametunnel.log.1")
+	logPath := path
+	logBackup := logPath + ".1"
 
 	if info, err := os.Stat(logPath); err == nil && info.Size() > maxLogSize {
 		os.Remove(logBackup)

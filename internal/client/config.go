@@ -32,6 +32,8 @@ type Config struct {
 	RoomPassword string
 	Lang         string // "zh" or "en", default "zh"
 	MTU          int    // tunnel MTU, default DefaultMTU
+	LogFile      string // log file path, empty = stderr only
+	Verbose      bool   // enable verbose logging
 }
 
 // DefaultConfig returns a Config with default values.
@@ -41,7 +43,7 @@ func DefaultConfig() *Config {
 		PlayerName: hostname,
 		RoomID:     "default",
 		Lang:       "zh",
-		MTU:        DefaultMTU,
+		MTU: DefaultMTU,
 	}
 }
 
@@ -157,8 +159,12 @@ func SaveConfig(cfg *Config) error {
 	fmt.Fprintf(&b, "password=%s\n", cfg.RoomPassword)
 	fmt.Fprintln(&b, "# Language (zh or en)")
 	fmt.Fprintf(&b, "lang=%s\n", cfg.Lang)
-	fmt.Fprintln(&b, "# Tunnel MTU (576-9000, default DefaultMTU)")
+	fmt.Fprintln(&b, "# Tunnel MTU (576-9000, default 1400)")
 	fmt.Fprintf(&b, "mtu=%d\n", cfg.MTU)
+	fmt.Fprintln(&b, "# Log file path (empty = stderr only)")
+	fmt.Fprintf(&b, "log-file=%s\n", cfg.LogFile)
+	fmt.Fprintln(&b, "# Verbose logging (true / false)")
+	fmt.Fprintf(&b, "verbose=%v\n", cfg.Verbose)
 	return os.WriteFile(path, []byte(b.String()), 0600)
 }
 
@@ -199,6 +205,12 @@ func loadINI(path string, cfg *Config) bool {
 			cfg.MTU = mtu
 		}
 	}
+	if v := m["log-file"]; v != "" {
+		cfg.LogFile = v
+	}
+	if v := m["verbose"]; v != "" {
+		cfg.Verbose = v == "true" || v == "1"
+	}
 	cfg.ServerAddr = iniconfig.CombinePort(cfg.ServerAddr, m["port"])
 	return true
 }
@@ -217,6 +229,8 @@ func loadJSON(path string, cfg *Config) {
 		AutoConnect  *bool  `json:"auto_connect,omitempty"`
 		Lang         string `json:"lang,omitempty"`
 		MTU          int    `json:"mtu,omitempty"`
+		LogFile      string `json:"log_file,omitempty"`
+		Verbose      *bool  `json:"verbose,omitempty"`
 	}
 	var r raw
 	if json.Unmarshal(data, &r) == nil {
@@ -235,6 +249,12 @@ func loadJSON(path string, cfg *Config) {
 		}
 		if r.MTU >= MinMTU && r.MTU <= MaxMTU {
 			cfg.MTU = r.MTU
+		}
+		if r.LogFile != "" {
+			cfg.LogFile = r.LogFile
+		}
+		if r.Verbose != nil {
+			cfg.Verbose = *r.Verbose
 		}
 	}
 }

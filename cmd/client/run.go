@@ -24,7 +24,7 @@ var (
 // run is the cross-platform entry point. It loads config, connects to the
 // server, and blocks until SIGINT/SIGTERM.
 func run(cfg *client.Config, tunFactory func(client.TunConfig) (client.TunDevice, error)) {
-	logFile := logfile.Setup()
+	logFile := logfile.Setup(cfg.LogFile)
 	defer func() {
 		if logFile != os.Stderr {
 			logFile.Close()
