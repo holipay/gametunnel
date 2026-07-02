@@ -39,6 +39,7 @@ type Server struct {
 	closeMu    sync.Mutex
 	ctx        context.Context // stored for use in packet handlers
 	cancelCtx  context.CancelFunc // cancels ctx on Close()
+	runWg      sync.WaitGroup // tracks the main read loop goroutine
 
 	// Worker pool
 	workers int
@@ -302,6 +303,10 @@ func (s *Server) Run(ctx context.Context) {
 	// background goroutines have been launched.
 	close(s.ready)
 
+	// Track the main read loop for clean shutdown
+	s.runWg.Add(1)
+	defer s.runWg.Done()
+
 	buf := make([]byte, 65535)
 	for {
 		n, remoteAddr, err := s.conn.ReadFromUDP(buf)
@@ -320,6 +325,7 @@ func (s *Server) Run(ctx context.Context) {
 
 		if !s.checkRate(remoteAddr) {
 			s.totalPacketsDropped.Add(1)
+			s.logDrop("rate limit")
 			continue
 		}
 
@@ -332,6 +338,7 @@ func (s *Server) Run(ctx context.Context) {
 			// channel full — drop (backpressure), return buffer to pool
 			pool.PktBufPut(pkt)
 			s.totalPacketsDropped.Add(1)
+			s.logDrop("channel full")
 		}
 	}
 }
@@ -347,6 +354,10 @@ func (s *Server) Close() error {
 	if cancel != nil {
 		cancel()
 	}
+
+	// Wait for the main read loop to exit before closing the connection.
+	// This eliminates the race between Close() closing conn and Run() reading from it.
+	s.runWg.Wait()
 
 	// Notify all clients before shutting down
 	s.roomMu.RLock()
@@ -387,6 +398,18 @@ func (s *Server) SetPprofListener(l net.Listener) {
 // and all background goroutines have been started.
 func (s *Server) WaitReady() {
 	<-s.ready
+}
+
+// dropLogThrottle rate-limits drop logging to avoid flooding the log.
+var dropLogThrottle = time.Second
+
+// logDrop logs a packet drop event at most once per second.
+func (s *Server) logDrop(reason string) {
+	total := s.totalPacketsDropped.Load()
+	// Log on the first drop, then every 1000 drops
+	if total == 1 || total%1000 == 0 {
+		log.Printf("[server] packet dropped (%s): total=%d", reason, total)
+	}
 }
 
 // ── Worker Pool ────────────────────────────────────────────────
