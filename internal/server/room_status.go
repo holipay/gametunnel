@@ -149,13 +149,15 @@ func (r *Room) SnapshotState() RoomState {
 func (r *Room) resolveRestoredClient(username string, roomID string, from *net.UDPAddr) *Client {
 	clientIP := addrToConnIPKey(from)
 
-	// Enforce maxPerIP for restored clients too
+	// Enforce maxPerIP for restored clients too.
+	// Increment immediately under the same lock to prevent TOCTOU race.
 	r.ipConnMu.Lock()
 	ipCount := r.ipConnCount[clientIP]
 	if ipCount >= r.maxPerIP {
 		r.ipConnMu.Unlock()
 		return nil
 	}
+	r.ipConnCount[clientIP]++
 	r.ipConnMu.Unlock()
 
 	// Look for a placeholder client with matching username and roomID, and no PublicAddr
@@ -166,13 +168,11 @@ func (r *Room) resolveRestoredClient(username string, roomID string, from *net.U
 			c.SetLastSeen(time.Now())
 			r.addrMap[netkey.AddrToRateKey(from)] = c
 
-			// Track per-IP connection count (checked above)
-			r.ipConnMu.Lock()
-			r.ipConnCount[clientIP]++
-			r.ipConnMu.Unlock()
-
 			return c
 		}
 	}
+
+	// No matching client found, rollback the IP count increment
+	r.decrementIPConnCount(clientIP)
 	return nil
 }
