@@ -64,9 +64,6 @@ func (t *Tunnel) handlePeerInfo(ctx context.Context, payload []byte) {
 
 	// Mark all existing peers as stale, then update/add from the broadcast.
 	// After processing, remove any peers still marked stale (they left).
-	if t.peers == nil {
-		t.peers = make(map[[16]byte]*Peer, len(info.Peers))
-	}
 
 	// Phase 1: Mark all existing peers as stale
 	for _, peer := range t.peers {

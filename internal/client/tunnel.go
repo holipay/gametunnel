@@ -47,7 +47,7 @@ type Peer struct {
 	DirectReach   atomic.Bool               // true if P2P direct path has been confirmed
 	lastSeen      atomic.Int64 // last time server reported this peer (UnixNano)
 	lastPunchBack atomic.Pointer[time.Time] // rate limit for hole punch responses
-	stale         bool          // temporary flag used during handlePeerInfo mark-and-sweep
+	stale         bool          // mark-and-sweep flag, only valid under t.mu in handlePeerInfo (not atomic)
 }
 
 // tryRateLimitHolePunch checks and updates the hole-punch rate limiter.
