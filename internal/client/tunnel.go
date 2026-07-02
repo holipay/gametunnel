@@ -303,7 +303,7 @@ func (t *Tunnel) ensureTUN(mtu int) error {
 
 	switch {
 	case tunAlive && !ipChanged:
-		log.Printf("%s", i18n.Format(i18n.T().LogReuseTUN, t.session.virtualIP))
+		log.Printf("%s", i18n.Format(i18n.T().LogRecreateTUN, t.session.virtualIP))
 		if v := t.tunDev.Load(); v != nil {
 			v.(TunDevice).Close()
 		}
