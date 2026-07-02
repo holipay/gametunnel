@@ -39,6 +39,7 @@ type Server struct {
 	closeMu    sync.Mutex
 	ctx        context.Context // stored for use in packet handlers
 	cancelCtx  context.CancelFunc // cancels ctx on Close()
+	runWg      sync.WaitGroup // tracks the main read loop goroutine
 
 	// Worker pool
 	workers int
@@ -298,6 +299,12 @@ func (s *Server) Run(ctx context.Context) {
 		go s.tcpAcceptLoop(ctx)
 	}
 
+	// Track the main read loop for clean shutdown.
+	// Add(1) must happen before close(s.ready) so that Close() never
+	// observes an empty WaitGroup while the read loop is still starting.
+	s.runWg.Add(1)
+	defer s.runWg.Done()
+
 	// Signal readiness — the server's UDP socket is bound and all
 	// background goroutines have been launched.
 	close(s.ready)
@@ -320,6 +327,7 @@ func (s *Server) Run(ctx context.Context) {
 
 		if !s.checkRate(remoteAddr) {
 			s.totalPacketsDropped.Add(1)
+			s.logDrop("rate limit")
 			continue
 		}
 
@@ -332,6 +340,7 @@ func (s *Server) Run(ctx context.Context) {
 			// channel full — drop (backpressure), return buffer to pool
 			pool.PktBufPut(pkt)
 			s.totalPacketsDropped.Add(1)
+			s.logDrop("channel full")
 		}
 	}
 }
@@ -347,6 +356,10 @@ func (s *Server) Close() error {
 	if cancel != nil {
 		cancel()
 	}
+
+	// Wait for the main read loop to exit before closing the connection.
+	// This eliminates the race between Close() closing conn and Run() reading from it.
+	s.runWg.Wait()
 
 	// Notify all clients before shutting down
 	s.roomMu.RLock()
@@ -387,6 +400,14 @@ func (s *Server) SetPprofListener(l net.Listener) {
 // and all background goroutines have been started.
 func (s *Server) WaitReady() {
 	<-s.ready
+}
+
+// logDrop logs a packet drop event: first drop, then every 1000 drops.
+func (s *Server) logDrop(reason string) {
+	total := s.totalPacketsDropped.Load()
+	if total == 1 || total%1000 == 0 {
+		log.Printf("[server] packet dropped (%s): total=%d", reason, total)
+	}
 }
 
 // ── Worker Pool ────────────────────────────────────────────────
@@ -640,6 +661,7 @@ func (s *Server) tcpAcceptLoop(ctx context.Context) {
 				}
 				if !s.checkRate(addr) {
 					s.totalPacketsDropped.Add(1)
+					s.logDrop("rate limit")
 					return
 				}
 				pkt := pool.PktBufGet(len(data))
@@ -649,6 +671,7 @@ func (s *Server) tcpAcceptLoop(ctx context.Context) {
 				default:
 					pool.PktBufPut(pkt)
 					s.totalPacketsDropped.Add(1)
+					s.logDrop("channel full")
 				}
 			})
 		}()
