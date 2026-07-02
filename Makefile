@@ -3,7 +3,7 @@
 # Server: Linux / OpenWrt
 # Client: Windows
 
-.PHONY: all server client host client-all clean install-server release release-client release-server release-openwrt test bench server-openwrt server-openwrt-arm64 server-openwrt-armv7 vendor vendor-check
+.PHONY: all server client host client-all clean install-server release release-client release-server release-openwrt test bench server-openwrt server-openwrt-arm64 server-openwrt-armv7 server-linux-arm64 vendor vendor-check
 
 BINARY_DIR := bin
 SERVER := $(BINARY_DIR)/gtunnel-server-linux-amd64
@@ -27,6 +27,10 @@ server:
 server-linux-amd64:
 	@mkdir -p $(BINARY_DIR)
 	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -mod=vendor $(LDFLAGS) -o $(BINARY_DIR)/gtunnel-server-linux-amd64 ./cmd/server
+
+server-linux-arm64:
+	@mkdir -p $(BINARY_DIR)
+	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -mod=vendor $(LDFLAGS) -o $(BINARY_DIR)/gtunnel-server-linux-arm64 ./cmd/server
 
 server-linux-armv7:
 	@mkdir -p $(BINARY_DIR)
@@ -76,7 +80,7 @@ client-windows-x86:
 	@rm -f cmd/client/versioninfo.syso
 
 # 所有平台客户端
-client-all: client client-windows-x86
+client-all: client client-windows-x86 client-linux-amd64
 
 client-linux-amd64:
 	@mkdir -p $(BINARY_DIR)
@@ -128,7 +132,7 @@ run-server: server
 
 release: release-client release-server release-openwrt
 
-release-client: client client-windows-x86
+release-client: client client-windows-x86 client-linux-amd64
 	@mkdir -p $(BINARY_DIR)/release
 	cp $(BINARY_DIR)/gtunnel-client.exe $(BINARY_DIR)/release/
 	@if [ -f $(BINARY_DIR)/wintun.dll ]; then \
@@ -150,6 +154,12 @@ release-client: client client-windows-x86
 	cd $(BINARY_DIR)/release-x86 && zip -9 ../GameTunnel-Client-windows-x86.zip ./*
 	rm -rf $(BINARY_DIR)/release-x86
 	@echo "  Created $(BINARY_DIR)/GameTunnel-Client-windows-x86.zip"
+	@mkdir -p $(BINARY_DIR)/release-linux
+	cp $(BINARY_DIR)/gtunnel-client-linux-amd64 $(BINARY_DIR)/release-linux/gtunnel-client
+	cp configs/config.ini $(BINARY_DIR)/release-linux/config.ini
+	cd $(BINARY_DIR)/release-linux && tar czf ../GameTunnel-Client-linux-amd64.tar.gz ./*
+	rm -rf $(BINARY_DIR)/release-linux
+	@echo "  Created $(BINARY_DIR)/GameTunnel-Client-linux-amd64.tar.gz"
 
 release-server: server-linux-amd64
 	@echo "  Created $(BINARY_DIR)/gtunnel-server-linux-amd64"

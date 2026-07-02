@@ -104,7 +104,7 @@ elif [ -f "$SCRIPT_DIR/GameTunnel-Server-openwrt-arm64.tar.gz" ] && [ "$ARCH" = 
     tar xzf "$SCRIPT_DIR/GameTunnel-Server-openwrt-arm64.tar.gz" -C "$EXTRACT_DIR"
     TMPFILE="$EXTRACT_DIR/gtunnel-server"
     USE_LOCAL=false
-elif [ -f "$SCRIPT_DIR/GameTunnel-Server-openwrt-armv7.tar.gz" ] && echo "$ARCH" | grep -q "armv7"; then
+elif [ -f "$SCRIPT_DIR/GameTunnel-Server-openwrt-armv7.tar.gz" ] && [ "$ARCH" = "armv7l" -o "$ARCH" = "armv7" -o "$ARCH" = "arm" ]; then
     echo "📦 使用本地压缩包"
     EXTRACT_DIR=$(mktemp -d)
     tar xzf "$SCRIPT_DIR/GameTunnel-Server-openwrt-armv7.tar.gz" -C "$EXTRACT_DIR"
