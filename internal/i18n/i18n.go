@@ -146,7 +146,7 @@ type Strings struct {
 	ErrParseAuthFailed string // "解析认证请求失败: %w"
 	ErrDeriveKeyFailed string // "无法派生认证密钥"
 	ErrElevateFailed   string // "  提权失败: %v\n"
-	LogReuseTUN        string // "[tunnel] 复用 TUN 设备 (IP %s 未变)"
+	LogRecreateTUN     string // "[tunnel] 重建 TUN 设备 (IP %s 未变)"
 	LogIPChanged       string // "[tunnel] IP 变更 %s → %s，重建 TUN 设备"
 	LogPeerExit        string // "[tunnel] %s 退出，断开连接"
 	LogTunnelDisconnect string // "[tunnel] 断开连接"
@@ -291,7 +291,7 @@ var zhStrings = &Strings{
 	ErrParseAuthFailed:  "解析认证请求失败: %w",
 	ErrDeriveKeyFailed:  "无法派生认证密钥",
 	ErrElevateFailed:    "  提权失败: %v\n",
-	LogReuseTUN:         "[tunnel] 复用 TUN 设备 (IP %s 未变)",
+	LogRecreateTUN:      "[tunnel] 重建 TUN 设备 (IP %s 未变)",
 	LogIPChanged:        "[tunnel] IP 变更 %s → %s，重建 TUN 设备",
 	LogPeerExit:         "[tunnel] %s 退出，断开连接",
 	LogTunnelDisconnect: "[tunnel] 断开连接",
@@ -436,7 +436,7 @@ var enStrings = &Strings{
 	ErrParseAuthFailed:  "Failed to parse auth challenge: %w",
 	ErrDeriveKeyFailed:  "Failed to derive auth key",
 	ErrElevateFailed:    "  Failed to elevate: %v\n",
-	LogReuseTUN:         "[tunnel] Reusing TUN device (IP %s unchanged)",
+	LogRecreateTUN:      "[tunnel] Recreating TUN device (IP %s unchanged)",
 	LogIPChanged:        "[tunnel] IP changed %s → %s, recreating TUN device",
 	LogPeerExit:         "[tunnel] %s exited, disconnecting",
 	LogTunnelDisconnect: "[tunnel] Disconnected",

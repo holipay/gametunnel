@@ -113,14 +113,9 @@ func New(cfg *Config) *Tunnel {
 	return t
 }
 
-// Connect registers with the server, creates or reuses the TUN device,
+// Connect registers with the server, creates or recreates the TUN device,
 // and starts the relay loops. It blocks until ctx is cancelled or a
 // goroutine exits due to error (e.g. dead TUN device, lost server connection).
-//
-// On subsequent calls (reconnect), if the server assigns the same virtual IP
-// and the TUN device is still functional, it is reused without recreation.
-// This avoids disrupting the game's network interface during transient
-// server disconnections.
 //
 // The newTUN callback is only invoked when a new TUN device is actually needed.
 // It is cached internally for potential reuse across reconnects.
@@ -308,10 +303,11 @@ func (t *Tunnel) ensureTUN(mtu int) error {
 
 	switch {
 	case tunAlive && !ipChanged:
-		log.Printf("%s", i18n.Format(i18n.T().LogReuseTUN, t.session.virtualIP))
+		log.Printf("%s", i18n.Format(i18n.T().LogRecreateTUN, t.session.virtualIP))
 		if v := t.tunDev.Load(); v != nil {
-			v.(TunDevice).ReconfigureRoutes()
+			v.(TunDevice).Close()
 		}
+		return t.createTUN(mtu)
 
 	case tunAlive && ipChanged:
 		log.Printf("%s", i18n.Format(i18n.T().LogIPChanged, t.lastAssignedIP, t.session.virtualIP))
@@ -381,7 +377,7 @@ func (t *Tunnel) Disconnect() {
 }
 
 // CloseTUN closes the TUN device if open. Call this when exiting the program
-// (not on every reconnect — the TUN should survive transient disconnections).
+// (not on every reconnect — the TUN is recreated by ensureTUN).
 func (t *Tunnel) CloseTUN() {
 	t.closeTUNOnce.Do(func() {
 		t.mu.Lock()
