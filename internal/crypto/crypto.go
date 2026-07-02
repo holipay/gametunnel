@@ -18,7 +18,6 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
-	"math/big"
 	"sync"
 	"sync/atomic"
 
@@ -101,18 +100,12 @@ func NewCipher(key []byte, dirTag []byte) (*Cipher, error) {
 // for ChaCha20-Poly1305. A 48-bit random space gives >281 trillion possible
 // starting values, making collision probability negligible.
 func (c *Cipher) initCounter() error {
-	max := new(big.Int).SetInt64(1 << 48)
-	n, err := rand.Int(rand.Reader, max)
-	if err != nil {
-		// Fallback: use lower 48 bits of a random 8-byte read
-		var b [8]byte
-		if _, err := rand.Read(b[:]); err != nil {
-			return fmt.Errorf("crypto: cannot generate random nonce: %w", err)
-		}
-		c.counter.Store(binary.LittleEndian.Uint64(b[:]) & ((1 << 48) - 1))
-		return nil
+	var b [8]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return fmt.Errorf("crypto: cannot generate random nonce: %w", err)
 	}
-	c.counter.Store(n.Uint64())
+	// Use lower 48 bits of random 8-byte value
+	c.counter.Store(binary.LittleEndian.Uint64(b[:]) & ((1 << 48) - 1))
 	return nil
 }
 
