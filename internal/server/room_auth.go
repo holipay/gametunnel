@@ -410,7 +410,8 @@ func (r *Room) handleAuthResponse(payload []byte, from *net.UDPAddr) {
 			log.Printf("[auth] client not found in addrMap for %s (user=%s room=%s), scan=%v", from, resp.Username, resp.RoomID, foundByScan)
 		} else {
 			log.Printf("[auth] auth state mismatch for %s: got %d, want %d (user=%s)", from, c.auth, authChallengeSent, c.Username)
-			r.decrementIPConnCount(addrToConnIPKey(c.PublicAddr))
+			// Clean up pending auth entry to prevent addrMap and pendingAuth counter leak
+			r.cleanupPendingAuth(fromKey, oldKey, foundByScan, c)
 		}
 		r.mu.Unlock()
 		r.sendKick(from, t.KickAuthAbnormal)

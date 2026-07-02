@@ -361,6 +361,14 @@ func (s *Server) Close() error {
 		s.tcpListener.Close()
 	}
 
+	// Clean up all TCP bridges to prevent goroutine leak
+	s.tcpBridges.Range(func(key, value interface{}) bool {
+		bridge := value.(*netutil.UDPTCPBridge)
+		bridge.Stop()
+		s.tcpBridges.Delete(key)
+		return true
+	})
+
 	// Close pprof listener (if enabled)
 	if s.pprofListener != nil {
 		s.pprofListener.Close()
