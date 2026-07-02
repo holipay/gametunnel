@@ -299,13 +299,15 @@ func (s *Server) Run(ctx context.Context) {
 		go s.tcpAcceptLoop(ctx)
 	}
 
+	// Track the main read loop for clean shutdown.
+	// Add(1) must happen before close(s.ready) so that Close() never
+	// observes an empty WaitGroup while the read loop is still starting.
+	s.runWg.Add(1)
+	defer s.runWg.Done()
+
 	// Signal readiness — the server's UDP socket is bound and all
 	// background goroutines have been launched.
 	close(s.ready)
-
-	// Track the main read loop for clean shutdown
-	s.runWg.Add(1)
-	defer s.runWg.Done()
 
 	buf := make([]byte, 65535)
 	for {
@@ -400,13 +402,9 @@ func (s *Server) WaitReady() {
 	<-s.ready
 }
 
-// dropLogThrottle rate-limits drop logging to avoid flooding the log.
-var dropLogThrottle = time.Second
-
-// logDrop logs a packet drop event at most once per second.
+// logDrop logs a packet drop event: first drop, then every 1000 drops.
 func (s *Server) logDrop(reason string) {
 	total := s.totalPacketsDropped.Load()
-	// Log on the first drop, then every 1000 drops
 	if total == 1 || total%1000 == 0 {
 		log.Printf("[server] packet dropped (%s): total=%d", reason, total)
 	}
@@ -663,6 +661,7 @@ func (s *Server) tcpAcceptLoop(ctx context.Context) {
 				}
 				if !s.checkRate(addr) {
 					s.totalPacketsDropped.Add(1)
+					s.logDrop("rate limit")
 					return
 				}
 				pkt := pool.PktBufGet(len(data))
@@ -672,6 +671,7 @@ func (s *Server) tcpAcceptLoop(ctx context.Context) {
 				default:
 					pool.PktBufPut(pkt)
 					s.totalPacketsDropped.Add(1)
+					s.logDrop("channel full")
 				}
 			})
 		}()
