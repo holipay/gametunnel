@@ -56,20 +56,21 @@ func (t *Tunnel) handlePeerInfo(ctx context.Context, payload []byte) {
 		return
 	}
 
-	var newPeerIPs []net.IP // peers that need hole punching
+	var newPeerIPs []net.IP   // peers that need hole punching
 	var changedPeerIPs []net.IP // peers whose public address changed (need re-punch)
 	now := time.Now()
 
 	t.mu.Lock()
 
-	// Build a fresh map instead of clearing t.peers in-place.
-	// oldPeers and t.peers MUST be different maps so that looking
-	// up existing peers in oldPeers works correctly.
-	oldPeers := t.peers
-	if oldPeers == nil {
-		oldPeers = make(map[[16]byte]*Peer)
+	// Mark all existing peers as stale, then update/add from the broadcast.
+	// After processing, remove any peers still marked stale (they left).
+
+	// Phase 1: Mark all existing peers as stale
+	for _, peer := range t.peers {
+		peer.stale = true
 	}
-	t.peers = make(map[[16]byte]*Peer, len(info.Peers))
+
+	// Phase 2: Update existing peers or add new ones
 	for _, entry := range info.Peers {
 		// Skip self — server sends full list including this client
 		if entry.VirtualIP.Equal(t.session.virtualIP) {
@@ -86,7 +87,9 @@ func (t *Tunnel) handlePeerInfo(ctx context.Context, payload []byte) {
 				pubAddr = &net.UDPAddr{IP: ip16, Port: pubAddr.Port}
 			}
 		}
-		if existing, ok := oldPeers[key]; ok {
+		if existing, ok := t.peers[key]; ok {
+			// Existing peer — update in place, preserve DirectReach state
+			existing.stale = false
 			// Check if peer's public address changed (NAT rebinding)
 			existingAddr := existing.PublicAddr.Load()
 			addrChanged := existingAddr != nil && pubAddr != nil &&
@@ -99,8 +102,8 @@ func (t *Tunnel) handlePeerInfo(ctx context.Context, payload []byte) {
 			existing.PublicAddr.Store(pubAddr)
 			existing.Username = entry.Username
 			existing.lastSeen.Store(now.UnixNano())
-			t.peers[key] = existing
 		} else {
+			// New peer — create and add
 			p := &Peer{
 				VirtualIP: entry.VirtualIP,
 				Username:  entry.Username,
@@ -114,10 +117,12 @@ func (t *Tunnel) handlePeerInfo(ctx context.Context, payload []byte) {
 			newPeerIPs = append(newPeerIPs, entry.VirtualIP)
 		}
 	}
-	// Log removed peers (those in oldPeers but not in the updated t.peers)
-	for key, peer := range oldPeers {
-		if _, ok := t.peers[key]; !ok {
+
+	// Phase 3: Remove stale peers (those that left)
+	for key, peer := range t.peers {
+		if peer.stale {
 			log.Printf(i18n.T().LogPeerLeave2, peer.Username, peer.VirtualIP)
+			delete(t.peers, key)
 		}
 	}
 
