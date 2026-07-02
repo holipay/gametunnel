@@ -117,12 +117,13 @@ else
     echo "📡 检查最新版本..."
 
     LATEST=""
-    API_URL="https://api.github.com/repos/${REPO}/releases/latest"
+    TAGS_API="https://api.github.com/repos/${REPO}/git/refs/tags"
     RELEASES_URL="https://github.com/${REPO}/releases"
 
-    # 方式1: GitHub API
-    LATEST=$(wget -qO- --timeout=15 "$API_URL" 2>/dev/null \
-        | grep '"tag_name"' | head -1 | cut -d'"' -f4)
+    # 方式1: GitHub Tags API
+    LATEST=$(wget -qO- --timeout=15 "$TAGS_API" 2>/dev/null \
+        | grep '"ref"' | sed 's/.*"refs\/tags\///' | sed 's/".*//' \
+        | sort -V | tail -1)
 
     # 方式2: API 失败时，从 releases 页面 HTML 提取
     if [ -z "$LATEST" ]; then
@@ -188,6 +189,8 @@ else
         echo "  替代方案（任选其一）："
         echo "  1. 在能访问 GitHub 的机器下载后 scp 传到路由器"
         echo "  2. 手动下载: wget ${DOWNLOAD_URL}"
+        echo "  3. 如果 Release 不存在，需要先创建 Release："
+        echo "     gh release create ${LATEST} --repo ${REPO} --generate-notes"
         rm -rf "$EXTRACT_DIR"
         exit 1
     fi

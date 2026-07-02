@@ -122,14 +122,15 @@ if [ -z "$TMPFILE" ]; then
     # ── 版本检测 ──
     echo "📡 检查最新版本..."
 
-    # 尝试 API（快，但国内偶尔超时）；失败则从 releases 页面提取
+    # 尝试从 git tags 获取最新版本（国内可访问）
     LATEST=""
-    API_URL="https://api.github.com/repos/${REPO}/releases/latest"
+    TAGS_API="https://api.github.com/repos/${REPO}/git/refs/tags"
     RELEASES_URL="https://github.com/${REPO}/releases"
 
-    # 方式1: GitHub API（轻量 JSON）
-    LATEST=$(curl -sL --connect-timeout 10 --max-time 15 "$API_URL" 2>/dev/null \
-        | grep '"tag_name"' | head -1 | cut -d'"' -f4)
+    # 方式1: GitHub Tags API
+    LATEST=$(curl -sL --connect-timeout 10 --max-time 15 "$TAGS_API" 2>/dev/null \
+        | grep '"ref"' | sed 's/.*"refs\/tags\///' | sed 's/".*//' \
+        | sort -V | tail -1)
 
     # 方式2: API 失败时，从 releases 页面 HTML 提取第一个 tag
     if [ -z "$LATEST" ]; then
@@ -206,6 +207,8 @@ if [ -z "$TMPFILE" ]; then
         echo "     wget ${DOWNLOAD_URL}"
         echo "  2. 在能访问 GitHub 的机器下载，scp 传到服务器"
         echo "  3. 用 gh CLI:  gh release download ${LATEST} -R ${REPO}"
+        echo "  4. 如果 Release 不存在，需要先创建 Release："
+        echo "     gh release create ${LATEST} --repo ${REPO} --generate-notes"
         rm -f "$TMPFILE"
         exit 1
     fi
