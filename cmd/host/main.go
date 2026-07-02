@@ -48,6 +48,14 @@ type hostFlags struct {
 	nameFlag   string
 	roomFlag   string
 	langFlag   string
+	// Server-side flags
+	maxPerIP    int
+	bandwidth   int
+	stateDir    string
+	statusAddr  string
+	statusToken string
+	maxRooms    int
+	logFile     string
 }
 
 // parseAndStart parses CLI flags (overriding config file values), creates
@@ -67,6 +75,13 @@ func parseAndStart() (*client.Config, func(client.TunConfig) (client.TunDevice, 
 	flag.StringVar(&f.nameFlag, "name", cfg.PlayerName, "player name (default: hostname)")
 	flag.StringVar(&f.roomFlag, "room", cfg.RoomID, "room ID")
 	flag.StringVar(&f.langFlag, "lang", cfg.Lang, "language (zh or en)")
+	flag.IntVar(&f.maxPerIP, "max-per-ip", cfg.MaxPerIP, "max connections per IP")
+	flag.IntVar(&f.bandwidth, "bandwidth", cfg.Bandwidth, "per-client bandwidth limit (bytes/sec, 0 = unlimited)")
+	flag.StringVar(&f.stateDir, "state-dir", cfg.StateDir, "state persistence directory (empty = disabled)")
+	flag.StringVar(&f.statusAddr, "status-addr", cfg.StatusAddr, "status page HTTP address (empty = disabled)")
+	flag.StringVar(&f.statusToken, "status-token", cfg.StatusToken, "status page access token (empty = no auth)")
+	flag.IntVar(&f.maxRooms, "max-rooms", cfg.MaxRooms, "max auto-created rooms in multi-room mode")
+	flag.StringVar(&f.logFile, "log-file", cfg.LogFile, "log file path (empty = stderr only)")
 
 	versionFlag := flag.Bool("version", false, "show version")
 	flag.Parse()
@@ -108,14 +123,20 @@ func parseAndStart() (*client.Config, func(client.TunConfig) (client.TunDevice, 
 	// Start server — use Background context since the server manages its
 	// own lifecycle via Close(); the caller must not cancel this context.
 	s, err := server.New(server.Config{
-		Addr:       f.addr,
-		Subnet:     subnet,
-		MaxPlayers: f.maxPlayers,
-		RoomPass:   f.roomPass,
-		Version:    Version,
-		Lang:       i18n.ParseLang(f.langFlag),
-		TCPAddr:    f.tcpAddr,
-		Verbose:    f.verbose,
+		Addr:          f.addr,
+		Subnet:        subnet,
+		MaxPlayers:    f.maxPlayers,
+		RoomPass:      f.roomPass,
+		Version:       Version,
+		Lang:          i18n.ParseLang(f.langFlag),
+		TCPAddr:       f.tcpAddr,
+		Verbose:       f.verbose,
+		MaxPerIP:      f.maxPerIP,
+		BandwidthLimit: f.bandwidth,
+		StateDir:      f.stateDir,
+		StatusAddr:    f.statusAddr,
+		StatusToken:   f.statusToken,
+		MaxRooms:      f.maxRooms,
 	})
 	if err != nil {
 		log.Fatalf("server start: %v", err)

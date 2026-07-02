@@ -12,15 +12,22 @@ import (
 
 // HostConfig holds configuration for the host mode (server + client combined).
 type HostConfig struct {
-	Addr       string
-	Subnet     string
-	MaxPlayers int
-	RoomPass   string
-	TCPAddr    string
-	Verbose    bool
-	PlayerName string
-	RoomID     string
-	Lang       string
+	Addr         string
+	Subnet       string
+	MaxPlayers   int
+	RoomPass     string
+	TCPAddr      string
+	Verbose      bool
+	PlayerName   string
+	RoomID       string
+	Lang         string
+	MaxPerIP     int    // max connections per IP (0 = use default 3)
+	Bandwidth    int    // per-client bandwidth limit in bytes/sec (0 = unlimited)
+	StateDir     string // directory for state persistence (empty = disabled)
+	StatusAddr   string // HTTP status address (empty = disabled)
+	StatusToken  string // status page access token (empty = no auth)
+	MaxRooms     int    // max auto-created rooms in multi-room mode (0 = default 64)
+	LogFile      string // log file path (empty = stderr only)
 }
 
 // DefaultHostConfig returns a HostConfig with default values.
@@ -33,6 +40,9 @@ func DefaultHostConfig() *HostConfig {
 		RoomID:     "default",
 		PlayerName: hostname,
 		Lang:       "zh",
+		MaxPerIP:   3,
+		Bandwidth:  0, // unlimited
+		MaxRooms:   64,
 	}
 }
 
@@ -83,6 +93,33 @@ func loadHostINI(path string, cfg *HostConfig) bool {
 	}
 	if v := m["lang"]; v != "" {
 		cfg.Lang = v
+	}
+	if v := m["max-per-ip"]; v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+			cfg.MaxPerIP = n
+		}
+	}
+	if v := m["bandwidth"]; v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+			cfg.Bandwidth = n
+		}
+	}
+	if v := m["state-dir"]; v != "" {
+		cfg.StateDir = v
+	}
+	if v := m["status-addr"]; v != "" {
+		cfg.StatusAddr = v
+	}
+	if v := m["status-token"]; v != "" {
+		cfg.StatusToken = v
+	}
+	if v := m["max-rooms"]; v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+			cfg.MaxRooms = n
+		}
+	}
+	if v := m["log-file"]; v != "" {
+		cfg.LogFile = v
 	}
 	cfg.Addr = iniconfig.CombinePort(cfg.Addr, m["port"])
 	return true

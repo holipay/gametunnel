@@ -43,6 +43,7 @@ func main() {
 	maxPerIP := flag.Int("max-per-ip", 3, "max connections per IP address")
 	stateDir := flag.String("state-dir", "", "directory for room state persistence (empty = disabled)")
 	multiRoom := flag.Bool("rooms", false, "enable multi-room mode (each room gets independent subnet)")
+	maxRooms := flag.Int("max-rooms", 64, "max auto-created rooms in multi-room mode")
 	bandwidthLimit := flag.Int("bandwidth", 0, "per-client outbound bandwidth limit in bytes/sec (0 = default 10Mbps)")
 	tcpAddr := flag.String("tcp-addr", "", "TCP listen address for fallback (e.g. :4700), empty = disabled")
 	langFlag := flag.String("lang", "zh", "language (zh or en)")
@@ -101,6 +102,7 @@ func main() {
 		MaxPerIP:       *maxPerIP,
 		StateDir:       *stateDir,
 		MultiRoom:      *multiRoom,
+		MaxRooms:       *maxRooms,
 		BandwidthLimit: *bandwidthLimit,
 		TCPAddr:        *tcpAddr,
 		Verbose:        *verboseFlag,
