@@ -58,7 +58,9 @@ if [ "$EUID" -ne 0 ]; then
 fi
 
 # 检查端口是否被占用（仅新安装时检查，更新跳过）
-if ! systemctl is-active --quiet gtunnel-server 2>/dev/null; then
+# 如果是手动运行的 gtunnel-server 占用，视为更新场景，跳过检查
+EXISTING_GTUNNEL_PID=$(pgrep -x gtunnel-server 2>/dev/null || true)
+if ! systemctl is-active --quiet gtunnel-server 2>/dev/null && [ -z "$EXISTING_GTUNNEL_PID" ]; then
     if ss -uln | grep -q ":${LISTEN_PORT} "; then
         echo "❌ UDP 端口 ${LISTEN_PORT} 已被占用"
         echo "   请先停止占用该端口的服务，或用 LISTEN_ADDR=:其他端口 指定新端口"
@@ -227,10 +229,14 @@ rollback() {
     exit 1
 }
 
-# 停止旧服务（更新时）
+# 停止旧服务（更新时：systemd 或手动运行的进程）
 if systemctl is-active --quiet gtunnel-server 2>/dev/null; then
     echo "🔄 停止旧服务..."
     systemctl stop gtunnel-server
+elif [ -n "$EXISTING_GTUNNEL_PID" ]; then
+    echo "🔄 停止手动运行的旧服务 (PID: $EXISTING_GTUNNEL_PID)..."
+    kill "$EXISTING_GTUNNEL_PID" 2>/dev/null || true
+    sleep 1
 fi
 
 # 备份旧版本（更新时）
