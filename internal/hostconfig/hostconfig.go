@@ -21,13 +21,14 @@ type HostConfig struct {
 	PlayerName   string
 	RoomID       string
 	Lang         string
-	MaxPerIP     int    // max connections per IP (0 = use default 3)
-	Bandwidth    int    // per-client bandwidth limit in bytes/sec (0 = unlimited)
-	StateDir     string // directory for state persistence (empty = disabled)
-	StatusAddr   string // HTTP status address (empty = disabled)
-	StatusToken  string // status page access token (empty = no auth)
-	MaxRooms     int    // max auto-created rooms in multi-room mode (0 = default 64)
-	LogFile      string // log file path (empty = stderr only)
+	MaxPerIP       int    // max connections per IP (0 = use default 3)
+	BandwidthLimit int    // per-client bandwidth limit in bytes/sec (0 = unlimited)
+	StateDir       string // directory for state persistence (empty = disabled)
+	StatusAddr     string // HTTP status address (empty = disabled)
+	StatusToken    string // status page access token (empty = no auth)
+	MultiRoom      bool   // enable multi-room mode
+	MaxRooms       int    // max auto-created rooms in multi-room mode (0 = default 64)
+	LogFile        string // log file path (empty = stderr only)
 }
 
 // DefaultHostConfig returns a HostConfig with default values.
@@ -40,9 +41,9 @@ func DefaultHostConfig() *HostConfig {
 		RoomID:     "default",
 		PlayerName: hostname,
 		Lang:       "zh",
-		MaxPerIP:   3,
-		Bandwidth:  0, // unlimited
-		MaxRooms:   64,
+		MaxPerIP:       3,
+		BandwidthLimit: 0, // unlimited
+		MaxRooms:       64,
 	}
 }
 
@@ -99,9 +100,9 @@ func loadHostINI(path string, cfg *HostConfig) bool {
 			cfg.MaxPerIP = n
 		}
 	}
-	if v := m["bandwidth"]; v != "" {
+	if v := m["bandwidth-limit"]; v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
-			cfg.Bandwidth = n
+			cfg.BandwidthLimit = n
 		}
 	}
 	if v := m["state-dir"]; v != "" {
@@ -112,6 +113,9 @@ func loadHostINI(path string, cfg *HostConfig) bool {
 	}
 	if v := m["status-token"]; v != "" {
 		cfg.StatusToken = v
+	}
+	if v := m["multi-room"]; v != "" {
+		cfg.MultiRoom = v == "true" || v == "1"
 	}
 	if v := m["max-rooms"]; v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
