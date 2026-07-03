@@ -10,6 +10,11 @@ import (
 	"github.com/holipay/gametunnel/internal/protocol"
 )
 
+// tcpBridgeAddr is the synthetic UDP address assigned to TCP bridge clients.
+// Bandwidth limiting is skipped for this address (TCP's own flow control
+// provides backpressure).
+var tcpBridgeAddr = net.IPv4(127, 0, 0, 254)
+
 // appendAddr appends "ip:port" to buf, delegating to protocol.AppendAddrStr.
 func appendAddr(buf []byte, addr *net.UDPAddr) []byte {
 	return protocol.AppendAddrStr(buf, addr)
@@ -124,7 +129,9 @@ func (r *Room) handleRelay(payload []byte, from *net.UDPAddr) {
 		}
 	} else {
 		for _, addr := range targets {
-			if r.bwLimiter == nil || r.bwLimiter.Allow(addr, packetSize) {
+			// Skip bandwidth limiting for TCP bridge clients (synthetic tcpBridgeAddr)
+			// since their bandwidth is bounded by the TCP connection itself.
+			if r.bwLimiter == nil || addr.IP.Equal(tcpBridgeAddr) || r.bwLimiter.Allow(addr, packetSize) {
 				r.sendCheckedRaw(encoded, addr)
 			}
 		}
