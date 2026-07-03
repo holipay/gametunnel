@@ -388,10 +388,10 @@ func (t *Tunnel) Disconnect() {
 				// Write disconnect packet directly to bypass sendLoop which
 				// may have already exited. sendCtrl could drop the packet.
 				t.mu.Lock()
-				c := t.conn
+				writeConn := t.conn
 				t.mu.Unlock()
-				if c != nil {
-					t.writeUDP(c, packet, addr)
+				if writeConn != nil {
+					t.writeUDP(writeConn, packet, addr)
 				}
 				time.Sleep(50 * time.Millisecond)
 			}

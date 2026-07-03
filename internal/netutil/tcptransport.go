@@ -82,7 +82,7 @@ func (t *TCPTransport) Send(data []byte) error {
 	// Write header + data atomically via writev to prevent partial frames.
 	bufs := net.Buffers{header[:], data}
 	if _, err := bufs.WriteTo(t.conn); err != nil {
-		return fmt.Errorf("tcp write: %w", err)
+		return fmt.Errorf("tcp write %d bytes: %w", len(data), err)
 	}
 	return nil
 }
