@@ -247,7 +247,14 @@ func (t *Tunnel) probeNATAsync(conn *net.UDPConn, sAddr *net.UDPAddr) {
 		return
 	}
 
+	// Prevent redundant probes on rapid reconnect
+	if !t.nat.probeRunning.CompareAndSwap(false, true) {
+		close(t.nat.probeDone)
+		return
+	}
+
 	go func() {
+		defer t.nat.probeRunning.Store(false)
 		defer close(t.nat.probeDone)
 
 		result, err := nat.ProbeNATType(conn, sAddr)

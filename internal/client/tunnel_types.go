@@ -43,6 +43,7 @@ type natState struct {
 	portPredictor     *nat.PortPredictor
 	cachedPunchPacket atomic.Value // stores []byte
 	probeDone         chan struct{} // closed when async NAT probe completes
+	probeRunning      atomic.Bool  // true while a NAT probe goroutine is active
 }
 
 // Tunnel is the GameTunnel client. Sub-structures group related fields:

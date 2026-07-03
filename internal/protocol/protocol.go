@@ -77,6 +77,7 @@ var (
 	ErrPacketTooShort     = errors.New("packet too short")
 	ErrUnsupportedVersion = errors.New("unsupported protocol version")
 	ErrChecksumMismatch   = errors.New("CRC32 checksum mismatch")
+	ErrTooManyPeers       = errors.New("too many peers in PeerInfo")
 )
 
 // ── Base Message ───────────────────────────────────────────────
