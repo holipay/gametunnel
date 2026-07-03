@@ -94,6 +94,11 @@ func (t *Tunnel) registerTCP(ctx context.Context) error {
 	}
 
 	deadline := 10 * time.Second
+	// Clear read deadline when done (matches UDP register cleanup).
+	defer t.tcpTransport.SetReadDeadline(time.Time{})
+
+	const maxRetries = 3
+	retries := 0
 	authRounds := 0
 
 	for {
@@ -112,10 +117,17 @@ func (t *Tunnel) registerTCP(ctx context.Context) error {
 			}
 			// Distinguish timeout from other errors.
 			if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
-				continue // retry with new deadline
+				retries++
+				if retries > maxRetries {
+					return fmt.Errorf("TCP registration timeout after %d retries", maxRetries)
+				}
+				log.Printf("TCP registration timeout, retrying (%d/%d)...", retries, maxRetries)
+				continue
 			}
 			return fmt.Errorf("tcp receive: %w", err)
 		}
+
+		retries = 0
 
 		msg, err := protocol.DecodeChecked(data)
 		if err != nil {
