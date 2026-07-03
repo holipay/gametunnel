@@ -57,7 +57,7 @@ var (
 type Cipher struct {
 	aead     cipher.AEAD
 	counter  atomic.Uint64 // 64-bit counter; nonce uses all 8 bytes. Collision risk: 2^64 packets ≈ impossible.
-	dirTag   []byte
+	dirTag  [4]byte       // direction tag to prevent nonce reuse (value type for safe concurrent reads)
 
 	// Replay protection: sliding window of recently received counter values.
 	// The window tracks counters in range [highestCounter - windowSize + 1, highestCounter].
@@ -83,9 +83,11 @@ func NewCipher(key []byte, dirTag []byte) (*Cipher, error) {
 	if err != nil {
 		return nil, fmt.Errorf("crypto: chacha20poly1305: %w", err)
 	}
+	var dt [4]byte
+	copy(dt[:], dirTag)
 	c := &Cipher{
 		aead:   aead,
-		dirTag: append([]byte(nil), dirTag...),
+		dirTag: dt,
 	}
 	if err := c.initCounter(); err != nil {
 		return nil, err
@@ -137,7 +139,7 @@ func (c *Cipher) Encrypt(plaintext []byte) []byte {
 
 // EncryptTo encrypts plaintext into dst, appending after existing content.
 // Returns the extended slice. Caller must ensure dst has enough capacity:
-// cap(dst) - len(dst) >= Overhead + len(plaintext) + TagSize.
+// cap(dst) - len(dst) >= Overhead + len(plaintext).
 // This avoids allocation when the caller provides a pre-sized buffer.
 func (c *Cipher) EncryptTo(dst []byte, plaintext []byte) []byte {
 	if plaintext == nil {

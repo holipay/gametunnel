@@ -41,11 +41,14 @@ func newRateShardsArray() *rateShardsArray {
 }
 
 // shard returns the shard index for a given rateKey.
-// Uses a simple hash of the IP bytes to distribute across shards.
+// Uses FNV-1a hash over all 16 IP bytes for even distribution across IPv4/IPv6.
 func (r *rateShardsArray) shard(key netkey.RateKey) *rateShard {
-	// Use the last 4 bytes of the IP (IPv4 portion for v4-in-v6) for hashing.
-	// This ensures packets from the same IP always go to the same shard.
-	h := uint32(key.IP[12]) | uint32(key.IP[13])<<8 | uint32(key.IP[14])<<16 | uint32(key.IP[15])<<24
+	// FNV-1a hash (offset basis + prime per byte)
+	h := uint32(2166136261)
+	for _, b := range key.IP {
+		h ^= uint32(b)
+		h *= 16777619
+	}
 	return r[h%rateShardCount]
 }
 

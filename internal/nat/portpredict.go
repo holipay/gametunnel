@@ -18,7 +18,7 @@ type PortPredictor struct {
 	samples  []portSample // observed (external port, timestamp) pairs
 	pattern  string       // "incremental" | "random" | "fixed_offset" | "unknown"
 	basePort int          // base port (first observed)
-	increment int         // average increment between consecutive ports
+	delta    int          // incremental: avg step between ports; fixed_offset: offset from base
 }
 
 type portSample struct {
@@ -73,7 +73,7 @@ func (pp *PortPredictor) analyze() {
 
 	if allSame && len(increments) > 0 {
 		pp.pattern = "incremental"
-		pp.increment = increments[0]
+		pp.delta = increments[0]
 		return
 	}
 
@@ -98,7 +98,7 @@ func (pp *PortPredictor) analyze() {
 
 	if consistent {
 		pp.pattern = "incremental"
-		pp.increment = mean
+		pp.delta = mean
 		return
 	}
 
@@ -112,7 +112,7 @@ func (pp *PortPredictor) analyze() {
 	median := offsets[len(offsets)/2]
 
 	pp.pattern = "fixed_offset"
-	pp.increment = median
+	pp.delta = median
 }
 
 // PredictPorts returns a list of candidate ports for the next connection.
@@ -133,11 +133,11 @@ func (pp *PortPredictor) PredictPorts() []int {
 
 	switch pp.pattern {
 	case "incremental":
-		predicted := lastPort + pp.increment
+		predicted := lastPort + pp.delta
 		return clampPorts(predicted, 3) // ±3 range
 
 	case "fixed_offset":
-		predicted := pp.basePort + pp.increment
+		predicted := pp.basePort + pp.delta
 		return clampPorts(predicted, 3)
 
 	default:
