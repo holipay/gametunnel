@@ -44,7 +44,9 @@ type Peer struct {
 	VirtualIP     net.IP
 	PublicAddr    atomic.Pointer[net.UDPAddr]
 	Username      string
+	NATType       nat.NATType              // peer's NAT type from PeerInfo (0 = unknown)
 	DirectReach   atomic.Bool               // true if P2P direct path has been confirmed
+	observedPorts []int                     // historical external ports for port prediction
 	lastSeen      atomic.Int64 // last time server reported this peer (UnixNano)
 	lastPunchBack atomic.Pointer[time.Time] // rate limit for hole punch responses
 	stale         bool          // mark-and-sweep flag, only valid under t.mu in handlePeerInfo (not atomic)
@@ -144,7 +146,11 @@ func (t *Tunnel) Connect(ctx context.Context, serverAddr string, mtu int, newTUN
 		return err
 	}
 
-	t.probeNAT(conn, sAddr)
+	// Initialize probeDone channel for async NAT probe
+	t.mu.Lock()
+	t.nat.probeDone = make(chan struct{})
+	t.mu.Unlock()
+	t.probeNATAsync(conn, sAddr)
 
 	if err := t.ensureTUN(mtu); err != nil {
 		conn.Close()
@@ -217,28 +223,35 @@ func (t *Tunnel) registerWithFallback(ctx context.Context, serverAddr string, co
 	return nil
 }
 
-// probeNAT performs NAT type detection synchronously before receiveFromServer starts.
-func (t *Tunnel) probeNAT(conn *net.UDPConn, sAddr *net.UDPAddr) {
+// probeNAT performs NAT type detection asynchronously in a background goroutine.
+// The result is stored in t.nat.probeResult when complete. Hole punch goroutines
+// that need the result will wait on natProbeDone.
+func (t *Tunnel) probeNATAsync(conn *net.UDPConn, sAddr *net.UDPAddr) {
 	t.mu.RLock()
 	alreadyProbed := t.nat.probeResult != nil
 	t.mu.RUnlock()
 
 	if t.tcpTransport != nil || alreadyProbed {
+		close(t.nat.probeDone)
 		return
 	}
 
-	result, err := nat.ProbeNATType(conn, sAddr)
-	if err != nil {
-		log.Printf("[nat-probe] probe failed: %v", err)
-		return
-	}
+	go func() {
+		defer close(t.nat.probeDone)
 
-	t.mu.Lock()
-	t.nat.probeResult = result
-	t.nat.portPredictor = nat.PortPredictorFromNATProbe([]*nat.NATProbeResult{result})
-	t.mu.Unlock()
-	log.Printf("[nat-probe] NAT type: %d, external: %s:%d, RTT: %v",
-		result.Type, result.ExternalIP, result.ExternalPort, result.RTT)
+		result, err := nat.ProbeNATType(conn, sAddr)
+		if err != nil {
+			log.Printf("[nat-probe] probe failed: %v", err)
+			return
+		}
+
+		t.mu.Lock()
+		t.nat.probeResult = result
+		t.nat.portPredictor = nat.PortPredictorFromNATProbe([]*nat.NATProbeResult{result})
+		t.mu.Unlock()
+		log.Printf("[nat-probe] NAT type: %d, external: %s:%d, RTT: %v",
+			result.Type, result.ExternalIP, result.ExternalPort, result.RTT)
+	}()
 }
 
 // startRelayLoops starts all relay goroutines and blocks until shutdown.

@@ -19,13 +19,20 @@ func (t *Tunnel) keepaliveLoop(ctx context.Context, cancel context.CancelFunc) {
 
 	ticker := time.NewTicker(10 * time.Second)
 	defer ticker.Stop()
-	packet := protocol.EncodeChecked(protocol.TypeKeepAlive, nil)
 
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
+			// Include NAT type in keepalive so server can share it with peers.
+			t.mu.RLock()
+			var natType byte
+			if t.nat.probeResult != nil {
+				natType = byte(t.nat.probeResult.Type)
+			}
+			t.mu.RUnlock()
+			packet := protocol.EncodeChecked(protocol.TypeKeepAlive, []byte{natType})
 			t.sendCtrl(packet, t.serverAddr.Load())
 
 			// Check if server is still alive

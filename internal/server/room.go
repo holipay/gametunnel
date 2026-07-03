@@ -268,7 +268,7 @@ func (r *Room) HandlePacket(msgType byte, payload []byte, from *net.UDPAddr) {
 	case protocol.TypeAuthResponse:
 		r.handleAuthResponse(payload, from)
 	case protocol.TypeKeepAlive:
-		r.handleKeepAlive(from)
+		r.handleKeepAliveWithPayload(payload, from)
 	case protocol.TypePeerRequest:
 		r.handlePeerRequest(from)
 	case protocol.TypeData:

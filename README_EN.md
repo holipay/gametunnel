@@ -93,51 +93,6 @@ lang=en
 
 Once connected, launch your game and enter LAN mode.
 
-### Host Mode
-
-One player runs both server and client in a single process. Other players connect directly to the host's public IP. No separate VPS required.
-
-```bash
-# Build
-go build -o gtunnel-host ./cmd/host
-
-# Run (requires root for TUN device)
-sudo ./gtunnel-host -password myroom -name HostPlayer
-```
-
-Config file `host.ini` (located next to the executable):
-
-```ini
-# Server config
-addr=:4700
-subnet=10.10.0.0/24
-max=10
-password=myroom
-tcp-addr=
-verbose=false
-
-# Client config
-name=HostPlayer
-room=default
-lang=en
-```
-
-| Flag | Default | Description |
-|------|---------|-------------|
-| `-addr` | `:4700` | Server listen address |
-| `-subnet` | `10.10.0.0/24` | Virtual subnet |
-| `-max` | `10` | Max players |
-| `-password` | _(empty)_ | Room password |
-| `-tcp-addr` | _(empty)_ | TCP fallback listen address (empty = disabled) |
-| `-verbose` | `false` | Verbose logging |
-| `-name` | Computer name | Player name |
-| `-room` | `default` | Room ID |
-| `-lang` | `zh` | Language |
-
-Config priority: CLI flags > `host.ini` > defaults
-
-After starting, other players set `server=host-public-ip:4700` in their `config.ini` to connect.
-
 ## Status Page
 
 The server includes a built-in HTTP status page for viewing online players, latency, packet loss, and other real-time information.
@@ -492,9 +447,6 @@ A: Linux requires root privileges to create a virtual NIC. Run with `sudo ./gtun
 **Q: How do I check server status?**
 A: Use `-status-addr :4701` to enable the status page, then access via browser or curl. See the "Status Page" section above.
 
-**Q: What is host mode? How is it different from running a separate server?**
-A: Host mode (`gtunnel-host`) combines the server and client into a single process. The host player is both server and client — other players connect directly to the host's public IP. Ideal when you don't have a separate VPS. Note: the host player also needs root privileges for the TUN device.
-
 ## Development
 
 ### Requirements
@@ -507,7 +459,6 @@ A: Host mode (`gtunnel-host`) combines the server and client into a single proce
 # Build directly with go (recommended, no make needed)
 go build -o bin/gtunnel-server ./cmd/server
 go build -o bin/gtunnel-client.exe ./cmd/client     # Linux native build
-go build -o bin/gtunnel-host ./cmd/host              # Host mode
 GOOS=windows GOARCH=amd64 go build -o bin/gtunnel-client.exe ./cmd/client  # cross-compile for Windows
 
 # Or use make (convenient for batch builds and releases)

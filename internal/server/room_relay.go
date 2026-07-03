@@ -220,6 +220,7 @@ func (r *Room) getEncodedPeerInfo() []byte {
 			VirtualIP:  c.VirtualIP,
 			PublicAddr: c.PublicAddr,
 			Username:   c.Username,
+			NATType:    protocol.NATType(c.NATType),
 		})
 	}
 	r.mu.RUnlock()

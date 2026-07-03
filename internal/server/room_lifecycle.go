@@ -11,12 +11,18 @@ import (
 
 // ── KeepAlive / Disconnect ─────────────────────────────────────
 
-func (r *Room) handleKeepAlive(from *net.UDPAddr) {
+// handleKeepAliveWithPayload processes a keepalive that includes client data
+// such as NAT type. The payload format is: [1B natType].
+// Old clients send empty keepalive (nil payload), which is handled gracefully.
+func (r *Room) handleKeepAliveWithPayload(payload []byte, from *net.UDPAddr) {
 	r.mu.RLock()
 	c := r.addrMap[netkey.AddrToRateKey(from)]
 	r.mu.RUnlock()
 	if c != nil {
 		c.SetLastSeen(time.Now())
+		if len(payload) >= 1 {
+			c.NATType = payload[0]
+		}
 	}
 }
 

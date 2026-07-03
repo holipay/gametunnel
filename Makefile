@@ -3,7 +3,7 @@
 # Server: Linux / OpenWrt
 # Client: Windows
 
-.PHONY: all server client host client-all clean install-server release release-client release-server release-openwrt test bench server-openwrt server-openwrt-arm64 server-openwrt-armv7 server-linux-arm64 vendor vendor-check
+.PHONY: all server client client-all clean install-server release release-client release-server release-openwrt test bench server-openwrt server-openwrt-arm64 server-openwrt-armv7 server-linux-arm64 vendor vendor-check
 
 BINARY_DIR := bin
 SERVER := $(BINARY_DIR)/gtunnel-server-linux-amd64
@@ -85,22 +85,6 @@ client-all: client client-windows-x86 client-linux-amd64
 client-linux-amd64:
 	@mkdir -p $(BINARY_DIR)
 	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -mod=vendor $(LDFLAGS) -o $(BINARY_DIR)/gtunnel-client-linux-amd64 ./cmd/client
-
-# ── Host (Server + Client) ─────────────────────────────────────
-
-host:
-	@mkdir -p $(BINARY_DIR)
-	CGO_ENABLED=0 go build -mod=vendor $(LDFLAGS) -o $(BINARY_DIR)/gtunnel-host ./cmd/host
-
-host-linux-amd64:
-	@mkdir -p $(BINARY_DIR)
-	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -mod=vendor $(LDFLAGS) -o $(BINARY_DIR)/gtunnel-host-linux-amd64 ./cmd/host
-
-host-windows-amd64:
-	@mkdir -p $(BINARY_DIR)
-	$(GEN_VERSIONINFO) cmd/host "gtunnel-host.exe" "GameTunnel Host" $(VERSION) 64
-	CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -mod=vendor $(LDFLAGS) -o $(BINARY_DIR)/gtunnel-host.exe ./cmd/host
-	@rm -f cmd/host/versioninfo.syso
 
 # ── Dev / Test ─────────────────────────────────────────────────
 
@@ -184,4 +168,4 @@ release-openwrt: server-openwrt-arm64 server-openwrt-armv7
 
 clean:
 	rm -rf $(BINARY_DIR)
-	rm -f cmd/client/versioninfo.syso cmd/host/versioninfo.syso cmd/server/versioninfo.syso
+	rm -f cmd/client/versioninfo.syso cmd/server/versioninfo.syso
