@@ -3,9 +3,10 @@
 ## GitHub 提交流程（禁止直接 push main）
 
 ```bash
-# 1. 切换到 main 并拉取最新代码
+# 1. 切换到 main 并拉取最新代码，清理已删除的远程分支
 git checkout main
 git pull
+git remote prune origin
 
 # 2. 创建新分支
 BRANCH="fix/$(git rev-parse --short HEAD)-description"
