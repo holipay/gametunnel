@@ -80,10 +80,20 @@ func AppendAddrStr(buf []byte, addr *net.UDPAddr) []byte {
 }
 
 func (p *PeerInfoPayload) Marshal() []byte {
+	// Filter to peers with valid IPv4 virtual IPs
+	valid := make([]PeerInfoEntry, 0, len(p.Peers))
+	for _, peer := range p.Peers {
+		if peer.VirtualIP.To4() == nil {
+			log.Printf("[protocol] skipping peer %s: IPv6 virtual IP not supported", peer.Username)
+			continue
+		}
+		valid = append(valid, peer)
+	}
+
 	// Pre-calculate total size to avoid multiple allocations
 	total := 2 // peer count (2 bytes)
 	hasNATInfo := false
-	for _, peer := range p.Peers {
+	for _, peer := range valid {
 		total += 4 // VirtualIP (4 bytes IPv4)
 		total += 2 // addr length prefix
 		if peer.PublicAddr != nil {
@@ -97,18 +107,13 @@ func (p *PeerInfoPayload) Marshal() []byte {
 	}
 	// Trailing NAT type section: 1 byte per peer (only if any peer has NAT info)
 	if hasNATInfo {
-		total += len(p.Peers)
+		total += len(valid)
 	}
 
 	buf := make([]byte, 0, total)
-	buf = append(buf, byte(len(p.Peers)), byte(len(p.Peers)>>8))
-	for _, peer := range p.Peers {
-		vip := peer.VirtualIP.To4()
-		if len(vip) == 4 {
-			buf = append(buf, vip...)
-		} else {
-			buf = append(buf, 0, 0, 0, 0) // fallback
-		}
+	buf = append(buf, byte(len(valid)), byte(len(valid)>>8))
+	for _, peer := range valid {
+		buf = append(buf, peer.VirtualIP.To4()...)
 		addrStart := len(buf)
 		buf = append(buf, 0, 0) // placeholder for addr length
 		if peer.PublicAddr != nil {
@@ -126,7 +131,7 @@ func (p *PeerInfoPayload) Marshal() []byte {
 	}
 	// Trailing NAT type section (backward compatible: old clients stop at count boundary)
 	if hasNATInfo {
-		for _, peer := range p.Peers {
+		for _, peer := range valid {
 			buf = append(buf, byte(peer.NATType))
 		}
 	}
