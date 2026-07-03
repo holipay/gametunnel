@@ -385,9 +385,14 @@ func (t *Tunnel) Disconnect() {
 		once.Do(func() {
 			if addr := t.serverAddr.Load(); addr != nil {
 				packet := protocol.EncodeChecked(protocol.TypeDisconnect, nil)
-				// Use high-priority control channel to ensure the disconnect
-				// packet is sent even under heavy load
-				t.sendCtrl(packet, addr)
+				// Write disconnect packet directly to bypass sendLoop which
+				// may have already exited. sendCtrl could drop the packet.
+				t.mu.Lock()
+				c := t.conn
+				t.mu.Unlock()
+				if c != nil {
+					t.writeUDP(c, packet, addr)
+				}
 				time.Sleep(50 * time.Millisecond)
 			}
 			// Cancel context to signal hole punch goroutines to exit
