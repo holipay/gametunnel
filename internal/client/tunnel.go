@@ -180,6 +180,13 @@ func (t *Tunnel) stopPreviousRun() {
 		case <-t.runDone:
 			timer.Stop()
 		case <-timer.C:
+			// Close the old connection to force goroutines to exit faster
+			// (write errors will unblock them).
+			t.mu.Lock()
+			if t.conn != nil {
+				t.conn.Close()
+			}
+			t.mu.Unlock()
 			log.Printf("[tunnel] old goroutines did not exit within 5s, proceeding anyway")
 		}
 	}

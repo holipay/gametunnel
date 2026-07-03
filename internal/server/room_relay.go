@@ -124,7 +124,9 @@ func (r *Room) handleRelay(payload []byte, from *net.UDPAddr) {
 		}
 	} else {
 		for _, addr := range targets {
-			if r.bwLimiter == nil || r.bwLimiter.Allow(addr, packetSize) {
+			// Skip bandwidth limiting for TCP bridge clients (synthetic 127.0.0.254 addresses)
+			// since their bandwidth is bounded by the TCP connection itself.
+			if r.bwLimiter == nil || addr.IP.Equal(net.IPv4(127, 0, 0, 254)) || r.bwLimiter.Allow(addr, packetSize) {
 				r.sendCheckedRaw(encoded, addr)
 			}
 		}

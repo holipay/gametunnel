@@ -73,6 +73,7 @@ type DataPayload struct {
 	DstIP     net.IP
 	FormatVer byte   // DataFormatVersion (0 = old format without version)
 	Flags     byte   // DataFlagHasToken etc.
+	Token     [DataTokenLen]byte // session token (used when Flags&DataFlagHasToken != 0)
 	Data      []byte
 }
 
@@ -105,18 +106,31 @@ func (d *DataPayload) Marshal() []byte {
 	if src == nil || dst == nil {
 		return nil
 	}
-	buf := make([]byte, DataHeaderLen+len(d.Data))
+	size := DataHeaderLen + len(d.Data)
+	if d.Flags&DataFlagHasToken != 0 {
+		size += DataTokenLen
+	}
+	buf := make([]byte, size)
 	copy(buf[0:4], src)
 	copy(buf[4:8], dst)
 	buf[8] = DataFormatVersion
 	buf[9] = d.Flags
-	copy(buf[10:], d.Data)
+	off := DataHeaderLen
+	if d.Flags&DataFlagHasToken != 0 {
+		copy(buf[off:], d.Token[:])
+		off += DataTokenLen
+	}
+	copy(buf[off:], d.Data)
 	return buf
 }
 
 // MarshalSize returns the encoded size of this DataPayload.
 func (d *DataPayload) MarshalSize() int {
-	return DataHeaderLen + len(d.Data)
+	size := DataHeaderLen + len(d.Data)
+	if d.Flags&DataFlagHasToken != 0 {
+		size += DataTokenLen
+	}
+	return size
 }
 
 // MarshalTo writes the encoded payload into dst (zero-copy).
@@ -131,7 +145,12 @@ func (d *DataPayload) MarshalTo(dst []byte) int {
 	copy(dst[4:8], dstIP)
 	dst[8] = DataFormatVersion
 	dst[9] = d.Flags
-	return DataHeaderLen + copy(dst[10:], d.Data)
+	off := DataHeaderLen
+	if d.Flags&DataFlagHasToken != 0 {
+		copy(dst[off:], d.Token[:])
+		off += DataTokenLen
+	}
+	return off + copy(dst[off:], d.Data)
 }
 
 func UnmarshalData(data []byte) (*DataPayload, error) {
@@ -149,6 +168,12 @@ func UnmarshalData(data []byte) (*DataPayload, error) {
 	if off != 8 {
 		dp.Flags = data[9]
 		dp.FormatVer = data[8]
+	}
+	// Parse token if present.
+	tokenOff := DataHeaderLen
+	if dp.Flags&DataFlagHasToken != 0 && len(data) >= tokenOff+DataTokenLen {
+		copy(dp.Token[:], data[tokenOff:tokenOff+DataTokenLen])
+		off = tokenOff + DataTokenLen
 	}
 	dataLen := len(data) - off
 	pktData := make([]byte, dataLen)
@@ -188,6 +213,12 @@ func UnmarshalDataPooled(data []byte) (*DataPayload, error) {
 	} else {
 		dp.FormatVer = 0
 		dp.Flags = 0
+	}
+	// Parse token if present.
+	tokenOff := DataHeaderLen
+	if dp.Flags&DataFlagHasToken != 0 && len(data) >= tokenOff+DataTokenLen {
+		copy(dp.Token[:], data[tokenOff:tokenOff+DataTokenLen])
+		off = tokenOff + DataTokenLen
 	}
 	rawData := data[off:]
 	if cap(dp.Data) < len(rawData) {
