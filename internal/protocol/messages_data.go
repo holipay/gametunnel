@@ -97,6 +97,7 @@ func PutDataPayload(dp *DataPayload) {
 	dp.Data = dp.Data[:0]
 	dp.FormatVer = 0
 	dp.Flags = 0
+	dp.Token = [DataTokenLen]byte{}
 	dataPayloadPool.Put(dp)
 }
 
@@ -169,11 +170,8 @@ func UnmarshalData(data []byte) (*DataPayload, error) {
 		dp.Flags = data[9]
 		dp.FormatVer = data[8]
 	}
-	// Parse token if present.
-	tokenOff := DataHeaderLen
-	if dp.Flags&DataFlagHasToken != 0 && len(data) >= tokenOff+DataTokenLen {
-		copy(dp.Token[:], data[tokenOff:tokenOff+DataTokenLen])
-		off = tokenOff + DataTokenLen
+	if dp.Flags&DataFlagHasToken != 0 && len(data) >= DataHeaderLen+DataTokenLen {
+		copy(dp.Token[:], data[DataHeaderLen:DataHeaderLen+DataTokenLen])
 	}
 	dataLen := len(data) - off
 	pktData := make([]byte, dataLen)
@@ -214,11 +212,8 @@ func UnmarshalDataPooled(data []byte) (*DataPayload, error) {
 		dp.FormatVer = 0
 		dp.Flags = 0
 	}
-	// Parse token if present.
-	tokenOff := DataHeaderLen
-	if dp.Flags&DataFlagHasToken != 0 && len(data) >= tokenOff+DataTokenLen {
-		copy(dp.Token[:], data[tokenOff:tokenOff+DataTokenLen])
-		off = tokenOff + DataTokenLen
+	if dp.Flags&DataFlagHasToken != 0 && len(data) >= DataHeaderLen+DataTokenLen {
+		copy(dp.Token[:], data[DataHeaderLen:DataHeaderLen+DataTokenLen])
 	}
 	rawData := data[off:]
 	if cap(dp.Data) < len(rawData) {
