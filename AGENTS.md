@@ -29,3 +29,9 @@ gh pr create \
 # 6. 切回 main（可选）
 git checkout main
 ```
+
+## 重要规则
+
+- **PR 创建后不要自行合并**，等待用户指令合并或由其他人合并
+- PR 合并后清理本地和远程分支
+- 合并后切回 main 并 pull
