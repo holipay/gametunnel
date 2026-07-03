@@ -15,6 +15,7 @@ type PeerInfoEntry struct {
 	VirtualIP  net.IP
 	PublicAddr *net.UDPAddr
 	Username   string
+	NATType    NATType // peer's NAT type (0 = unknown, from NAT probe)
 }
 
 // PeerInfoPayload is sent by the server to inform clients about peers.
@@ -89,6 +90,7 @@ func (p *PeerInfoPayload) Marshal() []byte {
 		}
 		total += 2 // username length prefix
 		total += len(peer.Username)
+		total += 1 // NATType (1 byte)
 	}
 
 	buf := make([]byte, 0, total)
@@ -114,6 +116,7 @@ func (p *PeerInfoPayload) Marshal() []byte {
 		userLen := len(buf) - userStart - 2
 		buf[userStart] = byte(userLen)
 		buf[userStart+1] = byte(userLen >> 8)
+		buf = append(buf, byte(peer.NATType))
 	}
 	return buf
 }
@@ -164,10 +167,16 @@ func UnmarshalPeerInfo(data []byte) (*PeerInfoPayload, error) {
 		}
 		username := string(data[off : off+userLen])
 		off += userLen
+		var natType NATType
+		if off < len(data) {
+			natType = NATType(data[off])
+			off++
+		}
 		payload.Peers = append(payload.Peers, PeerInfoEntry{
 			VirtualIP:  vip,
 			PublicAddr: pubAddr,
 			Username:   username,
+			NATType:    natType,
 		})
 	}
 	return payload, nil

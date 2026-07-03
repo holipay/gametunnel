@@ -71,6 +71,18 @@ func (t *Tunnel) sendHolePunchRelay(peerIP net.IP) {
 // It runs until all phases complete or the context is cancelled.
 // Uses NAT type detection and port prediction for smarter strategies.
 func (t *Tunnel) startHolePunch(ctx context.Context, peerIP net.IP) {
+	// Wait for async NAT probe to complete before deciding strategy
+	t.mu.RLock()
+	probeDone := t.nat.probeDone
+	t.mu.RUnlock()
+	if probeDone != nil {
+		select {
+		case <-probeDone:
+		case <-ctx.Done():
+			return
+		}
+	}
+
 	t.mu.RLock()
 	peer, ok := t.peers[netkey.IPKey(peerIP)]
 	if !ok || peer.PublicAddr.Load() == nil {
@@ -78,32 +90,41 @@ func (t *Tunnel) startHolePunch(ctx context.Context, peerIP net.IP) {
 		return
 	}
 	peerAddr := peer.PublicAddr.Load()
+	peerNATType := peer.NATType
 	natResult := t.nat.probeResult
 	t.mu.RUnlock()
 
-	// Determine strategy based on NAT type
+	// Determine strategy based on both local AND peer NAT types
 	strategy := nat.StrategyDirect
-	if natResult != nil {
-		// We know our NAT type; the peer's NAT type is unknown
-		// Use our type to decide strategy (conservative: assume peer is restricted)
+	if natResult != nil && peerNATType != 0 {
+		// Both sides know their NAT types — use optimal strategy
+		strategy = nat.GetHolePunchStrategy(natResult.Type, peerNATType)
+	} else if natResult != nil {
+		// Only local NAT type known — conservative: assume peer is restricted
 		switch natResult.Type {
 		case nat.NATSymmetric:
-			// Symmetric NAT — try extended punch with port prediction
 			strategy = nat.StrategyExtended
 		case nat.NATFullCone, nat.NATNoNAT:
-			// Full Cone or no NAT — direct punch is very likely to succeed
 			strategy = nat.StrategyDirect
 		}
+	}
+
+	// Skip hole punch entirely if strategy says relay is the only option
+	if strategy == nat.StrategyRelay {
+		log.Printf("[hole-punch] skipping P2P for %v (both sides symmetric NAT, relay only)", peerIP)
+		return
 	}
 
 	// If Symmetric NAT detected, try port prediction first
 	if strategy == nat.StrategyExtended {
 		t.mu.RLock()
 		pp := t.nat.portPredictor
+		peerPorts := make([]int, len(peer.observedPorts))
+		copy(peerPorts, peer.observedPorts)
 		t.mu.RUnlock()
-		if pp != nil {
-			if predictedPorts := pp.PredictPortsForPeer([]int{peerAddr.Port}); len(predictedPorts) > 0 {
-				log.Printf("[hole-punch] trying port prediction for %v: %d candidates", peerIP, len(predictedPorts))
+		if pp != nil && len(peerPorts) >= 2 {
+			if predictedPorts := pp.PredictPortsForPeer(peerPorts); len(predictedPorts) > 0 {
+				log.Printf("[hole-punch] trying port prediction for %v: %d candidates (from %d observed ports)", peerIP, len(predictedPorts), len(peerPorts))
 				for _, port := range predictedPorts {
 					predictedAddr := &net.UDPAddr{IP: peerAddr.IP, Port: port}
 					t.burstHolePunch(predictedAddr, 3, 50*time.Millisecond, ctx)
