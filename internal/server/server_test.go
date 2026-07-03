@@ -245,7 +245,7 @@ func TestCleanupStale_NoStaleClients(t *testing.T) {
 	}
 }
 
-// ── Room handleKeepAlive Tests ─────────────────────────────────
+// ── Room handleKeepAliveWithPayload Tests ────────────────────────
 
 func TestRoomHandleKeepAlive(t *testing.T) {
 	r := newTestRoom("10.10.0.0/24", net.IPv4(10, 10, 0, 1))
@@ -265,7 +265,7 @@ func TestRoomHandleKeepAlive(t *testing.T) {
 	r.addrMap[netkey.AddrToRateKey(addr)] = c
 	r.mu.Unlock()
 
-	r.handleKeepAlive(addr)
+	r.handleKeepAliveWithPayload(nil, addr)
 
 	r.mu.RLock()
 	updated := r.addrMap[netkey.AddrToRateKey(addr)]

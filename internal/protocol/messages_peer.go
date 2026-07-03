@@ -82,6 +82,7 @@ func AppendAddrStr(buf []byte, addr *net.UDPAddr) []byte {
 func (p *PeerInfoPayload) Marshal() []byte {
 	// Pre-calculate total size to avoid multiple allocations
 	total := 2 // peer count (2 bytes)
+	hasNATInfo := false
 	for _, peer := range p.Peers {
 		total += 4 // VirtualIP (4 bytes IPv4)
 		total += 2 // addr length prefix
@@ -90,7 +91,13 @@ func (p *PeerInfoPayload) Marshal() []byte {
 		}
 		total += 2 // username length prefix
 		total += len(peer.Username)
-		total += 1 // NATType (1 byte)
+		if peer.NATType != 0 {
+			hasNATInfo = true
+		}
+	}
+	// Trailing NAT type section: 1 byte per peer (only if any peer has NAT info)
+	if hasNATInfo {
+		total += len(p.Peers)
 	}
 
 	buf := make([]byte, 0, total)
@@ -116,7 +123,12 @@ func (p *PeerInfoPayload) Marshal() []byte {
 		userLen := len(buf) - userStart - 2
 		buf[userStart] = byte(userLen)
 		buf[userStart+1] = byte(userLen >> 8)
-		buf = append(buf, byte(peer.NATType))
+	}
+	// Trailing NAT type section (backward compatible: old clients stop at count boundary)
+	if hasNATInfo {
+		for _, peer := range p.Peers {
+			buf = append(buf, byte(peer.NATType))
+		}
 	}
 	return buf
 }
@@ -167,17 +179,18 @@ func UnmarshalPeerInfo(data []byte) (*PeerInfoPayload, error) {
 		}
 		username := string(data[off : off+userLen])
 		off += userLen
-		var natType NATType
-		if off < len(data) {
-			natType = NATType(data[off])
-			off++
-		}
 		payload.Peers = append(payload.Peers, PeerInfoEntry{
 			VirtualIP:  vip,
 			PublicAddr: pubAddr,
 			Username:   username,
-			NATType:    natType,
 		})
+	}
+	// Trailing NAT type section: 1 byte per peer if present
+	if off < len(data) {
+		natLen := len(data) - off
+		for i := 0; i < count && i < natLen; i++ {
+			payload.Peers[i].NATType = NATType(data[off+i])
+		}
 	}
 	return payload, nil
 }
