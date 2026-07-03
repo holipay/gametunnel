@@ -241,6 +241,10 @@ func (t *Tunnel) receiveFromTUN(ctx context.Context) {
 		default:
 			// Worker channel full — drop packet and return buffer to pool
 			pool.PktBufPut(pkt)
+			n := t.tunDropped.Add(1)
+			if n&(n-1) == 0 { // log every power of 2
+				log.Printf("[tunnel] TUN channel full, %d packets dropped total", n)
+			}
 		}
 	}
 }

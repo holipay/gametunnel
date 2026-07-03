@@ -60,6 +60,13 @@ func (t *Tunnel) handlePeerInfo(ctx context.Context, payload []byte) {
 	var changedPeerIPs []net.IP // peers whose public address changed (need re-punch)
 	now := time.Now()
 
+	// Collect log messages under lock, emit after release to avoid blocking readers.
+	type peerLog struct {
+		format string
+		args   []interface{}
+	}
+	var logs []peerLog
+
 	t.mu.Lock()
 
 	// Mark all existing peers as stale, then update/add from the broadcast.
@@ -95,7 +102,7 @@ func (t *Tunnel) handlePeerInfo(ctx context.Context, payload []byte) {
 			addrChanged := existingAddr != nil && pubAddr != nil &&
 				(!existingAddr.IP.Equal(pubAddr.IP) || existingAddr.Port != pubAddr.Port)
 			if addrChanged {
-				log.Printf(i18n.T().LogPeerAddrChange, entry.Username, entry.VirtualIP, existing.PublicAddr.Load(), entry.PublicAddr)
+				logs = append(logs, peerLog{i18n.T().LogPeerAddrChange, []interface{}{entry.Username, entry.VirtualIP, existing.PublicAddr.Load(), entry.PublicAddr}})
 				existing.DirectReach.Store(false) // reset P2P status, need re-punch
 				changedPeerIPs = append(changedPeerIPs, entry.VirtualIP)
 			}
@@ -122,7 +129,7 @@ func (t *Tunnel) handlePeerInfo(ctx context.Context, payload []byte) {
 			}
 			p.lastSeen.Store(now.UnixNano())
 			t.peers[key] = p
-			log.Printf(i18n.T().LogNewPeer, entry.Username, entry.VirtualIP)
+			logs = append(logs, peerLog{i18n.T().LogNewPeer, []interface{}{entry.Username, entry.VirtualIP}})
 			newPeerIPs = append(newPeerIPs, entry.VirtualIP)
 		}
 	}
@@ -130,12 +137,17 @@ func (t *Tunnel) handlePeerInfo(ctx context.Context, payload []byte) {
 	// Phase 3: Remove stale peers (those that left)
 	for key, peer := range t.peers {
 		if peer.stale {
-			log.Printf(i18n.T().LogPeerLeave2, peer.Username, peer.VirtualIP)
+			logs = append(logs, peerLog{i18n.T().LogPeerLeave2, []interface{}{peer.Username, peer.VirtualIP}})
 			delete(t.peers, key)
 		}
 	}
 
 	t.mu.Unlock()
+
+	// Emit log messages outside the lock.
+	for _, l := range logs {
+		log.Printf(l.format, l.args...)
+	}
 
 	// Launch hole punches outside the lock to avoid holding it during goroutine creation
 	allPeerIPs := append(newPeerIPs, changedPeerIPs...)

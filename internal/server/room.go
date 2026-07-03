@@ -386,7 +386,7 @@ func (r *Room) notifyShutdown() {
 	r.mu.RLock()
 	targets := make([]*net.UDPAddr, 0, len(r.clients))
 	for _, c := range r.clients {
-		if c.PublicAddr != nil && c.auth == authNone {
+		if c.PublicAddr != nil {
 			targets = append(targets, c.PublicAddr)
 		}
 	}
