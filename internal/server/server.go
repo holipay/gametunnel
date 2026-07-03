@@ -348,6 +348,16 @@ func (s *Server) Run(ctx context.Context) {
 // Close shuts down the server and all room background goroutines.
 // Sends disconnect notifications to all connected clients before closing.
 func (s *Server) Close() error {
+	// Notify all clients BEFORE cancelling context so sendQueue is still running
+	s.roomMu.RLock()
+	for _, room := range s.rooms {
+		room.notifyShutdown()
+	}
+	s.roomMu.RUnlock()
+
+	// Give sendQueue time to flush disconnect packets
+	time.Sleep(100 * time.Millisecond)
+
 	// Cancel context to signal all goroutines to exit
 	s.closeMu.Lock()
 	cancel := s.cancelCtx
@@ -358,13 +368,11 @@ func (s *Server) Close() error {
 	}
 
 	// Wait for the main read loop to exit before closing the connection.
-	// This eliminates the race between Close() closing conn and Run() reading from it.
 	s.runWg.Wait()
 
-	// Notify all clients before shutting down
+	// Stop all rooms
 	s.roomMu.RLock()
 	for _, room := range s.rooms {
-		room.notifyShutdown()
 		room.Stop()
 	}
 	s.roomMu.RUnlock()

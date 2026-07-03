@@ -18,12 +18,12 @@ func (r *Room) handleKeepAliveWithPayload(payload []byte, from *net.UDPAddr) {
 	r.mu.RLock()
 	c := r.addrMap[netkey.AddrToRateKey(from)]
 	r.mu.RUnlock()
-	if c != nil {
-		c.SetLastSeen(time.Now())
-		if len(payload) >= 1 {
-			c.NATType = payload[0]
+		if c != nil {
+			c.SetLastSeen(time.Now())
+			if len(payload) >= 1 {
+				c.NATType.Store(int32(payload[0]))
+			}
 		}
-	}
 }
 
 func (r *Room) handleDisconnect(from *net.UDPAddr) {

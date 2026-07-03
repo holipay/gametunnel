@@ -48,20 +48,23 @@ type Peer struct {
 	DirectReach   atomic.Bool               // true if P2P direct path has been confirmed
 	observedPorts []int                     // historical external ports for port prediction
 	lastSeen      atomic.Int64 // last time server reported this peer (UnixNano)
-	lastPunchBack atomic.Pointer[time.Time] // rate limit for hole punch responses
+	lastPunchBack atomic.Int64  // rate limit: UnixNano of last hole punch response
 	stale         bool          // mark-and-sweep flag, only valid under t.mu in handlePeerInfo (not atomic)
 }
 
 // tryRateLimitHolePunch checks and updates the hole-punch rate limiter.
 // Returns true if the punch is allowed (not rate-limited).
 func (p *Peer) tryRateLimitHolePunch(backoff time.Duration) bool {
-	now := time.Now()
-	lastPunch := p.lastPunchBack.Load()
-	if lastPunch != nil && now.Sub(*lastPunch) < backoff {
+	now := time.Now().UnixNano()
+	last := p.lastPunchBack.Load()
+	if last != 0 && now-last < int64(backoff) {
 		return false
 	}
-	p.lastPunchBack.Store(&now)
-	return true
+	if p.lastPunchBack.CompareAndSwap(last, now) {
+		return true
+	}
+	// CAS failed — another goroutine updated first; treat as rate-limited.
+	return false
 }
 
 // TunDevice abstracts the TUN device for testability and platform independence.
@@ -154,10 +157,12 @@ func (t *Tunnel) Connect(ctx context.Context, serverAddr string, mtu int, newTUN
 
 	if err := t.ensureTUN(mtu); err != nil {
 		conn.Close()
+		t.mu.Lock()
 		if t.tcpTransport != nil {
 			t.tcpTransport.Close()
 			t.tcpTransport = nil
 		}
+		t.mu.Unlock()
 		return err
 	}
 
@@ -182,6 +187,7 @@ func (t *Tunnel) stopPreviousRun() {
 
 // dialServer creates a dual-stack UDP connection and normalizes the server address.
 func (t *Tunnel) dialServer(sAddr *net.UDPAddr) (*net.UDPConn, error) {
+	t.mu.Lock()
 	if t.conn != nil {
 		t.conn.Close()
 	}
@@ -189,6 +195,7 @@ func (t *Tunnel) dialServer(sAddr *net.UDPAddr) (*net.UDPConn, error) {
 	bindAddr := &net.UDPAddr{IP: net.IPv6zero, Port: 0}
 	conn, err := net.ListenUDP("udp", bindAddr)
 	if err != nil {
+		t.mu.Unlock()
 		return nil, fmt.Errorf("%s", i18n.Format(i18n.T().ErrBindUDP, err))
 	}
 
@@ -200,6 +207,7 @@ func (t *Tunnel) dialServer(sAddr *net.UDPAddr) (*net.UDPConn, error) {
 		log.Printf("set socket buffers: %v", err)
 	}
 	t.conn = conn
+	t.mu.Unlock()
 	return conn, nil
 }
 
@@ -212,26 +220,29 @@ func (t *Tunnel) registerWithFallback(ctx context.Context, serverAddr string, co
 			conn.Close()
 			return fmt.Errorf("%s (TCP fallback also failed: %v)", i18n.Format(i18n.T().ErrRegisterFailed, err), tcpErr)
 		}
+		t.mu.Lock()
 		t.tcpTransport = tcp
+		t.mu.Unlock()
 		if regErr := t.registerTCP(ctx); regErr != nil {
 			tcp.Close()
 			conn.Close()
-			return fmt.Errorf("%s", i18n.Format(i18n.T().ErrRegisterFailed, regErr))
+			return fmt.Errorf("%s (TCP fallback also failed: %v)", i18n.Format(i18n.T().ErrRegisterFailed, err), regErr)
 		}
 		log.Printf("[tunnel] connected via TCP fallback")
 	}
 	return nil
 }
 
-// probeNAT performs NAT type detection asynchronously in a background goroutine.
+// probeNATAsync performs NAT type detection asynchronously in a background goroutine.
 // The result is stored in t.nat.probeResult when complete. Hole punch goroutines
 // that need the result will wait on natProbeDone.
 func (t *Tunnel) probeNATAsync(conn *net.UDPConn, sAddr *net.UDPAddr) {
 	t.mu.RLock()
 	alreadyProbed := t.nat.probeResult != nil
+	tcpActive := t.tcpTransport != nil
 	t.mu.RUnlock()
 
-	if t.tcpTransport != nil || alreadyProbed {
+	if tcpActive || alreadyProbed {
 		close(t.nat.probeDone)
 		return
 	}
@@ -311,7 +322,10 @@ func (t *Tunnel) startRelayLoops(ctx context.Context, conn *net.UDPConn, sAddr *
 
 // ensureTUN reuses or creates the TUN device based on whether the IP changed.
 func (t *Tunnel) ensureTUN(mtu int) error {
-	ipChanged := t.lastAssignedIP != nil && !t.session.virtualIP.Equal(t.lastAssignedIP)
+	t.mu.RLock()
+	lastIP := t.lastAssignedIP
+	t.mu.RUnlock()
+	ipChanged := lastIP != nil && !t.session.virtualIP.Equal(lastIP)
 	tunAlive := t.tunDev.Load() != nil
 
 	switch {
@@ -323,8 +337,10 @@ func (t *Tunnel) ensureTUN(mtu int) error {
 		return t.createTUN(mtu)
 
 	case tunAlive && ipChanged:
-		log.Printf("%s", i18n.Format(i18n.T().LogIPChanged, t.lastAssignedIP, t.session.virtualIP))
-		t.tunDev.Load().(TunDevice).Close()
+		log.Printf("%s", i18n.Format(i18n.T().LogIPChanged, lastIP, t.session.virtualIP))
+		if v := t.tunDev.Load(); v != nil {
+			v.(TunDevice).Close()
+		}
 		return t.createTUN(mtu)
 
 	case !tunAlive:

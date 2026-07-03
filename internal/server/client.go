@@ -29,7 +29,7 @@ type Client struct {
 	Username   string
 	VirtualIP  net.IP
 	PublicAddr *net.UDPAddr
-	NATType    byte // client's NAT type from keepalive (0 = unknown)
+	NATType    atomic.Int32 // client's NAT type from keepalive (0 = unknown)
 	lastSeen   atomic.Int64 // unix nano, use GetLastSeen/SetLastSeen
 	RTT        time.Duration // latest round-trip latency
 

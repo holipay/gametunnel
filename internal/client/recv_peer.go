@@ -140,7 +140,11 @@ func (t *Tunnel) handlePeerInfo(ctx context.Context, payload []byte) {
 	// Launch hole punches outside the lock to avoid holding it during goroutine creation
 	allPeerIPs := append(newPeerIPs, changedPeerIPs...)
 	for _, peerIP := range allPeerIPs {
-		go t.startHolePunch(ctx, peerIP)
+		t.holePunchWg.Add(1)
+		go func(ip net.IP) {
+			defer t.holePunchWg.Done()
+			t.startHolePunch(ctx, ip)
+		}(peerIP)
 		t.sendHolePunchRelay(peerIP)
 	}
 }
