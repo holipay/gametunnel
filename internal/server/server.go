@@ -367,7 +367,12 @@ func (s *Server) Close() error {
 		cancel()
 	}
 
-	// Wait for the main read loop to exit before closing the connection.
+	// Close the UDP connection first to unblock ReadFromUDP in Run().
+	// ReadFromUDP will return "use of closed network connection" error,
+	// allowing Run() to exit and runWg.Wait() to complete.
+	s.conn.Close()
+
+	// Wait for the main read loop to exit.
 	s.runWg.Wait()
 
 	// Stop all rooms
@@ -395,7 +400,7 @@ func (s *Server) Close() error {
 		s.pprofListener.Close()
 	}
 
-	return s.conn.Close()
+	return nil
 }
 
 // SetPprofListener sets the pprof HTTP listener for runtime profiling.
