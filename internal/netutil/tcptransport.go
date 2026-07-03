@@ -61,6 +61,8 @@ func configureTCP(conn net.Conn) {
 
 // Send writes a protocol packet to the TCP connection with length-prefix framing.
 // Thread-safe (uses mutex for concurrent writes from multiple goroutines).
+// Uses net.Buffers (writev) to atomically write header + data as a single syscall,
+// preventing partial frames on connection errors.
 func (t *TCPTransport) Send(data []byte) error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -77,11 +79,10 @@ func (t *TCPTransport) Send(data []byte) error {
 	var header [2]byte
 	binary.LittleEndian.PutUint16(header[:], uint16(len(data)))
 
-	if _, err := t.conn.Write(header[:]); err != nil {
-		return fmt.Errorf("tcp write header: %w", err)
-	}
-	if _, err := t.conn.Write(data); err != nil {
-		return fmt.Errorf("tcp write data: %w", err)
+	// Write header + data atomically via writev to prevent partial frames.
+	bufs := net.Buffers{header[:], data}
+	if _, err := bufs.WriteTo(t.conn); err != nil {
+		return fmt.Errorf("tcp write: %w", err)
 	}
 	return nil
 }
