@@ -223,20 +223,28 @@ func (t *Tunnel) registerWithFallback(ctx context.Context, serverAddr string, co
 	return nil
 }
 
-// probeNAT performs NAT type detection asynchronously in a background goroutine.
+// probeNATAsync performs NAT type detection asynchronously in a background goroutine.
 // The result is stored in t.nat.probeResult when complete. Hole punch goroutines
 // that need the result will wait on natProbeDone.
 func (t *Tunnel) probeNATAsync(conn *net.UDPConn, sAddr *net.UDPAddr) {
 	t.mu.RLock()
 	alreadyProbed := t.nat.probeResult != nil
+	tcpActive := t.tcpTransport != nil
 	t.mu.RUnlock()
 
-	if t.tcpTransport != nil || alreadyProbed {
+	if tcpActive || alreadyProbed {
+		close(t.nat.probeDone)
+		return
+	}
+
+	// Prevent redundant probes on rapid reconnect
+	if !t.nat.probeRunning.CompareAndSwap(false, true) {
 		close(t.nat.probeDone)
 		return
 	}
 
 	go func() {
+		defer t.nat.probeRunning.Store(false)
 		defer close(t.nat.probeDone)
 
 		result, err := nat.ProbeNATType(conn, sAddr)
