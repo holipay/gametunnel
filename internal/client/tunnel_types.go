@@ -85,6 +85,7 @@ type Tunnel struct {
 	sendLimiter      *clientSendLimiter
 	lastServerResponse atomic.Int64
 	sendErrors       atomic.Int64
+	tunDropped       atomic.Int64 // TUN worker channel full, packets dropped
 	cancelKicks      atomic.Bool
 
 	// TCP fallback
