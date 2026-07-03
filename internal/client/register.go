@@ -94,24 +94,40 @@ func (t *Tunnel) registerTCP(ctx context.Context) error {
 	}
 
 	deadline := 10 * time.Second
-	timer := time.NewTimer(deadline)
-	defer timer.Stop()
+	// Clear read deadline when done (matches UDP register cleanup).
+	defer t.tcpTransport.SetReadDeadline(time.Time{})
 
+	const maxRetries = 3
+	retries := 0
 	authRounds := 0
 
 	for {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-timer.C:
-			return fmt.Errorf("TCP registration timeout")
-		default:
+		// Set a read deadline so Receive() can be interrupted by timeout.
+		if err := t.tcpTransport.SetReadDeadline(time.Now().Add(deadline)); err != nil {
+			return fmt.Errorf("tcp set read deadline: %w", err)
 		}
 
 		data, err := t.tcpTransport.Receive()
 		if err != nil {
+			// Check context cancellation first.
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			default:
+			}
+			// Distinguish timeout from other errors.
+			if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
+				retries++
+				if retries > maxRetries {
+					return fmt.Errorf("TCP registration timeout after %d retries", maxRetries)
+				}
+				log.Printf("TCP registration timeout, retrying (%d/%d)...", retries, maxRetries)
+				continue
+			}
 			return fmt.Errorf("tcp receive: %w", err)
 		}
+
+		retries = 0
 
 		msg, err := protocol.DecodeChecked(data)
 		if err != nil {
@@ -125,7 +141,6 @@ func (t *Tunnel) registerTCP(ctx context.Context) error {
 		if done {
 			return nil
 		}
-		timer.Reset(deadline)
 	}
 }
 
