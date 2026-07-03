@@ -38,13 +38,25 @@ func DialTCP(addr string, timeout time.Duration) (*TCPTransport, error) {
 	if err != nil {
 		return nil, fmt.Errorf("tcp dial: %w", err)
 	}
-	// Set TCP_NODELAY for low latency (disable Nagle's algorithm)
-	if tc, ok := conn.(*net.TCPConn); ok {
-		if err := tc.SetNoDelay(true); err != nil {
-			log.Printf("set TCP_NODELAY: %v", err)
-		}
-	}
+	configureTCP(conn)
 	return NewTCPTransport(conn), nil
+}
+
+// configureTCP applies common TCP settings:_NODELAY + keepalive.
+func configureTCP(conn net.Conn) {
+	tc, ok := conn.(*net.TCPConn)
+	if !ok {
+		return
+	}
+	if err := tc.SetNoDelay(true); err != nil {
+		log.Printf("set TCP_NODELAY: %v", err)
+	}
+	if err := tc.SetKeepAlive(true); err != nil {
+		log.Printf("set TCP keepalive: %v", err)
+	}
+	if err := tc.SetKeepAlivePeriod(30 * time.Second); err != nil {
+		log.Printf("set TCP keepalive period: %v", err)
+	}
 }
 
 // Send writes a protocol packet to the TCP connection with length-prefix framing.
@@ -111,6 +123,12 @@ func (t *TCPTransport) Close() error {
 	return t.conn.Close()
 }
 
+// SetReadDeadline sets the deadline for future Read calls on the connection.
+// A zero value means reads will not time out.
+func (t *TCPTransport) SetReadDeadline(deadline time.Time) error {
+	return t.conn.SetReadDeadline(deadline)
+}
+
 // RemoteAddr returns the remote address of the TCP connection.
 func (t *TCPTransport) RemoteAddr() net.Addr {
 	return t.conn.RemoteAddr()
@@ -136,11 +154,7 @@ func (tl *TCPListener) Accept() (*TCPTransport, error) {
 	if err != nil {
 		return nil, err
 	}
-	if tc, ok := conn.(*net.TCPConn); ok {
-		if err := tc.SetNoDelay(true); err != nil {
-			log.Printf("set TCP_NODELAY on accept: %v", err)
-		}
-	}
+	configureTCP(conn)
 	return NewTCPTransport(conn), nil
 }
 

@@ -94,22 +94,26 @@ func (t *Tunnel) registerTCP(ctx context.Context) error {
 	}
 
 	deadline := 10 * time.Second
-	timer := time.NewTimer(deadline)
-	defer timer.Stop()
-
 	authRounds := 0
 
 	for {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-timer.C:
-			return fmt.Errorf("TCP registration timeout")
-		default:
+		// Set a read deadline so Receive() can be interrupted by timeout.
+		if err := t.tcpTransport.SetReadDeadline(time.Now().Add(deadline)); err != nil {
+			return fmt.Errorf("tcp set read deadline: %w", err)
 		}
 
 		data, err := t.tcpTransport.Receive()
 		if err != nil {
+			// Check context cancellation first.
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			default:
+			}
+			// Distinguish timeout from other errors.
+			if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
+				continue // retry with new deadline
+			}
 			return fmt.Errorf("tcp receive: %w", err)
 		}
 
@@ -125,7 +129,6 @@ func (t *Tunnel) registerTCP(ctx context.Context) error {
 		if done {
 			return nil
 		}
-		timer.Reset(deadline)
 	}
 }
 
