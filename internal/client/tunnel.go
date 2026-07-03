@@ -253,9 +253,12 @@ func (t *Tunnel) probeNATAsync(conn *net.UDPConn, sAddr *net.UDPAddr) {
 		return
 	}
 
+	// Capture the channel locally so the goroutine always closes the
+	// channel that existed when it was spawned, not a later replacement.
+	ch := t.nat.probeDone
 	go func() {
 		defer t.nat.probeRunning.Store(false)
-		defer close(t.nat.probeDone)
+		defer close(ch)
 
 		result, err := nat.ProbeNATType(conn, sAddr)
 		if err != nil {
