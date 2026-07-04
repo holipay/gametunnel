@@ -148,6 +148,7 @@ func (r *Room) handleRegister(payload []byte, from *net.UDPAddr) {
 		r.sendPeerInfoToClient(from)
 		r.invalidatePeerInfoCache()
 		r.markDirty()
+		go r.sendPeerInfoBroadcast()
 		return
 	}
 
@@ -187,6 +188,7 @@ func (r *Room) handleRegister(payload []byte, from *net.UDPAddr) {
 		r.sendPeerInfoToClient(from)
 		r.invalidatePeerInfoCache()
 		r.markDirty()
+		go r.sendPeerInfoBroadcast()
 		return
 	}
 
@@ -369,6 +371,7 @@ func (r *Room) handleECDHConfirm(payload []byte, from *net.UDPAddr) {
 	r.sendPeerInfoToClient(from)
 	r.invalidatePeerInfoCache()
 	r.markDirty()
+	go r.sendPeerInfoBroadcast()
 }
 
 func (r *Room) handleAuthResponse(payload []byte, from *net.UDPAddr) {
@@ -522,4 +525,5 @@ func (r *Room) handleAuthResponse(payload []byte, from *net.UDPAddr) {
 	r.sendPeerInfoToClient(from)
 	r.invalidatePeerInfoCache()
 	r.markDirty()
+	go r.sendPeerInfoBroadcast()
 }
