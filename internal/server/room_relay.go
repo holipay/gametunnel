@@ -37,6 +37,10 @@ func (r *Room) handleRelay(payload []byte, from *net.UDPAddr) {
 	srcIP := net.IP(payload[0:4])
 	dstIP := net.IP(payload[4:8])
 
+	// Determine broadcast before taking the lock — r.subnet is immutable
+	// after Room creation, so this is safe outside the critical section.
+	isBroadcast := netutil.IsRelayTarget(dstIP, r.subnet)
+
 	r.relayLog("[relay] received relay from %s: srcIP=%s dstIP=%s len=%d", from, srcIP, dstIP, len(payload))
 
 	r.mu.RLock()
@@ -80,7 +84,6 @@ func (r *Room) handleRelay(payload []byte, from *net.UDPAddr) {
 		}
 	}
 
-	isBroadcast := netutil.IsRelayTarget(dstIP, r.subnet)
 	r.relayLog("[relay] isBroadcast=%v subnet=%s", isBroadcast, r.subnet)
 
 	var stackTargets [maxInlineTargets]*net.UDPAddr
