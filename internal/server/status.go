@@ -45,13 +45,14 @@ type StatusInfo struct {
 
 // ConnectionInfo describes a single connected player.
 type ConnectionInfo struct {
-	Username   string `json:"username"`
-	VirtualIP  string `json:"virtual_ip"`
-	PublicAddr string `json:"public_addr"`
-	Idle       string `json:"idle"`
-	Ping       string `json:"ping"`
-	Loss       string `json:"loss"`
-	Jitter     string `json:"jitter"`
+	Username      string `json:"username"`
+	VirtualIP     string `json:"virtual_ip"`
+	PublicAddr    string `json:"public_addr"`
+	Idle          string `json:"idle"`
+	Ping          string `json:"ping"`
+	Loss          string `json:"loss"`
+	Jitter        string `json:"jitter"`
+	ClientVersion string `json:"client_version,omitempty"`
 }
 
 func (s *Server) startStatusServer(ctx context.Context, addr string) {

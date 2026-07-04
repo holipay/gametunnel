@@ -35,14 +35,15 @@ func (r *Room) BuildRoomStatus() RoomStatusInfo {
 
 	// Collect raw data under lock — no allocations from fmt.Sprintf.
 	type clientSnap struct {
-		username  string
-		vip       string
-		pubAddr   string
-		idle      time.Duration
-		rtt       time.Duration
-		lossRate  float64
-		jitter    time.Duration
-		pingCount int
+		username      string
+		vip           string
+		pubAddr       string
+		idle          time.Duration
+		rtt           time.Duration
+		lossRate      float64
+		jitter        time.Duration
+		pingCount     int
+		clientVersion uint16
 	}
 	r.mu.RLock()
 	snaps := make([]clientSnap, 0, len(r.clients))
@@ -53,14 +54,15 @@ func (r *Room) BuildRoomStatus() RoomStatusInfo {
 		}
 		lossRate, jitter := c.PingStats()
 		snaps = append(snaps, clientSnap{
-			username:  c.Username,
-			vip:       c.VirtualIP.String(),
-			pubAddr:   pubAddr,
-			idle:      now.Sub(c.GetLastSeen()),
-			rtt:       c.RTT,
-			lossRate:  lossRate,
-			jitter:    jitter,
-			pingCount: c.pingIdx,
+			username:      c.Username,
+			vip:           c.VirtualIP.String(),
+			pubAddr:       pubAddr,
+			idle:          now.Sub(c.GetLastSeen()),
+			rtt:           c.RTT,
+			lossRate:      lossRate,
+			jitter:        jitter,
+			pingCount:     c.pingIdx,
+			clientVersion: c.clientVersion,
 		})
 	}
 	r.mu.RUnlock()
@@ -84,14 +86,21 @@ func (r *Room) BuildRoomStatus() RoomStatusInfo {
 		if s.jitter > 0 {
 			jitterStr = fmt.Sprintf("%dms", s.jitter.Milliseconds())
 		}
+		var versionStr string
+		if s.clientVersion > 0 {
+			major := s.clientVersion >> 8
+			minor := s.clientVersion & 0xFF
+			versionStr = fmt.Sprintf("v%d.%d", major, minor)
+		}
 		conns = append(conns, ConnectionInfo{
-			Username:   s.username,
-			VirtualIP:  s.vip,
-			PublicAddr: s.pubAddr,
-			Idle:       idleStr,
-			Ping:       pingStr,
-			Loss:       lossStr,
-			Jitter:     jitterStr,
+			Username:      s.username,
+			VirtualIP:     s.vip,
+			PublicAddr:    s.pubAddr,
+			Idle:          idleStr,
+			Ping:          pingStr,
+			Loss:          lossStr,
+			Jitter:        jitterStr,
+			ClientVersion: versionStr,
 		})
 	}
 

@@ -24,8 +24,8 @@
   <div class="stat"><div class="num">{{.Version}}</div><div class="label">{{.T.StatusVersion}}</div></div>
 </div>
 {{if .Connections}}
-<table><tr><th>{{.T.StatusTablePlayer}}</th><th>{{.T.StatusTableVIP}}</th><th>{{.T.StatusTableAddr}}</th><th>{{.T.StatusTablePing}}</th><th>Loss</th><th>Jitter</th><th>{{.T.StatusTableIdle}}</th></tr>
-{{range .Connections}}<tr><td>{{.Username}}</td><td>{{.VirtualIP}}</td><td>{{.PublicAddr}}</td><td>{{.Ping}}</td><td>{{.Loss}}</td><td>{{.Jitter}}</td><td>{{.Idle}}</td></tr>
+<table><tr><th>{{.T.StatusTablePlayer}}</th><th>{{.T.StatusTableVIP}}</th><th>{{.T.StatusTableAddr}}</th><th>{{.T.StatusTablePing}}</th><th>Loss</th><th>Jitter</th><th>{{.T.StatusTableIdle}}</th><th>Ver</th></tr>
+{{range .Connections}}<tr><td>{{.Username}}</td><td>{{.VirtualIP}}</td><td>{{.PublicAddr}}</td><td>{{.Ping}}</td><td>{{.Loss}}</td><td>{{.Jitter}}</td><td>{{.Idle}}</td><td>{{if .ClientVersion}}{{.ClientVersion}}{{else}}--{{end}}</td></tr>
 {{end}}</table>
 {{else}}
 <p style="color:#666">{{.T.StatusNoPlayers}}</p>
