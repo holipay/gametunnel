@@ -79,8 +79,10 @@ func (r *Room) CleanupStale() bool {
 		connKey connIPKey
 		c       *Client
 	}
-	var staleClients []staleClient
-	var staleAuths []staleAuth
+	var staleClientsStack [maxInlineTargets]staleClient
+	staleClients := staleClientsStack[:0]
+	var staleAuthsStack [maxInlineTargets]staleAuth
+	staleAuths := staleAuthsStack[:0]
 	for key, c := range r.clients {
 		if now.Sub(c.GetLastSeen()) > 30*time.Second {
 			sc := staleClient{key: key, c: c}

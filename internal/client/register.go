@@ -273,6 +273,7 @@ func (t *Tunnel) handleAssignIP(payload []byte) error {
 	t.nat.cachedPunchPacket.Store(cachedPunchPacket)
 	t.crypto.encCipher = encCipher
 	t.crypto.decCipher = decCipher
+	t.crypto.decAvailable.Store(decCipher != nil)
 	t.crypto.p2pCipher = p2pCipher
 	// Clear ECDH session key after use (prevent reuse)
 	t.crypto.ecdhSessionKey = nil

@@ -17,7 +17,9 @@ func (t *Tunnel) handleDirectHolePunch(ctx context.Context, from *net.UDPAddr, m
 	if len(msg.Payload) < 4 {
 		return
 	}
-	peerIP := net.IP(append([]byte(nil), msg.Payload[:4]...))
+	var peerIPBuf [4]byte
+	copy(peerIPBuf[:], msg.Payload[:4])
+	peerIP := net.IP(peerIPBuf[:])
 
 	t.mu.RLock()
 	peer, ok := t.peers[netkey.IPKey(peerIP)]

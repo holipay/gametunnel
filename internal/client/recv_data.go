@@ -124,10 +124,10 @@ func (t *Tunnel) handleDataFromServer(payload []byte) {
 		return
 	}
 
-	t.mu.RLock()
-	decCipher := t.crypto.decCipher
-	t.mu.RUnlock()
 	dev, _ := t.tunDev.Load().(TunDevice)
+	// decCipher is immutable during a session (set once at registration),
+	// safe to read without lock.
+	decCipher := t.crypto.decCipher
 
 	// Accept all server-relayed traffic unconditionally. The server already
 	// validates anti-spoofing (srcIP must match the sender's registered virtual

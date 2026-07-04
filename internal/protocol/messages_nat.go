@@ -105,7 +105,8 @@ func addrBytes(addr *net.UDPAddr) []byte {
 	if addr == nil {
 		return nil
 	}
-	return []byte(addr.String())
+	buf := make([]byte, 0, AddrStrLen(addr))
+	return AppendAddrStr(buf, addr)
 }
 
 // parseAddrBytes parses "ip:port" bytes into a UDPAddr.

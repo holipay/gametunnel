@@ -35,6 +35,7 @@ type cryptoState struct {
 	decCipher     *crypto.Cipher // server→client (relay receive)
 	p2pCipher     *crypto.Cipher // client↔client (P2P direct)
 	ecdhSessionKey []byte        // from ECDH negotiation (nil if not used)
+	decAvailable   atomic.Bool   // true once decCipher is set (set once, read often)
 }
 
 // natState holds NAT detection results and hole punch optimization state.
