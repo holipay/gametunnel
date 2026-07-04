@@ -125,9 +125,13 @@ func (t *Tunnel) handleDataFromServer(payload []byte) {
 	}
 
 	dev, _ := t.tunDev.Load().(TunDevice)
-	// decCipher is immutable during a session (set once at registration),
+	// p2pCipher is immutable during a session (set once at registration),
 	// safe to read without lock.
-	decCipher := t.crypto.decCipher
+	// The server relays encrypted bytes transparently — the original client
+	// encrypts with p2pCipher (DirClientToClient), and the server never
+	// decrypts/re-encrypts. Use p2pCipher here, NOT decCipher (which is
+	// reserved for server-originated control messages).
+	p2pCipher := t.crypto.p2pCipher
 
 	// Accept all server-relayed traffic unconditionally. The server already
 	// validates anti-spoofing (srcIP must match the sender's registered virtual
@@ -140,5 +144,5 @@ func (t *Tunnel) handleDataFromServer(payload []byte) {
 		return
 	}
 
-	t.decryptWriteAndRelease(dp, decCipher)
+	t.decryptWriteAndRelease(dp, p2pCipher)
 }

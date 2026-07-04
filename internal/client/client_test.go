@@ -1,6 +1,7 @@
 package client
 
 import (
+	"github.com/holipay/gametunnel/internal/crypto"
 	"github.com/holipay/gametunnel/internal/netkey"
 	"bytes"
 	"context"
@@ -1208,6 +1209,38 @@ func TestHandleDataFromServer_AnySrcIP(t *testing.T) {
 	// Should write to TUN (server-relayed packets are trusted unconditionally)
 	if len(mock.writeBuf) == 0 {
 		t.Error("relayed packet with unknown srcIP should be written to TUN")
+	}
+}
+
+func TestHandleDataFromServer_EncryptedRelay(t *testing.T) {
+	tunnel, _ := newTestTunnel(t)
+	mock := &mockTunDevice{}
+	tunnel.tunDev.Store(mock)
+
+	key := make([]byte, crypto.KeySize)
+	for i := range key {
+		key[i] = byte(i)
+	}
+
+	c, err := crypto.NewCipher(key, crypto.DirClientToClient)
+	if err != nil {
+		t.Fatalf("failed to create cipher: %v", err)
+	}
+
+	plaintext := []byte{0x45, 0x00, 0x00, 0x1c, 0xab, 0xcd}
+	encrypted := c.Encrypt(plaintext)
+
+	dp := &protocol.DataPayload{
+		SrcIP: net.IPv4(10, 0, 0, 1).To4(),
+		DstIP: net.IPv4(10, 0, 0, 2).To4(),
+		Data:  encrypted,
+	}
+
+	tunnel.crypto.p2pCipher = c
+	tunnel.handleDataFromServer(dp.Marshal())
+
+	if !bytes.Equal(mock.writeBuf, plaintext) {
+		t.Errorf("expected decrypted data %v, got %v", plaintext, mock.writeBuf)
 	}
 }
 
