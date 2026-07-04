@@ -451,13 +451,16 @@ func (s *Server) handlePacket(data []byte, from *net.UDPAddr) {
 		encrypted = true
 	}
 
-	// Decode: fast path for encrypted (skip CRC), standard path otherwise.
+	// Decode: use DecodeLenient for encrypted rooms to handle both
+	// CRC32-wrapped (from EncodeChecked clients) and bare (from Encode
+	// clients) packets. This strips CRC32 when present, preventing 4
+	// extra bytes from corrupting the relay payload written to TUN.
 	// Pre-auth packets (Register, NATProbe, AuthResponse, Rebind) are always
 	// unencrypted — verify their CRC in the encrypted fast path.
 	var msg *protocol.Message
 	if encrypted {
 		var err error
-		msg, err = protocol.DecodeSkipCRC(data)
+		msg, err = protocol.DecodeLenient(data, true)
 		if msg == nil {
 			if err != nil && !errors.Is(err, protocol.ErrPacketTooShort) {
 				log.Printf("failed to decode encrypted packet: %v", err)

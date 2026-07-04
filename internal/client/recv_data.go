@@ -128,7 +128,7 @@ func (t *Tunnel) handleDataFromServer(payload []byte) {
 
 	// Snapshot all needed fields under a single read lock to avoid races with reconnect
 	t.mu.RLock()
-	p2pCipher := t.crypto.p2pCipher
+	decCipher := t.crypto.decCipher
 	dev, _ := t.tunDev.Load().(TunDevice)
 	t.mu.RUnlock()
 
@@ -143,5 +143,5 @@ func (t *Tunnel) handleDataFromServer(payload []byte) {
 		return
 	}
 
-	t.decryptWriteAndRelease(dp, p2pCipher)
+	t.decryptWriteAndRelease(dp, decCipher)
 }
