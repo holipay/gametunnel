@@ -71,6 +71,9 @@ type Server struct {
 	// Bandwidth limiting
 	bwLimiter    *BandwidthLimiter // per-client outbound bandwidth limiter
 
+	// Cached local subnets (populated once at startup)
+	localSubnets []*net.IPNet
+
 	// Diagnostics
 	sendErrors atomic.Int64 // send failure counter
 
@@ -184,26 +187,27 @@ func New(cfg Config) (*Server, error) {
 	}
 
 	s := &Server{
-		conn:        conn,
-		statusAddr:  cfg.StatusAddr,
-		statusToken: cfg.StatusToken,
-		version:     cfg.Version,
-		lang:        cfg.Lang,
-		startTime:   time.Now(),
-		verbose:     cfg.Verbose,
-		workers:     workers,
-		pktCh:       make(chan pktJob, chanBuf),
-		rateShards:  newRateShardsArray(),
-		rateTick:    time.NewTicker(rateInterval),
-		metricsTS:   NewMetricsTimeSeries(),
-		rooms:       make(map[string]*Room),
-		addrToRoom:  make(map[netkey.RateKey]*Room),
-		multiRoom:   cfg.MultiRoom,
-		maxRooms:    maxRooms,
-		stateDir:    cfg.StateDir,
-		bwLimiter:   bwLimiter,
-		roomPass:    cfg.RoomPass,
-		ready:       make(chan struct{}),
+		conn:         conn,
+		statusAddr:   cfg.StatusAddr,
+		statusToken:  cfg.StatusToken,
+		version:      cfg.Version,
+		lang:         cfg.Lang,
+		startTime:    time.Now(),
+		verbose:      cfg.Verbose,
+		workers:      workers,
+		pktCh:        make(chan pktJob, chanBuf),
+		rateShards:   newRateShardsArray(),
+		rateTick:     time.NewTicker(rateInterval),
+		metricsTS:    NewMetricsTimeSeries(),
+		rooms:        make(map[string]*Room),
+		addrToRoom:   make(map[netkey.RateKey]*Room),
+		multiRoom:    cfg.MultiRoom,
+		maxRooms:     maxRooms,
+		stateDir:     cfg.StateDir,
+		bwLimiter:    bwLimiter,
+		roomPass:     cfg.RoomPass,
+		ready:        make(chan struct{}),
+		localSubnets: getLocalSubnets(),
 	}
 
 	// Wire TCP bridge routing into the send queue (must happen after s is
