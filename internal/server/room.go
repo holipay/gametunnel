@@ -14,7 +14,7 @@ import (
 	"github.com/holipay/gametunnel/internal/protocol"
 )
 
-// ── Room Constants ──────────────────────────────────────────────
+// 鈹€鈹€ Room Constants 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 
 const (
 	maxUsernameLen = 32
@@ -28,7 +28,7 @@ const (
 	sendErrorLogInterval = 1 * time.Minute
 
 	// maxInlineTargets is the number of peer addresses we can hold on the stack
-	// without heap allocation. For rooms ≤ 32 players this covers the common case.
+	// without heap allocation. For rooms 鈮?32 players this covers the common case.
 	maxInlineTargets = 32
 
 	// roomIdleTimeout is how long an empty multi-room can exist before being
@@ -52,7 +52,7 @@ func addrToConnIPKey(addr *net.UDPAddr) connIPKey {
 type Room struct {
 	roomID     string
 	roomPass   string
-	subnet     *net.IPNet
+	subnet     *net.IPNet // immutable after Room creation; safe to read without lock
 	serverIP   net.IP
 	maxPlayers int
 
@@ -62,15 +62,15 @@ type Room struct {
 	bwLimiter  *BandwidthLimiter // per-client outbound bandwidth limiter
 
 	// Per-room client state
-	clients    map[[16]byte]*Client // virtualIP → Client
-	addrMap    map[netkey.RateKey]*Client  // client endpoint → Client
+	clients    map[[16]byte]*Client // virtualIP 鈫?Client
+	addrMap    map[netkey.RateKey]*Client  // client endpoint 鈫?Client
 	mu         sync.RWMutex
 
 	// IP allocation (per-room, independent)
 	ipBitmap []uint64
 
 	// Auth
-	authKeys    sync.Map // map[string][]byte, roomID → derived key
+	authKeys    sync.Map // map[string][]byte, roomID 鈫?derived key
 	pendingAuth int
 	maxPending  int
 
@@ -182,7 +182,7 @@ func NewRoom(cfg RoomConfig) (*Room, error) {
 	return r, nil
 }
 
-// ── IP Bitmap ──────────────────────────────────────────────────
+// 鈹€鈹€ IP Bitmap 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 
 func (r *Room) markIPUsed(ip net.IP) {
 	ip4 := ip.To4()
@@ -221,7 +221,7 @@ func (r *Room) nextAvailableIP() net.IP {
 	return nil
 }
 
-// ── Registration Rate Limiting ─────────────────────────────────
+// 鈹€鈹€ Registration Rate Limiting 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 
 func (r *Room) checkRegRate(addr *net.UDPAddr) bool {
 	key := addrToConnIPKey(addr)
@@ -256,9 +256,9 @@ func (r *Room) Stop() {
 	})
 }
 
-// ── Auth ───────────────────────────────────────────────────────
+// 鈹€鈹€ Auth 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 
-// ── Packet Handling ────────────────────────────────────────────
+// 鈹€鈹€ Packet Handling 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 
 // HandlePacket dispatches a packet within this room.
 func (r *Room) HandlePacket(msgType byte, payload []byte, from *net.UDPAddr) {
@@ -284,7 +284,7 @@ func (r *Room) HandlePacket(msgType byte, payload []byte, from *net.UDPAddr) {
 	}
 }
 
-// ── Send Helpers ───────────────────────────────────────────────
+// 鈹€鈹€ Send Helpers 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 
 func (r *Room) sendChecked(typ byte, payload []byte, to *net.UDPAddr) {
 	data := protocol.EncodeChecked(typ, payload)
@@ -412,3 +412,4 @@ func (r *Room) decrementIPConnCount(ip [16]byte) {
 	}
 	r.ipConnMu.Unlock()
 }
+
