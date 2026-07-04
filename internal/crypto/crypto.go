@@ -117,7 +117,7 @@ func (c *Cipher) makeNonce(buf *[NonceSize]byte) {
 	ctr := c.counter.Add(1)
 
 	binary.LittleEndian.PutUint64(buf[0:8], ctr)
-	copy(buf[8:12], c.dirTag)
+	copy(buf[8:12], c.dirTag[:])
 }
 
 // Encrypt encrypts plaintext and returns: [encVersion(1)] [nonce(12)] [ciphertext+tag(N+16)].
