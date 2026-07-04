@@ -34,6 +34,7 @@ type Config struct {
 	MTU          int    // tunnel MTU, default DefaultMTU
 	LogFile      string // log file path, empty = stderr only
 	Verbose      bool   // enable verbose logging
+	PprofAddr    string // pprof HTTP address (e.g. localhost:6061), empty = disabled
 }
 
 // DefaultConfig returns a Config with default values.
@@ -165,6 +166,8 @@ func SaveConfig(cfg *Config) error {
 	fmt.Fprintf(&b, "log-file=%s\n", cfg.LogFile)
 	fmt.Fprintln(&b, "# Verbose logging (true / false)")
 	fmt.Fprintf(&b, "verbose=%v\n", cfg.Verbose)
+	fmt.Fprintln(&b, "# pprof HTTP address for runtime profiling (empty = disabled)")
+	fmt.Fprintf(&b, "pprof-addr=%s\n", cfg.PprofAddr)
 	return os.WriteFile(path, []byte(b.String()), 0600)
 }
 
@@ -210,6 +213,9 @@ func loadINI(path string, cfg *Config) bool {
 	}
 	if v := m["verbose"]; v != "" {
 		cfg.Verbose = v == "true" || v == "1"
+	}
+	if v := m["pprof-addr"]; v != "" {
+		cfg.PprofAddr = v
 	}
 	cfg.ServerAddr = iniconfig.CombinePort(cfg.ServerAddr, m["port"])
 	return true
