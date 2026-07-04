@@ -52,7 +52,7 @@ func addrToConnIPKey(addr *net.UDPAddr) connIPKey {
 type Room struct {
 	roomID     string
 	roomPass   string
-	subnet     *net.IPNet
+	subnet     *net.IPNet // immutable after Room creation; safe to read without lock
 	serverIP   net.IP
 	maxPlayers int
 
