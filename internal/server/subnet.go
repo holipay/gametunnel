@@ -18,9 +18,6 @@ func (s *Server) allocateSubnet() *net.IPNet {
 		return nil
 	}
 
-	// Collect local interface subnets to avoid conflicts
-	localSubnets := s.getLocalSubnets()
-
 	// Find the highest used 3rd octet
 	maxIdx := int(baseIP[2])
 	if maxIdx < 1 {
@@ -40,7 +37,7 @@ func (s *Server) allocateSubnet() *net.IPNet {
 			IP:   net.IPv4(baseIP[0], baseIP[1], byte(nextIdx), 0),
 			Mask: net.CIDRMask(24, 32),
 		}
-		if s.subnetOverlapsAny(candidate, localSubnets) {
+		if s.subnetOverlapsAny(candidate, s.localSubnets) {
 			continue
 		}
 		return candidate
@@ -49,7 +46,7 @@ func (s *Server) allocateSubnet() *net.IPNet {
 }
 
 // getLocalSubnets returns all /24+ subnets assigned to local network interfaces.
-func (s *Server) getLocalSubnets() []*net.IPNet {
+func getLocalSubnets() []*net.IPNet {
 	ifaces, err := net.Interfaces()
 	if err != nil {
 		return nil
