@@ -180,9 +180,7 @@ func (t *Tunnel) receiveFromTUN(ctx context.Context) {
 		default:
 		}
 
-		t.mu.RLock()
 		dev, _ := t.tunDev.Load().(TunDevice)
-		t.mu.RUnlock()
 		if dev == nil {
 			return
 		}

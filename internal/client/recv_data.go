@@ -16,9 +16,7 @@ import (
 // compressed), and writes to TUN device. Releases the DataPayload back to
 // the pool when done.
 func (t *Tunnel) decryptWriteAndRelease(dp *protocol.DataPayload, cipher *crypto.Cipher) {
-	t.mu.RLock()
 	dev, _ := t.tunDev.Load().(TunDevice)
-	t.mu.RUnlock()
 	if dev == nil {
 		protocol.PutDataPayload(dp)
 		return
@@ -126,11 +124,10 @@ func (t *Tunnel) handleDataFromServer(payload []byte) {
 		return
 	}
 
-	// Snapshot all needed fields under a single read lock to avoid races with reconnect
 	t.mu.RLock()
 	decCipher := t.crypto.decCipher
-	dev, _ := t.tunDev.Load().(TunDevice)
 	t.mu.RUnlock()
+	dev, _ := t.tunDev.Load().(TunDevice)
 
 	// Accept all server-relayed traffic unconditionally. The server already
 	// validates anti-spoofing (srcIP must match the sender's registered virtual
