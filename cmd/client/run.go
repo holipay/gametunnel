@@ -54,10 +54,16 @@ func run(cfg *client.Config, tunFactory func(client.TunConfig) (client.TunDevice
 	}
 
 	// ====== pprof HTTP server ======
+	var pprofLn net.Listener
 	if cfg.PprofAddr != "" {
+		var err error
+		pprofLn, err = net.Listen("tcp", cfg.PprofAddr)
+		if err != nil {
+			log.Fatalf("pprof listen: %v", err)
+		}
 		go func() {
-			log.Printf("pprof listening on %s", cfg.PprofAddr)
-			if err := http.ListenAndServe(cfg.PprofAddr, nil); err != nil {
+			log.Printf("pprof listening on %s", pprofLn.Addr())
+			if err := http.Serve(pprofLn, nil); err != nil {
 				log.Printf("pprof server: %v", err)
 			}
 		}()
@@ -75,6 +81,9 @@ func run(cfg *client.Config, tunFactory func(client.TunConfig) (client.TunDevice
 	sig := <-sigCh
 
 	fmt.Printf("\nReceived %v, disconnecting...\n", sig)
+	if pprofLn != nil {
+		pprofLn.Close()
+	}
 	app.Disconnect()
 	fmt.Println("Disconnected.")
 }
