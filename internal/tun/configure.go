@@ -65,14 +65,16 @@ func (d *Device) configure() error {
 
 	// ── Step 5: 全局广播 255.255.255.255 ──
 	// 游戏（如星际争霸）发 UDP 广播到 255.255.255.255:6112 发现局域网。
-	// 优先用 netsh（通过 Windows 网络栈绑定广播到 TUN 接口），
-	// 失败回退 route add。
-	if err := RunCmd("netsh", "interface", "ipv4", "add", "route",
-		"255.255.255.255/32", fmt.Sprintf("name=%s", d.name), ip, "metric=1"); err != nil {
-		log.Printf("[tun] broadcast route (netsh) failed: %v, trying route add", err)
-		if err := RunCmd("route", "add",
-			"255.255.255.255", "mask", "255.255.255.255", ip, "metric", "1"); err != nil {
-			log.Printf("[tun] broadcast route (route) warning: %v", err)
+	// 先删除再添加确保 clean state，route add 优先（直接操纵路由表，更可靠）。
+	RunCmd("route", "delete", "255.255.255.255")
+	RunCmd("netsh", "interface", "ipv4", "delete", "route",
+		"255.255.255.255/32", fmt.Sprintf("name=%s", d.name))
+	if err := RunCmd("route", "add",
+		"255.255.255.255", "mask", "255.255.255.255", ip, "metric", "1"); err != nil {
+		log.Printf("[tun] broadcast route (route add) failed: %v, trying netsh", err)
+		if err := RunCmd("netsh", "interface", "ipv4", "add", "route",
+			"255.255.255.255/32", fmt.Sprintf("name=%s", d.name), ip, "metric=1"); err != nil {
+			log.Printf("[tun] broadcast route (netsh) warning: %v", err)
 		}
 	}
 
@@ -203,11 +205,15 @@ func (d *Device) ReconfigureRoutes() {
 	RunCmd("route", "add",
 		fmt.Sprintf("%s/%d", subnet, maskBits), "mask", mask, ip, "metric", "1")
 
-	// Global broadcast — netsh preferred, route add fallback
-	if err := RunCmd("netsh", "interface", "ipv4", "add", "route",
-		"255.255.255.255/32", fmt.Sprintf("name=%s", d.name), ip, "metric=1"); err != nil {
-		RunCmd("route", "add",
-			"255.255.255.255", "mask", "255.255.255.255", ip, "metric", "1")
+	// Global broadcast — route add preferred (更可靠), netsh fallback
+	RunCmd("route", "delete", "255.255.255.255")
+	RunCmd("netsh", "interface", "ipv4", "delete", "route",
+		"255.255.255.255/32", fmt.Sprintf("name=%s", d.name))
+	if err := RunCmd("route", "add",
+		"255.255.255.255", "mask", "255.255.255.255", ip, "metric", "1"); err != nil {
+		log.Printf("[tun] ReconfigureRoutes: route add 255.255.255.255 failed: %v, trying netsh", err)
+		RunCmd("netsh", "interface", "ipv4", "add", "route",
+			"255.255.255.255/32", fmt.Sprintf("name=%s", d.name), ip, "metric=1")
 	}
 
 	// Subnet broadcast
