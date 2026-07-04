@@ -170,11 +170,18 @@ func (d *Device) repairRoutes() {
 	mask := net.IP(d.subnetMask).String()
 	subnet := d.virtualIP.Mask(d.subnetMask)
 
-	// Step 1: Global broadcast 255.255.255.255 (netsh, fallback route add)
-	if err := RunCmd("netsh", "interface", "ipv4", "add", "route",
-		"255.255.255.255/32", fmt.Sprintf("name=%s", d.name), ip, "metric=1"); err != nil {
-		if err := RunCmd("route", "add",
-			"255.255.255.255", "mask", "255.255.255.255", ip, "metric", "1"); err != nil {
+	// Step 1: Global broadcast 255.255.255.255
+	// route add 优先于 netsh — netsh 在 Windows NLA 重置后可能静默失败或路由被
+	// 立即删除。route add 直接操作路由表，更可靠。
+	// 先删除可能已存在的路由，避免 "The route already exists" 错误。
+	RunCmd("route", "delete", "255.255.255.255")
+	RunCmd("netsh", "interface", "ipv4", "delete", "route",
+		"255.255.255.255/32", fmt.Sprintf("name=%s", d.name))
+	if err := RunCmd("route", "add",
+		"255.255.255.255", "mask", "255.255.255.255", ip, "metric", "1"); err != nil {
+		log.Printf("[tun] route repair: 255.255.255.255 via route add: %v, trying netsh", err)
+		if err := RunCmd("netsh", "interface", "ipv4", "add", "route",
+			"255.255.255.255/32", fmt.Sprintf("name=%s", d.name), ip, "metric=1"); err != nil {
 			log.Printf("[tun] route repair: global broadcast: %v", err)
 		}
 	}
