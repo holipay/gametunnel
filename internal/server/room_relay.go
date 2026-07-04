@@ -109,9 +109,8 @@ func (r *Room) handleRelay(payload []byte, from *net.UDPAddr) {
 	// the slice into the async send queue, and the consumer reads it later.
 	// Returning the buffer to the pool before the consumer reads causes
 	// data corruption (use-after-free on the pooled buffer).
-	// Encrypted rooms (password-protected) skip the outer CRC32 because
-	// ChaCha20-Poly1305 AEAD already provides integrity. Unencrypted rooms
-	// keep the CRC for DecodeChecked verification on the client.
+	// Encrypted rooms skip outer CRC32: AEAD already provides integrity.
+	// Unencrypted rooms keep CRC32 for DecodeChecked on the client.
 	var encoded []byte
 	if r.roomPass != "" {
 		encoded = protocol.Encode(protocol.TypeData, payload)
