@@ -56,8 +56,12 @@ func (d *Device) configure() error {
 	}
 
 	// ── Step 4: 子网路由 ──
+	// CleanupRoutes() 在前面已删除旧路由，但 WireGuard 内核驱动会在
+	// TUN 创建时重新添加子网路由（metric 257），需要再删一次以确保
+	// 后面的 route add 能成功设置 metric 1。
 	subnet := d.virtualIP.Mask(d.subnetMask)
 	maskBits, _ := d.subnetMask.Size()
+	RunCmd("route", "delete", fmt.Sprintf("%s/%d", subnet, maskBits))
 	if err := RunCmd("route", "add",
 		fmt.Sprintf("%s/%d", subnet, maskBits), "mask", mask, ip, "metric", "1"); err != nil {
 		log.Printf("[tun] subnet route warning: %v", err)
@@ -79,10 +83,12 @@ func (d *Device) configure() error {
 	}
 
 	// ── Step 6: 子网广播（如 10.10.0.255）──
+	// WireGuard 内核驱动也会添加子网广播路由（metric 257），与子网路由同理。
 	subnetBroadcast := net.IP(make([]byte, 4))
 	for i := 0; i < 4; i++ {
 		subnetBroadcast[i] = subnet[i] | byte(^d.subnetMask[i])
 	}
+	RunCmd("route", "delete", subnetBroadcast.String())
 	if err := RunCmd("route", "add",
 		subnetBroadcast.String(), "mask", mask, ip, "metric", "1"); err != nil {
 		log.Printf("[tun] subnet broadcast route warning: %v", err)
@@ -200,8 +206,11 @@ func (d *Device) ReconfigureRoutes() {
 	ip := d.virtualIP.String()
 
 	// Subnet route
+	// WireGuard kernel driver may have recreated this route (metric 257) after
+	// CleanupRoutes() ran, delete first to ensure metric 1 takes effect.
 	subnet := d.virtualIP.Mask(d.subnetMask)
 	maskBits, _ := d.subnetMask.Size()
+	RunCmd("route", "delete", fmt.Sprintf("%s/%d", subnet, maskBits))
 	RunCmd("route", "add",
 		fmt.Sprintf("%s/%d", subnet, maskBits), "mask", mask, ip, "metric", "1")
 
@@ -217,10 +226,13 @@ func (d *Device) ReconfigureRoutes() {
 	}
 
 	// Subnet broadcast
+	// WireGuard kernel driver may have recreated this route (metric 257),
+	// delete first to ensure metric 1 takes effect.
 	subnetBroadcast := net.IP(make([]byte, 4))
 	for i := 0; i < 4; i++ {
 		subnetBroadcast[i] = subnet[i] | byte(^d.subnetMask[i])
 	}
+	RunCmd("route", "delete", subnetBroadcast.String())
 	RunCmd("route", "add",
 		subnetBroadcast.String(), "mask", mask, ip, "metric", "1")
 
