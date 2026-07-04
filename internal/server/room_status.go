@@ -3,6 +3,7 @@ package server
 import (
 	"fmt"
 	"net"
+	"strings"
 	"time"
 
 	"github.com/holipay/gametunnel/internal/i18n"
@@ -111,7 +112,18 @@ func (r *Room) BuildRoomStatus() RoomStatusInfo {
 		if s.clientVersion > 0 {
 			major := s.clientVersion >> 8
 			minor := s.clientVersion & 0xFF
-			versionStr = fmt.Sprintf("v%d.%d", major, minor)
+			var features []string
+			if s.clientVersion >= protocol.MinClientTokenVersion {
+				features = append(features, "Token")
+			}
+			if s.clientVersion >= protocol.MinClientNoCRCVersion {
+				features = append(features, "NoCRC")
+			}
+			if len(features) > 0 {
+				versionStr = fmt.Sprintf("v%d.%d [%s]", major, minor, strings.Join(features, ", "))
+			} else {
+				versionStr = fmt.Sprintf("v%d.%d", major, minor)
+			}
 		}
 		natStr := formatNATType(protocol.NATType(s.natType))
 		conns = append(conns, ConnectionInfo{

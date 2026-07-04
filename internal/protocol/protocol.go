@@ -32,6 +32,15 @@ const MinTokenVersion uint16 = 0x0107
 // The client uses this constant to decide whether to strip the trailing CRC.
 const MinRelayNoCRCVersion uint16 = 0x0108
 
+// Client feature versions — minimum client version that supports a feature.
+// Used for status page display and server-side client capability detection.
+// Values mirror the server constants today but the separation makes the
+// client contract explicit and prevents future drift if features diverge.
+const (
+	MinClientTokenVersion  uint16 = 0x0107 // client sends session token in relay packets
+	MinClientNoCRCVersion  uint16 = 0x0108 // client strips trailing CRC from encrypted relay
+)
+
 // HeaderLen is the fixed header size: version(1) + type(1).
 const HeaderLen = 2
 
