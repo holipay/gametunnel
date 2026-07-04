@@ -62,12 +62,6 @@ echo "sync-version: MISMATCH — AppVersion=$CURRENT_HEX, git tag=v$MAJOR.$MINOR
 
 if [ "${1:-}" = "--update" ]; then
     sed -i "s/^const AppVersion uint16 = .*/const AppVersion uint16 = $EXPECTED_LOWER/" "$PROTO_FILE"
-    # Also append the new version to the comment line if not already present
-    VERSION_COMMENT="v$MAJOR.$MINOR = $EXPECTED_LOWER = $EXPECTED_DEC"
-    if ! grep -q "$VERSION_COMMENT" "$PROTO_FILE"; then
-        # Append to the version history comment
-        sed -i "s|^// v1\..*|&, $VERSION_COMMENT|" "$PROTO_FILE"
-    fi
     echo "sync-version: updated AppVersion to $EXPECTED_LOWER ✓"
 else
     echo "sync-version: run with --update to auto-fix, or update manually"
