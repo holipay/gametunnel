@@ -128,6 +128,7 @@ func (d *Device) Write(data []byte) (int, error) {
 // re-adds broadcast routes. Windows can drop routes due to NLA resets,
 // network changes, or sleep/wake cycles — this ensures they stay active.
 func (d *Device) startRouteMaintenance() {
+	d.stopRouteMaintenance()
 	d.maintStopCh = make(chan struct{})
 	d.maintWg.Add(1)
 	go func() {
@@ -160,6 +161,10 @@ func (d *Device) stopRouteMaintenance() {
 // The commands are idempotent — if a route already exists, the error is
 // logged at debug level and ignored. This is called periodically by the
 // route maintenance goroutine.
+//
+// Only broadcast/multicast routes are repaired. The subnet unicast route
+// is excluded — if Windows drops it, the TUN device is unreachable for all
+// traffic and a full reconnect is needed rather than a silent repair.
 func (d *Device) repairRoutes() {
 	ip := d.virtualIP.String()
 	mask := net.IP(d.subnetMask).String()
@@ -168,8 +173,10 @@ func (d *Device) repairRoutes() {
 	// Step 1: Global broadcast 255.255.255.255 (netsh, fallback route add)
 	if err := RunCmd("netsh", "interface", "ipv4", "add", "route",
 		"255.255.255.255/32", fmt.Sprintf("name=%s", d.name), ip, "metric=1"); err != nil {
-		RunCmd("route", "add",
-			"255.255.255.255", "mask", "255.255.255.255", ip, "metric", "1")
+		if err := RunCmd("route", "add",
+			"255.255.255.255", "mask", "255.255.255.255", ip, "metric", "1"); err != nil {
+			log.Printf("[tun] route repair: global broadcast: %v", err)
+		}
 	}
 
 	// Step 2: Subnet broadcast
@@ -177,12 +184,16 @@ func (d *Device) repairRoutes() {
 	for i := 0; i < 4; i++ {
 		subnetBroadcast[i] = subnet[i] | byte(^d.subnetMask[i])
 	}
-	RunCmd("route", "add",
-		subnetBroadcast.String(), "mask", mask, ip, "metric", "1")
+	if err := RunCmd("route", "add",
+		subnetBroadcast.String(), "mask", mask, ip, "metric", "1"); err != nil {
+		log.Printf("[tun] route repair: subnet broadcast: %v", err)
+	}
 
 	// Step 3: mDNS multicast
-	RunCmd("route", "add",
-		"224.0.0.251", "mask", "255.255.255.255", ip, "metric", "1")
+	if err := RunCmd("route", "add",
+		"224.0.0.251", "mask", "255.255.255.255", ip, "metric", "1"); err != nil {
+		log.Printf("[tun] route repair: mDNS: %v", err)
+	}
 }
 
 func runCmdOutput(name string, args ...string) (string, error) {
