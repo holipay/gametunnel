@@ -63,9 +63,7 @@ func (t *Tunnel) receiveFromServer(ctx context.Context, conn *net.UDPConn, serve
 		consecutiveErrors = 0
 
 		// Encrypted rooms skip CRC32 (AEAD provides integrity).
-		t.mu.RLock()
-		encrypted := t.crypto.decCipher != nil
-		t.mu.RUnlock()
+		encrypted := t.crypto.decAvailable.Load()
 		var msg *protocol.Message
 		if encrypted {
 			msg, err = protocol.DecodeSkipCRC(buf[:n])

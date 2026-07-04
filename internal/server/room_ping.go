@@ -51,9 +51,9 @@ func (r *Room) pingLoop(ctx context.Context) {
 
 		now := time.Now()
 
-		r.mu.Lock()
+		r.mu.RLock()
 		if len(r.clients) == 0 {
-			r.mu.Unlock()
+			r.mu.RUnlock()
 			continue
 		}
 
@@ -64,11 +64,13 @@ func (r *Room) pingLoop(ctx context.Context) {
 				c.pingIdx++
 			}
 		}
+		r.mu.RUnlock()
 
 		// Send pings and record sequence/time.
 		ts := now.UnixNano()
 		ping := &protocol.PingPayload{Timestamp: ts}
 		encoded := protocol.EncodeChecked(protocol.TypePing, ping.Marshal())
+		r.mu.RLock()
 		for _, c := range r.clients {
 			if c.PublicAddr == nil {
 				continue // restored from persistence, not yet reconnected
@@ -78,7 +80,7 @@ func (r *Room) pingLoop(ctx context.Context) {
 			c.lastPingSeq = c.pingSeq
 			r.sendCheckedRaw(encoded, c.PublicAddr)
 		}
-		r.mu.Unlock()
+		r.mu.RUnlock()
 	}
 }
 
