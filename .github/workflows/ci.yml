@@ -33,4 +33,9 @@ jobs:
       - run: go vet -mod=vendor ./...
       - run: go test -count=1 -mod=vendor ./...
       - name: Check AppVersion matches git tag
-        run: scripts/sync-version.sh
+        run: |
+          scripts/sync-version.sh || {
+            echo "::error::AppVersion in protocol.go does not match the git tag."
+            echo "::error::Run 'scripts/sync-version.sh --update' locally, commit, and push."
+            exit 1
+          }
