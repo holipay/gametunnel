@@ -41,20 +41,28 @@ func (r *Room) handleRelay(payload []byte, from *net.UDPAddr) {
 	// after Room creation, so this is safe outside the critical section.
 	isBroadcast := netutil.IsRelayTarget(dstIP, r.subnet)
 
-	r.relayLog("[relay] received relay from %s: srcIP=%s dstIP=%s len=%d", from, srcIP, dstIP, len(payload))
+	if r.verbose {
+		log.Printf("[relay] received relay from %s: srcIP=%s dstIP=%s len=%d", from, srcIP, dstIP, len(payload))
+	}
 
 	r.mu.RLock()
 	sender := r.addrMap[netkey.AddrToRateKey(from)]
 	if sender == nil {
-		r.relayLog("[relay] sender not found in addrMap")
+		if r.verbose {
+			log.Printf("[relay] sender not found in addrMap")
+		}
 		r.mu.RUnlock()
 		return
 	}
 
-	r.relayLog("[relay] sender=%s vip=%s", sender.Username, sender.VirtualIP)
+	if r.verbose {
+		log.Printf("[relay] sender=%s vip=%s", sender.Username, sender.VirtualIP)
+	}
 
 	if !srcIP.Equal(sender.VirtualIP) {
-		r.relayLog("[relay] srcIP mismatch: payload=%s != sender=%s", srcIP, sender.VirtualIP)
+		if r.verbose {
+			log.Printf("[relay] srcIP mismatch: payload=%s != sender=%s", srcIP, sender.VirtualIP)
+		}
 		r.mu.RUnlock()
 		return
 	}
@@ -62,29 +70,41 @@ func (r *Room) handleRelay(payload []byte, from *net.UDPAddr) {
 	// Session token validation (v1.7+): if client sent a token, verify it.
 	if sender.clientVersion >= protocol.MinTokenVersion && sender.HasSessionToken() {
 		if len(payload) <= 8 {
-			r.relayLog("[relay] payload too short for token check")
+			if r.verbose {
+				log.Printf("[relay] payload too short for token check")
+			}
 			r.mu.RUnlock()
 			return
 		}
 		flags, tokenOff, isNew := protocol.ParseDataHeader(payload)
-		r.relayLog("[relay] token check: flags=0x%x tokenOff=%d isNew=%v", flags, tokenOff, isNew)
+		if r.verbose {
+			log.Printf("[relay] token check: flags=0x%x tokenOff=%d isNew=%v", flags, tokenOff, isNew)
+		}
 		if flags&protocol.DataFlagHasToken != 0 {
 			if len(payload) < tokenOff+protocol.DataTokenLen {
-				r.relayLog("[relay] payload too short for token")
+				if r.verbose {
+					log.Printf("[relay] payload too short for token")
+				}
 				r.mu.RUnlock()
 				return
 			}
 			token := payload[tokenOff : tokenOff+protocol.DataTokenLen]
 			if !sender.ValidateSessionToken(token) {
-				r.relayLog("[relay] token validation FAILED")
+				if r.verbose {
+					log.Printf("[relay] token validation FAILED")
+				}
 				r.mu.RUnlock()
 				return
 			}
-			r.relayLog("[relay] token validation OK")
+			if r.verbose {
+				log.Printf("[relay] token validation OK")
+			}
 		}
 	}
 
-	r.relayLog("[relay] isBroadcast=%v subnet=%s", isBroadcast, r.subnet)
+	if r.verbose {
+		log.Printf("[relay] isBroadcast=%v subnet=%s", isBroadcast, r.subnet)
+	}
 
 	var stackTargets [maxInlineTargets]*net.UDPAddr
 	targets := stackTargets[:0]
@@ -103,11 +123,15 @@ func (r *Room) handleRelay(payload []byte, from *net.UDPAddr) {
 	r.mu.RUnlock()
 
 	if len(targets) == 0 {
-		r.relayLog("[relay] no targets to relay to")
+		if r.verbose {
+			log.Printf("[relay] no targets to relay to")
+		}
 		return
 	}
 
-	r.relayLog("[relay] forwarding to %d targets", len(targets))
+	if r.verbose {
+		log.Printf("[relay] forwarding to %d targets", len(targets))
+	}
 	// Encode once, but DO NOT pool the buffer — sendCheckedRaw enqueues
 	// the slice into the async send queue, and the consumer reads it later.
 	// Returning the buffer to the pool before the consumer reads causes
@@ -204,9 +228,9 @@ func (r *Room) sendPeerInfoBroadcast() {
 			targets = append(targets, c.PublicAddr)
 		}
 	}
+	encoded := r.getEncodedPeerInfo()
 	r.mu.RUnlock()
 
-	encoded := r.getEncodedPeerInfo()
 	for _, addr := range targets {
 		r.sendCheckedRawBypass(encoded, addr)
 	}
