@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"net/http"
+	_ "net/http/pprof"
 	"os"
 	"os/signal"
 	"syscall"
@@ -49,6 +51,16 @@ func run(cfg *client.Config, tunFactory func(client.TunConfig) (client.TunDevice
 	if cfg.ServerAddr == "" {
 		fmt.Println("No server configured. Edit config.ini and set server=address:port")
 		return
+	}
+
+	// ====== pprof HTTP server ======
+	if cfg.PprofAddr != "" {
+		go func() {
+			log.Printf("pprof listening on %s", cfg.PprofAddr)
+			if err := http.ListenAndServe(cfg.PprofAddr, nil); err != nil {
+				log.Printf("pprof server: %v", err)
+			}
+		}()
 	}
 
 	app := client.NewApp(cfg)
