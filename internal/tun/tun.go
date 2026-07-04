@@ -4,12 +4,20 @@ package tun
 
 import (
 	"fmt"
+	"log"
 	"net"
 	"os/exec"
+	"sync"
 	"syscall"
+	"time"
 
 	"golang.zx2c4.com/wireguard/tun"
 )
+
+// routeRepairInterval is how often the background goroutine checks and
+// repairs broadcast routes on Windows. Windows can lose routes due to
+// NLA resets, network changes, sleep/wake cycles, etc.
+const routeRepairInterval = 30 * time.Second
 
 // Device represents an active TUN device with its virtual IP (Windows).
 type Device struct {
@@ -21,6 +29,9 @@ type Device struct {
 	mtu             int
 	physicalGateway string
 	physicalIfIdx   int // physical NIC interface index for IPv6 route cleanup
+
+	maintStopCh chan struct{}  // closed to signal the route maintenance goroutine to stop
+	maintWg     sync.WaitGroup // WaitGroup for the maintenance goroutine
 }
 
 func New(cfg Config) (*Device, error) {
@@ -111,6 +122,67 @@ func (d *Device) Write(data []byte) (int, error) {
 		return 0, nil
 	}
 	return len(data), nil
+}
+
+// startRouteMaintenance launches a background goroutine that periodically
+// re-adds broadcast routes. Windows can drop routes due to NLA resets,
+// network changes, or sleep/wake cycles — this ensures they stay active.
+func (d *Device) startRouteMaintenance() {
+	d.maintStopCh = make(chan struct{})
+	d.maintWg.Add(1)
+	go func() {
+		defer d.maintWg.Done()
+		ticker := time.NewTicker(routeRepairInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				d.repairRoutes()
+			case <-d.maintStopCh:
+				return
+			}
+		}
+	}()
+	log.Printf("[tun] route maintenance started (interval=%s)", routeRepairInterval)
+}
+
+// stopRouteMaintenance signals the maintenance goroutine to stop and waits
+// for it to finish. Safe to call multiple times (idempotent).
+func (d *Device) stopRouteMaintenance() {
+	if d.maintStopCh != nil {
+		close(d.maintStopCh)
+		d.maintWg.Wait()
+		d.maintStopCh = nil
+	}
+}
+
+// repairRoutes re-applies broadcast routes without cleaning them first.
+// The commands are idempotent — if a route already exists, the error is
+// logged at debug level and ignored. This is called periodically by the
+// route maintenance goroutine.
+func (d *Device) repairRoutes() {
+	ip := d.virtualIP.String()
+	mask := net.IP(d.subnetMask).String()
+	subnet := d.virtualIP.Mask(d.subnetMask)
+
+	// Step 1: Global broadcast 255.255.255.255 (netsh, fallback route add)
+	if err := RunCmd("netsh", "interface", "ipv4", "add", "route",
+		"255.255.255.255/32", fmt.Sprintf("name=%s", d.name), ip, "metric=1"); err != nil {
+		RunCmd("route", "add",
+			"255.255.255.255", "mask", "255.255.255.255", ip, "metric", "1")
+	}
+
+	// Step 2: Subnet broadcast
+	subnetBroadcast := net.IP(make([]byte, 4))
+	for i := 0; i < 4; i++ {
+		subnetBroadcast[i] = subnet[i] | byte(^d.subnetMask[i])
+	}
+	RunCmd("route", "add",
+		subnetBroadcast.String(), "mask", mask, ip, "metric", "1")
+
+	// Step 3: mDNS multicast
+	RunCmd("route", "add",
+		"224.0.0.251", "mask", "255.255.255.255", ip, "metric", "1")
 }
 
 func runCmdOutput(name string, args ...string) (string, error) {

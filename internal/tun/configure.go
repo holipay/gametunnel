@@ -175,6 +175,10 @@ func (d *Device) configure() error {
 		log.Printf("[tun] network category warning: %v", err)
 	}
 
+	// Start background route repair. Windows can drop routes at any time
+	// due to NLA resets, network changes, or sleep/wake cycles.
+	d.startRouteMaintenance()
+
 	log.Printf("[tun] configured: IP=%s/%d, subnet route only (no default route)", ip, maskBits)
 
 	return nil
@@ -261,6 +265,9 @@ func (d *Device) ReconfigureRoutes() {
 			}
 		}
 	}
+
+	// Restart route maintenance after reconfiguring routes.
+	d.startRouteMaintenance()
 
 	log.Printf("[tun] routes reconfigured on reconnect")
 }
@@ -359,6 +366,9 @@ func (d *Device) getPhysicalInterfaceIndex(prefix string) int {
 // CleanupRoutes removes routes added by configure().
 // Called when the TUN device is being destroyed.
 func (d *Device) CleanupRoutes() {
+	// Stop route maintenance before removing routes.
+	d.stopRouteMaintenance()
+
 	// Remove server exclusion route
 	if d.serverPublicIP != nil && d.physicalGateway != "" {
 		if d.serverPublicIP.To4() == nil {
