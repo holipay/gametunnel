@@ -3,7 +3,7 @@
 # Server: Linux / OpenWrt
 # Client: Windows
 
-.PHONY: all server client client-all clean install-server release release-client release-server release-openwrt test bench server-openwrt server-openwrt-arm64 server-openwrt-armv7 server-linux-arm64 vendor vendor-check
+.PHONY: all server client client-all clean install-server release release-client release-server release-openwrt test bench server-openwrt server-openwrt-arm64 server-openwrt-armv7 server-linux-arm64 vendor vendor-check version-check version-sync
 
 BINARY_DIR := bin
 SERVER := $(BINARY_DIR)/gtunnel-server-linux-amd64
@@ -111,6 +111,14 @@ vendor-check:
 
 run-server: server
 	sudo $(SERVER) -addr :4700 -subnet 10.10.0.0/24
+
+# ── Version Sync ───────────────────────────────────────────────
+
+version-check:
+	@scripts/sync-version.sh
+
+version-sync:
+	@scripts/sync-version.sh --update
 
 # ── Release ─────────────────────────────────────────────────────
 
