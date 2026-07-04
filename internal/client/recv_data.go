@@ -1,20 +1,60 @@
 package client
 
 import (
-	"github.com/holipay/gametunnel/internal/netkey"
 	"context"
+	"encoding/binary"
 	"log"
 	"net"
 
 	"github.com/holipay/gametunnel/internal/crypto"
 	"github.com/holipay/gametunnel/internal/i18n"
+	"github.com/holipay/gametunnel/internal/netkey"
 	"github.com/holipay/gametunnel/internal/pool"
 	"github.com/holipay/gametunnel/internal/protocol"
 )
 
-// decryptWriteAndRelease decrypts data (if encrypted), decompresses (if
-// compressed), and writes to TUN device. Releases the DataPayload back to
-// the pool when done.
+// rewriteBroadcast replaces 255.255.255.255 in the IP packet header with the
+// subnet-directed broadcast (e.g. 10.10.0.255). Windows may not deliver limited
+// broadcast packets arriving on a TUN adapter to game processes, but
+// subnet-directed broadcasts work reliably. Returns the (possibly rewritten)
+// packet and whether it was modified.
+func rewriteBroadcast(pkt []byte, subnet *net.IPNet) []byte {
+	if len(pkt) < 20 || subnet == nil {
+		return pkt
+	}
+	// IPv4 header: dst offset = 16, length = 4
+	dstOff := 16
+	if binary.BigEndian.Uint32(pkt[dstOff:dstOff+4]) != 0xFFFFFFFF {
+		return pkt
+	}
+	subIP := subnet.IP.To4()
+	if subIP == nil {
+		return pkt
+	}
+	// Compute subnet broadcast: network IP | ~mask
+	var bcast [4]byte
+	for i := 0; i < 4; i++ {
+		bcast[i] = subIP[i] | ^subnet.Mask[i]
+	}
+	// Copy and rewrite — must not mutate pooled buffers
+	out := make([]byte, len(pkt))
+	copy(out, pkt)
+	copy(out[dstOff:dstOff+4], bcast[:])
+	// Recalculate IP header checksum (RFC 1071)
+	out[10] = 0
+	out[11] = 0
+	ihl := int(out[0]&0x0F) * 4
+	var sum uint32
+	for i := 0; i < ihl; i += 2 {
+		sum += uint32(binary.BigEndian.Uint16(out[i : i+2]))
+	}
+	for sum>>16 != 0 {
+		sum = (sum & 0xFFFF) + (sum >> 16)
+	}
+	binary.BigEndian.PutUint16(out[10:12], ^uint16(sum))
+	return out
+}
+
 func (t *Tunnel) decryptWriteAndRelease(dp *protocol.DataPayload, cipher *crypto.Cipher) {
 	dev, _ := t.tunDev.Load().(TunDevice)
 	if dev == nil {
@@ -33,6 +73,13 @@ func (t *Tunnel) decryptWriteAndRelease(dp *protocol.DataPayload, cipher *crypto
 			return
 		}
 		defer pool.PktBufPut(decBuf)
+	}
+
+	// Rewrite limited broadcast (255.255.255.255) to subnet-directed
+	// broadcast so Windows delivers it to game processes on the TUN adapter.
+	subnet := t.session.cachedSubnet.Load()
+	if subnet != nil && len(outData) >= 20 {
+		outData = rewriteBroadcast(outData, subnet)
 	}
 
 	if _, err := dev.Write(outData); err != nil {
