@@ -30,6 +30,12 @@ if [ -z "$MAJOR" ] || [ -z "$MINOR" ]; then
     exit 1
 fi
 
+# Validate MAJOR and MINOR are numeric (guard against commit hashes)
+if ! [[ "$MAJOR" =~ ^[0-9]+$ ]] || ! [[ "$MINOR" =~ ^[0-9]+$ ]]; then
+    echo "sync-version: version components are not numeric (tag='$RAW_TAG'), skipping"
+    exit 0
+fi
+
 # Compute expected hex: major << 8 | minor
 EXPECTED_DEC=$(( (MAJOR << 8) | MINOR ))
 EXPECTED_HEX="$(printf '0x%04X' "$EXPECTED_DEC")"
