@@ -88,8 +88,8 @@ func (r *Room) BuildRoomStatus() RoomStatusInfo {
 		}
 		var versionStr string
 		if s.clientVersion > 0 {
-			major := s.clientVersion / 100
-			minor := s.clientVersion % 100
+			major := s.clientVersion >> 8
+			minor := s.clientVersion & 0xFF
 			versionStr = fmt.Sprintf("v%d.%d", major, minor)
 		}
 		conns = append(conns, ConnectionInfo{
