@@ -51,12 +51,32 @@ func (r *Room) pingLoop(ctx context.Context) {
 
 		now := time.Now()
 
+		// Snapshot client list under read lock, then release before encoding
+		// and sending to minimize time spent holding the write lock.
 		r.mu.RLock()
 		if len(r.clients) == 0 {
 			r.mu.RUnlock()
 			continue
 		}
+		type pingTarget struct {
+			c     *Client
+			addr  *net.UDPAddr
+		}
+		targets := make([]pingTarget, 0, len(r.clients))
+		for _, c := range r.clients {
+			if c.PublicAddr == nil {
+				continue
+			}
+			targets = append(targets, pingTarget{c: c, addr: c.PublicAddr})
+		}
+		r.mu.RUnlock()
 
+		ts := now.UnixNano()
+		ping := &protocol.PingPayload{Timestamp: ts}
+		encoded := protocol.EncodeChecked(protocol.TypePing, ping.Marshal())
+
+		// Write lock: mark missed pings, update fields, send pings.
+		r.mu.Lock()
 		// Mark previous pings as missed if no pong received within 2*interval.
 		for _, c := range r.clients {
 			if !c.lastPingSent.IsZero() && now.Sub(c.lastPingSent) > 2*pingInterval {
@@ -64,23 +84,17 @@ func (r *Room) pingLoop(ctx context.Context) {
 				c.pingIdx++
 			}
 		}
-		r.mu.RUnlock()
-
-		// Send pings and record sequence/time.
-		ts := now.UnixNano()
-		ping := &protocol.PingPayload{Timestamp: ts}
-		encoded := protocol.EncodeChecked(protocol.TypePing, ping.Marshal())
-		r.mu.RLock()
-		for _, c := range r.clients {
-			if c.PublicAddr == nil {
-				continue // restored from persistence, not yet reconnected
+		for _, t := range targets {
+			// Client may have disconnected between snapshot and now.
+			if t.c.PublicAddr == nil {
+				continue
 			}
-			c.pingSeq++
-			c.lastPingSent = now
-			c.lastPingSeq = c.pingSeq
-			r.sendCheckedRaw(encoded, c.PublicAddr)
+			t.c.pingSeq++
+			t.c.lastPingSent = now
+			t.c.lastPingSeq = t.c.pingSeq
+			r.sendCheckedRaw(encoded, t.addr)
 		}
-		r.mu.RUnlock()
+		r.mu.Unlock()
 	}
 }
 
