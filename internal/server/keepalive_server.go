@@ -50,44 +50,30 @@ func (s *Server) cleanupStaleClients() {
 // cleanupStaleAddrToRoom removes addrToRoom entries for clients that
 // disconnected (room removed from addrMap but addrToRoom was not updated).
 func (s *Server) cleanupStaleAddrToRoom() {
-	type roomEntry struct {
-		key  netkey.RateKey
-		room *Room
-	}
-
-	s.roomMu.RLock()
-	entries := make([]roomEntry, 0, len(s.addrToRoom))
-	for k, room := range s.addrToRoom {
-		if room != nil {
-			entries = append(entries, roomEntry{key: k, room: room})
-		}
-	}
-	s.roomMu.RUnlock()
-
-	byRoom := make(map[*Room][]netkey.RateKey)
-	for _, e := range entries {
-		byRoom[e.room] = append(byRoom[e.room], e.key)
-	}
-
 	var stale []netkey.RateKey
-	for room, keys := range byRoom {
+
+	// Single pass: scan addrToRoom and check each entry against room.addrMap.
+	s.roomMu.RLock()
+	for k, room := range s.addrToRoom {
+		if room == nil {
+			continue
+		}
 		room.mu.RLock()
-		for _, k := range keys {
-			if room.addrMap[k] == nil {
-				stale = append(stale, k)
-			}
+		if room.addrMap[k] == nil {
+			stale = append(stale, k)
 		}
 		room.mu.RUnlock()
 	}
+	s.roomMu.RUnlock()
 
 	if len(stale) == 0 {
 		return
 	}
 
+	// Re-verify under write lock before deleting (room state may have changed).
 	s.roomMu.Lock()
 	for _, k := range stale {
-		if s.addrToRoom[k] != nil {
-			room := s.addrToRoom[k]
+		if room := s.addrToRoom[k]; room != nil {
 			room.mu.RLock()
 			stillStale := room.addrMap[k] == nil
 			room.mu.RUnlock()
