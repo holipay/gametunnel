@@ -19,7 +19,7 @@ import (
 // subnet-directed broadcasts work reliably. Returns the (possibly rewritten)
 // packet and whether it was modified.
 func rewriteBroadcast(pkt []byte, subnet *net.IPNet) []byte {
-	if len(pkt) < 20 || subnet == nil {
+	if len(pkt) < 20 || subnet == nil || pkt[0]>>4 != 4 || len(subnet.Mask) == 0 {
 		return pkt
 	}
 	// IPv4 header: dst offset = 16, length = 4
@@ -77,10 +77,7 @@ func (t *Tunnel) decryptWriteAndRelease(dp *protocol.DataPayload, cipher *crypto
 
 	// Rewrite limited broadcast (255.255.255.255) to subnet-directed
 	// broadcast so Windows delivers it to game processes on the TUN adapter.
-	subnet := t.session.cachedSubnet.Load()
-	if subnet != nil && len(outData) >= 20 {
-		outData = rewriteBroadcast(outData, subnet)
-	}
+	outData = rewriteBroadcast(outData, t.session.cachedSubnet.Load())
 
 	if _, err := dev.Write(outData); err != nil {
 		log.Printf(i18n.T().LogTUNWriteFail, err)
