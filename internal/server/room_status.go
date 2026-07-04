@@ -1,12 +1,13 @@
 package server
 
 import (
-	"github.com/holipay/gametunnel/internal/netkey"
 	"fmt"
 	"net"
 	"time"
 
 	"github.com/holipay/gametunnel/internal/i18n"
+	"github.com/holipay/gametunnel/internal/netkey"
+	"github.com/holipay/gametunnel/internal/protocol"
 )
 
 // ── Status Info ────────────────────────────────────────────────
@@ -28,6 +29,24 @@ type RoomStatusInfo struct {
 	SendErrors          int64  `json:"send_errors"`
 }
 
+// formatNATType converts a NATType byte to a human-readable string.
+func formatNATType(nat protocol.NATType) string {
+	switch nat {
+	case protocol.NATTypeFullCone:
+		return "FullCone"
+	case protocol.NATTypeRestrictedCone:
+		return "Restricted"
+	case protocol.NATTypePortRestricted:
+		return "PortRestr"
+	case protocol.NATTypeSymmetric:
+		return "Symmetric"
+	case protocol.NATTypeNoNAT:
+		return "NoNAT"
+	default:
+		return ""
+	}
+}
+
 // BuildRoomStatus creates a RoomStatusInfo snapshot.
 func (r *Room) BuildRoomStatus() RoomStatusInfo {
 	t := i18n.T()
@@ -44,6 +63,7 @@ func (r *Room) BuildRoomStatus() RoomStatusInfo {
 		jitter        time.Duration
 		pingCount     int
 		clientVersion uint16
+		natType       int32
 	}
 	r.mu.RLock()
 	snaps := make([]clientSnap, 0, len(r.clients))
@@ -63,6 +83,7 @@ func (r *Room) BuildRoomStatus() RoomStatusInfo {
 			jitter:        jitter,
 			pingCount:     c.pingIdx,
 			clientVersion: c.clientVersion,
+			natType:       c.NATType.Load(),
 		})
 	}
 	r.mu.RUnlock()
@@ -92,6 +113,7 @@ func (r *Room) BuildRoomStatus() RoomStatusInfo {
 			minor := s.clientVersion & 0xFF
 			versionStr = fmt.Sprintf("v%d.%d", major, minor)
 		}
+		natStr := formatNATType(protocol.NATType(s.natType))
 		conns = append(conns, ConnectionInfo{
 			Username:      s.username,
 			VirtualIP:     s.vip,
@@ -101,6 +123,7 @@ func (r *Room) BuildRoomStatus() RoomStatusInfo {
 			Loss:          lossStr,
 			Jitter:        jitterStr,
 			ClientVersion: versionStr,
+			NATType:       natStr,
 		})
 	}
 

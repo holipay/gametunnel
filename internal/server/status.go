@@ -53,6 +53,7 @@ type ConnectionInfo struct {
 	Loss          string `json:"loss"`
 	Jitter        string `json:"jitter"`
 	ClientVersion string `json:"client_version,omitempty"`
+	NATType       string `json:"nat_type,omitempty"`
 }
 
 func (s *Server) startStatusServer(ctx context.Context, addr string) {
