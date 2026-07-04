@@ -27,6 +27,71 @@ func (r *Room) relayLog(format string, args ...any) {
 	}
 }
 
+// tryMigrateAddrMap attempts to find and migrate a client when the addrMap
+// lookup fails due to NAT rebinding or source port changes.
+// The client is located by its VIP (srcIP from the relay payload), and the
+// session token is validated before updating the mapping.
+// Must NOT be called with r.mu held. Returns the client on success, nil otherwise.
+func (r *Room) tryMigrateAddrMap(from *net.UDPAddr, srcIP net.IP, payload []byte) *Client {
+	vipKey := netkey.IPKey(srcIP)
+
+	r.mu.RLock()
+	c, ok := r.clients[vipKey]
+	if !ok {
+		r.relayLog("[relay] migrate: no client found for vip=%s", srcIP)
+		r.mu.RUnlock()
+		return nil
+	}
+
+	// Validate session token before migrating to prevent hijacking.
+	if c.clientVersion >= protocol.MinTokenVersion && c.HasSessionToken() {
+		if len(payload) <= 8 {
+			r.mu.RUnlock()
+			return nil
+		}
+		flags, tokenOff, _ := protocol.ParseDataHeader(payload)
+		if flags&protocol.DataFlagHasToken != 0 {
+			if len(payload) < tokenOff+protocol.DataTokenLen {
+				r.mu.RUnlock()
+				return nil
+			}
+			token := payload[tokenOff : tokenOff+protocol.DataTokenLen]
+			if !c.ValidateSessionToken(token) {
+				r.relayLog("[relay] migrate: token validation FAILED for %s", c.Username)
+				r.mu.RUnlock()
+				return nil
+			}
+			r.relayLog("[relay] migrate: token validation OK for %s", c.Username)
+		}
+	}
+	r.mu.RUnlock()
+
+	// Upgrade to write lock for addrMap update.
+	r.mu.Lock()
+	// Re-check — another goroutine may have handled the migration already.
+	if existing := r.addrMap[netkey.AddrToRateKey(from)]; existing != nil {
+		r.mu.Unlock()
+		return existing
+	}
+	// Re-check that the client still exists.
+	if _, stillThere := r.clients[vipKey]; !stillThere {
+		r.mu.Unlock()
+		return nil
+	}
+
+	// Remove old addrMap entry.
+	if c.PublicAddr != nil {
+		delete(r.addrMap, netkey.AddrToRateKey(c.PublicAddr))
+	}
+	// Update client address.
+	c.PublicAddr = from
+	c.SetLastSeen(time.Now())
+	r.addrMap[netkey.AddrToRateKey(from)] = c
+	r.relayLog("[relay] addrMap migration: %s (%s) → %s", c.Username, c.VirtualIP, from)
+	r.mu.Unlock()
+	return c
+}
+
 // ── Relay ──────────────────────────────────────────────────────
 
 func (r *Room) handleRelay(payload []byte, from *net.UDPAddr) {
@@ -46,9 +111,15 @@ func (r *Room) handleRelay(payload []byte, from *net.UDPAddr) {
 	r.mu.RLock()
 	sender := r.addrMap[netkey.AddrToRateKey(from)]
 	if sender == nil {
-		r.relayLog("[relay] sender not found in addrMap")
+		// addrMap miss — NAT rebinding or source port change.
+		// Try to find client by VIP and validate session token.
 		r.mu.RUnlock()
-		return
+		sender = r.tryMigrateAddrMap(from, srcIP, payload)
+		if sender == nil {
+			r.relayLog("[relay] sender not found in addrMap")
+			return
+		}
+		r.mu.RLock()
 	}
 
 	r.relayLog("[relay] sender=%s vip=%s", sender.Username, sender.VirtualIP)
