@@ -30,23 +30,30 @@ const batchBufSize = 64
 
 // sendQueue is a bounded, priority-aware send queue backed by a single UDP socket.
 // High-priority packets are always sent before low-priority ones.
-// When the queue is full, low-priority packets are dropped first.
+// Broadcast relay packets use a dedicated channel to avoid starving unicast game traffic.
+// When the main (unicast) queue is full, low-priority packets are dropped first.
 // Uses batch draining to reduce syscall overhead under high packet rates.
 type sendQueue struct {
-	conn    *net.UDPConn
-	ch      chan sendEntry
-	maxSize int
-	tcpWrite func(addr *net.UDPAddr, data []byte) bool // optional TCP bridge routing
+	conn       *net.UDPConn
+	ch         chan sendEntry    // unicast + control packets
+	broadcastCh chan sendEntry   // broadcast relay packets (isolated from unicast)
+	maxSize    int
+	tcpWrite   func(addr *net.UDPAddr, data []byte) bool // optional TCP bridge routing
 }
+
+// broadcastChSize is the capacity of the broadcast send queue.
+// Sized to absorb bursts of mDNS/SSDP discovery packets without dropping.
+const broadcastChSize = 4096
 
 // newSendQueue creates a send queue with the given capacity.
 // tcpWrite is an optional callback for routing packets to TCP bridge clients.
 func newSendQueue(conn *net.UDPConn, maxSize int, tcpWrite func(addr *net.UDPAddr, data []byte) bool) *sendQueue {
 	return &sendQueue{
-		conn:     conn,
-		ch:       make(chan sendEntry, maxSize),
-		maxSize:  maxSize,
-		tcpWrite: tcpWrite,
+		conn:        conn,
+		ch:          make(chan sendEntry, maxSize),
+		broadcastCh: make(chan sendEntry, broadcastChSize),
+		maxSize:     maxSize,
+		tcpWrite:    tcpWrite,
 	}
 }
 
@@ -93,6 +100,20 @@ func (sq *sendQueue) send(data []byte, addr *net.UDPAddr, priority sendPriority)
 	}
 }
 
+// sendBroadcast enqueues a broadcast relay packet into the dedicated broadcast channel.
+// If the broadcast channel is full, sends directly to avoid dropping game discovery traffic.
+func (sq *sendQueue) sendBroadcast(data []byte, addr *net.UDPAddr) bool {
+	e := sendEntry{data: data, addr: addr}
+	select {
+	case sq.broadcastCh <- e:
+		return true
+	default:
+		// Broadcast channel full — send directly to avoid dropping game discovery packets
+		sq.writeUDP(data, addr)
+		return true
+	}
+}
+
 // run drains the queue and sends packets. Blocks until ctx is cancelled.
 // Uses batch draining: drains up to batchBufSize high-priority packets first,
 // then up to batchBufSize low-priority packets, reducing channel select overhead.
@@ -106,6 +127,22 @@ func (sq *sendQueue) run(ctx context.Context) {
 		case <-ctx.Done():
 			sq.drain()
 			return
+		case e := <-sq.broadcastCh:
+			// Broadcast relay: send immediately, drain batch
+			sq.writeUDP(e.data, e.addr)
+			n := 0
+		DrainBroadcast:
+			for n < batchBufSize {
+				select {
+				case batch[n] = <-sq.broadcastCh:
+					n++
+				default:
+					break DrainBroadcast
+				}
+			}
+			for i := 0; i < n; i++ {
+				sq.writeUDP(batch[i].data, batch[i].addr)
+			}
 		case e := <-sq.ch:
 			if e.priority == priorityHigh {
 				// Send this high-priority packet immediately
@@ -177,8 +214,14 @@ func (sq *sendQueue) writeUDP(data []byte, addr *net.UDPAddr) {
 	}
 }
 
-// drain sends all remaining packets in the queue (best-effort, non-blocking).
+// drain sends all remaining packets in both queues (best-effort, non-blocking).
 func (sq *sendQueue) drain() {
+	sq.drainMain()
+	sq.drainBroadcast()
+}
+
+// drainMain drains the main unicast/control queue.
+func (sq *sendQueue) drainMain() {
 	for {
 		select {
 		case e := <-sq.ch:
@@ -189,9 +232,21 @@ func (sq *sendQueue) drain() {
 	}
 }
 
-// pending returns the number of queued packets.
+// drainBroadcast drains the broadcast relay queue.
+func (sq *sendQueue) drainBroadcast() {
+	for {
+		select {
+		case e := <-sq.broadcastCh:
+			sq.writeUDP(e.data, e.addr)
+		default:
+			return
+		}
+	}
+}
+
+// pending returns the number of queued packets across both channels.
 func (sq *sendQueue) pending() int {
-	return len(sq.ch)
+	return len(sq.ch) + len(sq.broadcastCh)
 }
 
 // ── Rate Limiter Integration ────────────────────────────────
@@ -219,10 +274,10 @@ func (rlq *rateLimitedQueue) send(data []byte, addr *net.UDPAddr, priority sendP
 	return false
 }
 
-// sendBypass enqueues a packet bypassing the bandwidth limiter.
-// Used for broadcast relay data that must reach all peers for game discovery.
+// sendBypass enqueues a broadcast relay packet bypassing the bandwidth limiter.
+// Uses a dedicated broadcast channel to avoid starving unicast game traffic.
 func (rlq *rateLimitedQueue) sendBypass(data []byte, addr *net.UDPAddr) bool {
-	return rlq.sq.send(data, addr, priorityLow)
+	return rlq.sq.sendBroadcast(data, addr)
 }
 
 func (rlq *rateLimitedQueue) run(ctx context.Context) {
