@@ -47,11 +47,6 @@ func (d *Device) configure() error {
 		log.Printf("[tun] global broadcast route warning: %v", err)
 	}
 
-	// mDNS multicast
-	if err := runCmd("ip", "route", "replace", "224.0.0.251", "dev", d.name, "metric", "1"); err != nil {
-		log.Printf("[tun] mDNS route warning: %v", err)
-	}
-
 	log.Printf("[tun] configured: IP=%s/%d", ip, maskBits)
 	return nil
 }
@@ -79,8 +74,5 @@ func (d *Device) CleanupRoutes() {
 	}
 	if err := runCmd("ip", "route", "del", "255.255.255.255", "dev", d.name); err != nil {
 		log.Printf("[tun] cleanup global broadcast route: %v", err)
-	}
-	if err := runCmd("ip", "route", "del", "224.0.0.251", "dev", d.name); err != nil {
-		log.Printf("[tun] cleanup mDNS route: %v", err)
 	}
 }

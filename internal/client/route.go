@@ -105,6 +105,10 @@ func (t *Tunnel) routePacket(pkt []byte, srcIP, dstIP [4]byte) {
 	srcNet := net.IP(srcIP[:])
 	dstNet := net.IP(dstIP[:])
 
+	if netutil.IsMDNS(dstNet) {
+		return
+	}
+
 	if dstKey == serverIPKey || (cachedSubnet != nil && netutil.IsRelayTarget(dstNet, cachedSubnet)) {
 		t.sendToServer(pkt, srcNet, dstNet, p2pCipher, token, serverAddr)
 		return

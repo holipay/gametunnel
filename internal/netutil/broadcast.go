@@ -43,6 +43,13 @@ func IsIPv6Multicast(dst net.IP) bool {
 	return ip16[0] == 0xff
 }
 
+// MDNSAddr is the standard mDNS IPv4 multicast address.
+var MDNSAddr = net.IPv4(224, 0, 0, 251)
+
+func IsMDNS(dst net.IP) bool {
+	return dst.Equal(MDNSAddr)
+}
+
 func IsRelayTarget(dst net.IP, subnet *net.IPNet) bool {
 	return IsBroadcast(dst, subnet) || IsMulticast(dst) || IsIPv6Multicast(dst)
 }

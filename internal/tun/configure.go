@@ -94,13 +94,7 @@ func (d *Device) configure() error {
 		log.Printf("[tun] subnet broadcast route warning: %v", err)
 	}
 
-	// ── Step 7: mDNS 组播 224.0.0.251 ──
-	if err := RunCmd("route", "add",
-		"224.0.0.251", "mask", "255.255.255.255", ip, "metric", "1"); err != nil {
-		log.Printf("[tun] mDNS route warning: %v", err)
-	}
-
-	// ── Step 8: 隧道服务器排除路由 ──
+	// ── Step 6: 隧道服务器排除路由 ──
 	// 隧道服务器必须走物理网卡，否则 UDP 封装的隧道流量会回环进 TUN。
 	// IPv4: 添加 /32 主机路由指向物理网关。
 	// IPv6: 使用 netsh interface ipv6 添加 /128 主机路由。
@@ -170,11 +164,11 @@ func (d *Device) configure() error {
 		}
 	}
 
-	// ── Step 9: 网络配置文件设为 Private ──
+	// ── Step 7: 网络配置文件设为 Private ──
 	//
 	// 注意：不添加 0.0.0.0/0 默认路由。
 	// 游戏流量目标是 10.10.0.x 虚拟 IP，已被 Step 4 子网路由覆盖。
-	// 广播/组播流量已被 Step 5-7 覆盖。
+	// 广播/组播流量已被 Step 5-6 覆盖。
 	// 添加默认路由会劫持用户全部网络流量（网页、DNS 等），存在安全隐患：
 	// 若服务器被入侵，中间人可嗅探所有流量。且非隧道流量在 routePacket()
 	// 中会被静默丢弃，既无用又破坏用户正常上网。
@@ -235,10 +229,6 @@ func (d *Device) ReconfigureRoutes() {
 	RunCmd("route", "delete", subnetBroadcast.String())
 	RunCmd("route", "add",
 		subnetBroadcast.String(), "mask", mask, ip, "metric", "1")
-
-	// mDNS multicast
-	RunCmd("route", "add",
-		"224.0.0.251", "mask", "255.255.255.255", ip, "metric", "1")
 
 	// Server exclusion route
 	if d.serverPublicIP != nil {
@@ -407,8 +397,6 @@ func (d *Device) CleanupRoutes() {
 	RunCmd("netsh", "interface", "ipv4", "delete", "route",
 		"255.255.255.255/32", fmt.Sprintf("name=%s", d.name))
 	RunCmd("route", "delete", "255.255.255.255")
-	RunCmd("route", "delete", "224.0.0.251")
-
 	// Remove subnet route
 	subnet := d.virtualIP.Mask(d.subnetMask)
 	maskBits, _ := d.subnetMask.Size()

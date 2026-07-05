@@ -196,11 +196,6 @@ func (d *Device) repairRoutes() {
 		log.Printf("[tun] route repair: subnet broadcast: %v", err)
 	}
 
-	// Step 3: mDNS multicast
-	if err := RunCmd("route", "add",
-		"224.0.0.251", "mask", "255.255.255.255", ip, "metric", "1"); err != nil {
-		log.Printf("[tun] route repair: mDNS: %v", err)
-	}
 }
 
 func runCmdOutput(name string, args ...string) (string, error) {
