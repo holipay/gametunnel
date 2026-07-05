@@ -52,16 +52,20 @@ func (t *Tunnel) stalePeerCleanupLoop(ctx context.Context) {
 func (t *Tunnel) cleanStalePeers() {
 	now := time.Now()
 
-	// Collect stale keys from authoritative map
+	// Collect stale peers under write lock to serialize with handlePeerInfo.
+	t.mu.Lock()
 	var staleKeys [][16]byte
+	var stalePeers []*Peer
 	for key, peer := range t.peers {
 		lastSeen := peer.lastSeen.Load()
 		if lastSeen != 0 && now.UnixNano()-lastSeen > int64(stalePeerGracePeriod) {
 			staleKeys = append(staleKeys, key)
+			stalePeers = append(stalePeers, peer)
 		}
 	}
 
 	if len(staleKeys) == 0 {
+		t.mu.Unlock()
 		return
 	}
 
@@ -70,9 +74,11 @@ func (t *Tunnel) cleanStalePeers() {
 		delete(t.peers, key)
 	}
 	t.peerSnapshot.Store(t.peers)
+	t.mu.Unlock()
 
-	for _, key := range staleKeys {
+	for i, peer := range stalePeers {
 		log.Printf(i18n.T().LogCleanPeer,
-			"", key, stalePeerGracePeriod)
+			peer.Username, peer.VirtualIP, stalePeerGracePeriod)
+		_ = i // avoid unused variable
 	}
 }

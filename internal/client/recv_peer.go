@@ -70,6 +70,10 @@ func (t *Tunnel) handlePeerInfo(ctx context.Context, payload []byte) {
 	}
 	var logs []peerLog
 
+	// Serialize write access to t.peers under lock.
+	// routePacket reads from peerSnapshot (atomic.Value) without lock.
+	t.mu.Lock()
+
 	// Copy-on-write: load current map, create new map with updates, store atomically.
 	oldPeers := t.peers
 	newPeers := make(map[[16]byte]*Peer, len(oldPeers))
@@ -133,6 +137,7 @@ func (t *Tunnel) handlePeerInfo(ctx context.Context, payload []byte) {
 	// Update authoritative map and atomic snapshot
 	t.peers = newPeers
 	t.peerSnapshot.Store(newPeers)
+	t.mu.Unlock()
 
 	// Emit log messages
 	for _, l := range logs {

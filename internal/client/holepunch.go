@@ -175,10 +175,8 @@ func (t *Tunnel) handleHolePunchReceived(ctx context.Context, payload []byte) {
 
 // hasDirectPeerTraffic checks if we've received direct P2P traffic from a peer.
 func (t *Tunnel) hasDirectPeerTraffic(peerIP net.IP) bool {
-	t.mu.RLock()
 	peers := t.peerSnapshot.Load().(map[[16]byte]*Peer)
 	peer, ok := peers[netkey.IPKey(peerIP)]
-	t.mu.RUnlock()
 	if !ok {
 		return false
 	}

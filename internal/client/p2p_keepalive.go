@@ -34,7 +34,6 @@ func (t *Tunnel) p2pKeepaliveLoop(ctx context.Context) {
 
 // sendP2PKeepalives sends a keepalive to each peer with DirectReach=true.
 func (t *Tunnel) sendP2PKeepalives() {
-	t.mu.RLock()
 	type peerAddr struct {
 		addr *net.UDPAddr
 	}
@@ -46,7 +45,6 @@ func (t *Tunnel) sendP2PKeepalives() {
 			addrs = append(addrs, peerAddr{addr: pAddr})
 		}
 	}
-	t.mu.RUnlock()
 
 	if len(addrs) == 0 {
 		return
