@@ -61,6 +61,20 @@ func (m *mockTunDevice) MTU() int {
 
 func (m *mockTunDevice) ReconfigureRoutes() {}
 
+func (m *mockTunDevice) ReadBatch(bufs [][]byte, sizes []int) (int, error) {
+	if m.readErr != nil {
+		return 0, m.readErr
+	}
+	if len(bufs) == 0 || len(m.readData) == 0 {
+		return 0, nil
+	}
+	n := copy(bufs[0], m.readData)
+	sizes[0] = n
+	return 1, nil
+}
+
+func (m *mockTunDevice) BatchSize() int { return 1 }
+
 // ── Test Helpers ───────────────────────────────────────────────
 
 // newTestTunnel creates a Tunnel with a real UDP conn for testing.
