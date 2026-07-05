@@ -30,7 +30,8 @@ const batchBufSize = 64
 
 // sendQueue is a bounded, priority-aware send queue backed by a single UDP socket.
 // High-priority packets are always sent before low-priority ones.
-// Broadcast relay packets use a separate channel to avoid starving unicast game traffic.
+// Broadcast relay packets use a dedicated channel to avoid starving unicast game traffic.
+// When the main (unicast) queue is full, low-priority packets are dropped first.
 // Uses batch draining to reduce syscall overhead under high packet rates.
 type sendQueue struct {
 	conn       *net.UDPConn
