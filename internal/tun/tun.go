@@ -30,6 +30,7 @@ type Device struct {
 	physicalGateway string
 	physicalIfIdx   int // physical NIC interface index for IPv6 route cleanup
 
+	maintMu     sync.Mutex
 	maintStopCh chan struct{}  // closed to signal the route maintenance goroutine to stop
 	maintWg     sync.WaitGroup // WaitGroup for the maintenance goroutine
 }
@@ -78,17 +79,14 @@ func (d *Device) Name() string { return d.name }
 // MTU returns the configured MTU of the TUN device.
 func (d *Device) MTU() int { return d.mtu }
 
+// BatchSize returns the maximum number of packets for batch operations.
+// Windows TUN does not support true batching, so returns 1 (single-packet mode).
+func (d *Device) BatchSize() int { return 1 }
+
 // ReadBatch reads up to batchSize packets from the TUN device in a single syscall.
 // Returns the number of packets read and per-packet sizes.
 func (d *Device) ReadBatch(bufs [][]byte, sizes []int) (int, error) {
 	n, err := d.tunDev.Read(bufs, sizes, 0)
-	return n, err
-}
-
-// WriteBatch writes multiple packets to the TUN device in a single syscall.
-// Returns the number of packets written.
-func (d *Device) WriteBatch(bufs [][]byte) (int, error) {
-	n, err := d.tunDev.Write(bufs, 0)
 	return n, err
 }
 
@@ -128,7 +126,9 @@ func (d *Device) Write(data []byte) (int, error) {
 // re-adds broadcast routes. Windows can drop routes due to NLA resets,
 // network changes, or sleep/wake cycles — this ensures they stay active.
 func (d *Device) startRouteMaintenance() {
-	d.stopRouteMaintenance()
+	d.maintMu.Lock()
+	defer d.maintMu.Unlock()
+	d.stopRouteMaintenanceLocked()
 	d.maintStopCh = make(chan struct{})
 	d.maintWg.Add(1)
 	go func() {
@@ -147,14 +147,22 @@ func (d *Device) startRouteMaintenance() {
 	log.Printf("[tun] route maintenance started (interval=%s)", routeRepairInterval)
 }
 
-// stopRouteMaintenance signals the maintenance goroutine to stop and waits
-// for it to finish. Safe to call multiple times (idempotent).
-func (d *Device) stopRouteMaintenance() {
+// stopRouteMaintenanceLocked is the inner implementation of stopRouteMaintenance.
+// Caller must hold d.maintMu.
+func (d *Device) stopRouteMaintenanceLocked() {
 	if d.maintStopCh != nil {
 		close(d.maintStopCh)
 		d.maintWg.Wait()
 		d.maintStopCh = nil
 	}
+}
+
+// stopRouteMaintenance signals the maintenance goroutine to stop and waits
+// for it to finish. Safe to call multiple times (idempotent).
+func (d *Device) stopRouteMaintenance() {
+	d.maintMu.Lock()
+	defer d.maintMu.Unlock()
+	d.stopRouteMaintenanceLocked()
 }
 
 // repairRoutes re-applies broadcast routes without cleaning them first.

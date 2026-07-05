@@ -281,6 +281,8 @@ func (d *Device) ReconfigureRoutes() {
 						serverIP, "mask", "255.255.255.255", gw, "metric", "1")
 				}
 			}
+		} else {
+			d.physicalGateway = ""
 		}
 	}
 
@@ -298,7 +300,7 @@ func (d *Device) applyMetricAPI() error {
 	}
 	log.Printf("[tun] TUN adapter: idx=%d luid=%d", idx, luid)
 
-	if err := setMetricAPI(idx, luid); err != nil {
+	if err := setMetricAPI(idx); err != nil {
 		return fmt.Errorf("set TUN: %w", err)
 	}
 	log.Printf("[tun] TUN AutomaticMetric disabled (IP Helper API)")
