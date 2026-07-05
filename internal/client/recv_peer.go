@@ -21,9 +21,10 @@ func (t *Tunnel) handleDirectHolePunch(ctx context.Context, from *net.UDPAddr, m
 	copy(peerIPBuf[:], msg.Payload[:4])
 	peerIP := net.IP(peerIPBuf[:])
 
-	t.mu.RLock()
 	peers := t.peerSnapshot.Load().(map[[16]byte]*Peer)
 	peer, ok := peers[netkey.IPKey(peerIP)]
+
+	t.mu.RLock()
 	if !ok || peer.PublicAddr.Load() == nil {
 		t.mu.RUnlock()
 		return

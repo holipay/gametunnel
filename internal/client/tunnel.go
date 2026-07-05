@@ -470,10 +470,12 @@ type TunnelStatus struct {
 
 // Status returns a snapshot of the current tunnel state.
 func (t *Tunnel) Status() TunnelStatus {
+	// Load peer snapshot without lock (atomic.Value is safe for concurrent reads)
+	peers := t.peerSnapshot.Load().(map[[16]byte]*Peer)
+
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 
-	peers := t.peerSnapshot.Load().(map[[16]byte]*Peer)
 	st := TunnelStatus{
 		Connected:     t.tunDev.Load() != nil && t.session.virtualIP != nil,
 		VirtualIP:     t.session.virtualIP,

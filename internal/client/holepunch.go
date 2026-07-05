@@ -83,9 +83,11 @@ func (t *Tunnel) startHolePunch(ctx context.Context, peerIP net.IP) {
 		}
 	}
 
-	t.mu.RLock()
+	// Load peer snapshot without lock (atomic.Value is safe for concurrent reads)
 	peers := t.peerSnapshot.Load().(map[[16]byte]*Peer)
 	peer, ok := peers[netkey.IPKey(peerIP)]
+
+	t.mu.RLock()
 	if !ok || peer.PublicAddr.Load() == nil {
 		t.mu.RUnlock()
 		return
@@ -150,9 +152,10 @@ func (t *Tunnel) handleHolePunchReceived(ctx context.Context, payload []byte) {
 	}
 	peerIP := net.IP(append([]byte(nil), payload[:4]...))
 
-	t.mu.RLock()
 	peers := t.peerSnapshot.Load().(map[[16]byte]*Peer)
 	peer, ok := peers[netkey.IPKey(peerIP)]
+
+	t.mu.RLock()
 	if !ok || peer.PublicAddr.Load() == nil {
 		t.mu.RUnlock()
 		return
@@ -203,15 +206,13 @@ func (t *Tunnel) holePunchRetryLoop(ctx context.Context) {
 // retryFailedHolePunches re-initiates hole punching for all peers that have
 // a public address but haven't confirmed DirectReach.
 func (t *Tunnel) retryFailedHolePunches(ctx context.Context) {
-	t.mu.RLock()
-	var retryPeers []net.IP
 	peers := t.peerSnapshot.Load().(map[[16]byte]*Peer)
+	var retryPeers []net.IP
 	for _, peer := range peers {
 		if peer.PublicAddr.Load() != nil && !peer.DirectReach.Load() {
 			retryPeers = append(retryPeers, peer.VirtualIP)
 		}
 	}
-	t.mu.RUnlock()
 
 	if len(retryPeers) == 0 {
 		return
