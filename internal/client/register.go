@@ -161,11 +161,6 @@ func (t *Tunnel) handleRegResponse(msg *protocol.Message, conn *net.UDPConn, dea
 			return false, err
 		}
 		return false, nil
-	case protocol.TypeECDHExchange:
-		if err := t.handleECDHExchange(conn, msg.Payload); err != nil {
-			return false, err
-		}
-		return false, nil
 	case protocol.TypeKick:
 		kick, err := protocol.UnmarshalKick(msg.Payload)
 		if err != nil || kick == nil {
@@ -243,11 +238,7 @@ func (t *Tunnel) handleAssignIP(payload []byte) error {
 		if p2pCipher, err = crypto.NewCipher(key, crypto.DirClientToClient); err != nil {
 			return fmt.Errorf("init p2p cipher: %w", err)
 		}
-		if protocol.IsECDHNegotiated(assign.Version) {
-			log.Printf("[tunnel] encryption enabled (ChaCha20-Poly1305 + ECDH forward secrecy)")
-		} else {
-			log.Printf("[tunnel] encryption enabled (ChaCha20-Poly1305)")
-		}
+		log.Printf("[tunnel] encryption enabled (ChaCha20-Poly1305)")
 	}
 
 	// Cache subnet and serverIPKey for hot-path lookups
@@ -266,7 +257,7 @@ func (t *Tunnel) handleAssignIP(payload []byte) error {
 	t.session.virtualIP = assign.VirtualIP
 	t.session.serverIP = assign.ServerIP
 	t.session.subnetMask = net.IPMask(assign.SubnetMask)
-	t.session.serverVersion.Store(uint32(protocol.ClearECDHFlag(assign.Version)))
+	t.session.serverVersion.Store(uint32(assign.Version))
 	t.session.sessionToken = assign.SessionToken
 	t.session.cachedSubnet.Store(cachedSubnet)
 	t.session.serverIPKey.Store(&serverIPKey)
@@ -275,8 +266,6 @@ func (t *Tunnel) handleAssignIP(payload []byte) error {
 	t.crypto.decCipher = decCipher
 	t.crypto.decAvailable.Store(decCipher != nil)
 	t.crypto.p2pCipher = p2pCipher
-	// Clear ECDH session key after use (prevent reuse)
-	t.crypto.ecdhSessionKey = nil
 	// Clear stale peers from previous session — they will be repopulated
 	// by the next PeerInfo message from the server.
 	t.peers = make(map[[16]byte]*Peer)
@@ -329,78 +318,5 @@ func (t *Tunnel) handleAuthChallenge(conn *net.UDPConn, payload []byte) error {
 	}
 
 	log.Printf("%s", i18n.T().LogAuthSent)
-	return nil
-}
-
-// handleECDHExchange processes the server's ephemeral X25519 public key.
-// Generates a client keypair, derives the shared secret, and sends ECDHConfirm.
-func (t *Tunnel) handleECDHExchange(conn *net.UDPConn, payload []byte) error {
-	if t.session.roomPass == "" {
-		return fmt.Errorf("ECDH exchange without password")
-	}
-
-	ecdhPkt, err := protocol.UnmarshalECDHExchange(payload)
-	if err != nil {
-		return fmt.Errorf("parse ECDH exchange: %w", err)
-	}
-
-	// Generate client's ephemeral keypair
-	priv, clientPub, err := auth.GenerateECDHKeyPair()
-	if err != nil {
-		return fmt.Errorf("generate ECDH key: %w", err)
-	}
-
-	// Compute shared secret
-	shared, err := auth.ComputeECDHSharedSecret(priv, ecdhPkt.PublicKey[:])
-	if err != nil {
-		return fmt.Errorf("ECDH shared secret: %w", err)
-	}
-
-	// Note: priv.Bytes() returns a copy, so zeroing it below is ineffective
-	// against the original key bytes in the ecdh.PrivateKey.
-	// Go's crypto/ecdh does not expose a Zero() method, and reflect/unsafe
-	// access to the internal *big.Int is version-dependent.
-	// We keep the zeroing as defense-in-depth for any GC'd copies.
-	privBytes := priv.Bytes()
-	for i := range privBytes {
-		privBytes[i] = 0
-	}
-
-	// Derive session key
-	sessionKey := auth.DeriveSessionKey(shared, t.session.roomID)
-
-	// Zero out shared secret after key derivation
-	for i := range shared {
-		shared[i] = 0
-	}
-	if sessionKey == nil {
-		return fmt.Errorf("derive session key failed")
-	}
-
-	// Compute HMAC over both public keys using password-derived key
-	// (prevents MITM: attacker can't forge HMAC without password)
-	passwordKey := auth.DeriveKey(t.session.roomPass, t.session.roomID)
-	ecdhHMAC := auth.ComputeECDHMAC(passwordKey, ecdhPkt.PublicKey[:], clientPub)
-
-	// Send ECDHConfirm
-	confirm := &protocol.ECDHConfirmPayload{}
-	copy(confirm.PublicKey[:], clientPub)
-	copy(confirm.HMAC[:], ecdhHMAC)
-
-	packet := protocol.EncodeChecked(protocol.TypeECDHConfirm, confirm.Marshal())
-	if conn != nil {
-		t.writeUDP(conn, packet, t.serverAddr.Load())
-	} else if t.tcpTransport != nil {
-		if err := t.tcpTransport.Send(packet); err != nil {
-			return fmt.Errorf("tcp send ecdh: %w", err)
-		}
-	}
-
-	// Store session key for cipher creation in handleAssignIP
-	t.mu.Lock()
-	t.crypto.ecdhSessionKey = sessionKey
-	t.mu.Unlock()
-
-	log.Printf("[ecdh] session key negotiated")
 	return nil
 }

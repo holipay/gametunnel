@@ -7,17 +7,9 @@ import (
 
 // ── Data (relay) ───────────────────────────────────────────────
 
-// DataFlagCompressed was used for LZ4 compression (now removed).
-// Reserved for backward compatibility — receivers silently ignore this flag.
-const DataFlagCompressed byte = 0x01
-
 // DataFlagHasToken is set in Flags when a 16-byte session token follows the flags byte.
 // Only used when both client and server are v1.7+.
 const DataFlagHasToken byte = 0x02
-
-// DataFlagHasFEC was used for FEC header (now removed).
-// Reserved for backward compatibility — receivers silently ignore this flag.
-const DataFlagHasFEC byte = 0x04
 
 // DataFormatVersion is the explicit format version byte written after dstIP
 // in the DataPayload wire format. Replaces the old isNewFormat heuristic.

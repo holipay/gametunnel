@@ -46,7 +46,6 @@ type Peer struct {
 	Username      string
 	NATType       nat.NATType              // peer's NAT type from PeerInfo (0 = unknown)
 	DirectReach   atomic.Bool               // true if P2P direct path has been confirmed
-	observedPorts []int                     // historical external ports for port prediction
 	lastSeen      atomic.Int64 // last time server reported this peer (UnixNano)
 	lastPunchBack atomic.Int64  // rate limit: UnixNano of last hole punch response
 	stale         bool          // mark-and-sweep flag, only valid under t.mu in handlePeerInfo (not atomic)
@@ -275,7 +274,6 @@ func (t *Tunnel) probeNATAsync(conn *net.UDPConn, sAddr *net.UDPAddr) {
 
 		t.mu.Lock()
 		t.nat.probeResult = result
-		t.nat.portPredictor = nat.PortPredictorFromNATProbe([]*nat.NATProbeResult{result})
 		t.mu.Unlock()
 		log.Printf("[nat-probe] NAT type: %d, external: %s:%d, RTT: %v",
 			result.Type, result.ExternalIP, result.ExternalPort, result.RTT)
@@ -599,19 +597,14 @@ func (t *Tunnel) writeUDP(conn *net.UDPConn, data []byte, addr *net.UDPAddr) {
 // Replaces the previous mutex-based approach to eliminate lock contention
 // between the TUN reader, server reader, and keepalive goroutines.
 func (t *Tunnel) sendUDP(data []byte, addr *net.UDPAddr) {
-	// Reserve rate limiter tokens first, refund if channel send fails.
-	// This prevents token starvation when the channel is full.
-	res := t.sendLimiter.tryReserve(len(data))
-	if !res.ok() {
+	if !t.sendLimiter.allow(len(data)) {
 		t.sendErrors.Add(1)
 		return
 	}
 
 	select {
 	case t.sendCh <- sendJob{data: data, addr: addr}:
-		res.commit()
 	default:
-		res.cancel()
 		n := t.sendErrors.Add(1)
 		if n == 1 || n%100 == 0 {
 			log.Printf("%s", i18n.Format(i18n.T().LogSendFail, n, fmt.Errorf("send channel full")))

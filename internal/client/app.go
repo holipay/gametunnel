@@ -6,6 +6,7 @@ package client
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net"
@@ -230,15 +231,7 @@ func (a *App) statusLoop(ctx context.Context) {
 }
 
 // connectLoop handles connection with auto-reconnect.
-// After fastRetries (3) rapid attempts, it pauses and calls OnConnFailed
-// to let the user decide: retry, edit settings, or stop.
-//
-// Uses SmartBackoff to choose reconnect delay based on disconnect reason:
-//   - Network glitch (was connected, lost): 500ms fast retry → exponential
-//   - Server unreachable: 2s → 4s → 8s → ... → 60s exponential
-//   - DNS failure: 5s → 15s → 45s → 60s
-//   - Server full: 10s → 20s → 40s → 60s
-//   - Fatal (wrong password, version mismatch): stop immediately
+// Uses exponential backoff with fast reconnect for transient disconnections.
 func (a *App) connectLoop() {
 	a.Mu.RLock()
 	cfg := a.Cfg
@@ -265,11 +258,12 @@ func (a *App) connectLoop() {
 	}()
 
 	const fastRetries = 3
-	backoff := NewSmartBackoff(DisconnectReasonUnknown, false)
+	bo := &backoffState{}
 
 	for attempt := 0; ; attempt++ {
 		if attempt > 0 {
-			delay := backoff.Next()
+			wasConnected := attempt <= fastRetries // treat first few as fast reconnect
+			delay := bo.nextDelay(wasConnected)
 			if delay < 0 {
 				log.Printf("reconnect: giving up after %d attempts", attempt)
 				return
@@ -322,16 +316,14 @@ func (a *App) connectLoop() {
 			a.Mu.Unlock()
 			log.Printf("%s", i18n.Format(i18n.T().AppDisconnectErr, err))
 
-			// Classify error and set appropriate backoff strategy
-			reason := ClassifyError(err)
-			if reason == DisconnectReasonFatal {
+			// Check for fatal errors (wrong password, version mismatch)
+			var de *protocol.DisconnectError
+			if errors.As(err, &de) && de.IsFatal() {
 				log.Printf("reconnect: fatal error, stopping")
 				return
 			}
-			if reason == DisconnectReasonServerFull {
-				log.Printf("reconnect: server full, backing off")
-			}
-			backoff = NewSmartBackoff(reason, false)
+
+			bo = &backoffState{}
 
 			if attempt+1 >= fastRetries {
 				a.Mu.RLock()
@@ -349,8 +341,7 @@ func (a *App) connectLoop() {
 			a.Mu.Unlock()
 			log.Printf("%s", i18n.T().AppDisconnected)
 
-			// Use network glitch strategy for fast reconnect
-			backoff = NewSmartBackoff(DisconnectReasonNetworkGlitch, true)
+			bo = &backoffState{}
 			attempt = -1 // reset attempt counter for fast reconnect phase
 		}
 	}

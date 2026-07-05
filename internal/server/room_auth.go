@@ -276,104 +276,6 @@ func (r *Room) doSendAuthChallenge(reg *protocol.RegisterPayload, from *net.UDPA
 	return challenge, true
 }
 
-// ── ECDH Key Exchange ─────────────────────────────────────────
-
-func (r *Room) handleECDHConfirm(payload []byte, from *net.UDPAddr) {
-	confirm, err := protocol.UnmarshalECDHConfirm(payload)
-	if err != nil {
-		log.Printf("[ecdh] failed to parse ECDHConfirm from %s: %v", from, err)
-		return
-	}
-
-	t := i18n.T()
-	r.mu.Lock()
-	fromKey := netkey.AddrToRateKey(from)
-	c := r.addrMap[fromKey]
-
-	if c == nil || !c.ecdhPending || c.ecdhPriv == nil {
-		log.Printf("[ecdh] ECDHConfirm from %s: client not found or not in ECDH state (c=%v ecdhPending=%v)", from, c != nil, c != nil && c.ecdhPending)
-		r.mu.Unlock()
-		return
-	}
-	log.Printf("[ecdh] received ECDHConfirm from %s: user=%s", from, c.Username)
-
-	// Verify HMAC over both public keys (prevents MITM)
-	authKey := r.getAuthKey(c.authRoomID)
-	if authKey == nil {
-		r.cleanupPendingAuth(fromKey, fromKey, false, c)
-		r.mu.Unlock()
-		r.sendKick(from, t.KickInternalError)
-		return
-	}
-
-	if !auth.VerifyECDHMAC(authKey, confirm.HMAC[:], c.ecdhPub, confirm.PublicKey[:]) {
-		log.Printf("[ecdh] HMAC verification failed for %s", c.Username)
-		r.cleanupPendingAuth(fromKey, fromKey, false, c)
-		r.mu.Unlock()
-		r.sendKickCode(from, protocol.KickCodeWrongPassword, t.KickWrongPassword)
-		return
-	}
-
-	// Compute shared secret
-	shared, err := auth.ComputeECDHSharedSecret(c.ecdhPriv, confirm.PublicKey[:])
-	if err != nil {
-		log.Printf("[ecdh] shared secret computation failed: %v", err)
-		r.cleanupPendingAuth(fromKey, fromKey, false, c)
-		r.mu.Unlock()
-		r.sendKick(from, t.KickInternalError)
-		return
-	}
-
-	// Derive session key
-	sessionKey := auth.DeriveSessionKey(shared, c.authRoomID)
-	if sessionKey == nil {
-		r.cleanupPendingAuth(fromKey, fromKey, false, c)
-		r.mu.Unlock()
-		r.sendKick(from, t.KickInternalError)
-		return
-	}
-
-	// Store session key for later use (will be used to create cipher)
-	// For now, clear ECDH state and proceed with registration
-	c.ecdhPriv = nil
-	c.ecdhPub = nil
-	c.ecdhPending = false
-
-	// Complete registration
-	reg := &protocol.RegisterPayload{RoomID: c.authRoomID, Username: c.Username, Version: c.clientVersion}
-	vip, ok := r.doRegisterClient(reg, from)
-	if !ok {
-		r.mu.Unlock()
-		r.sendKick(from, t.KickIPExhausted)
-		return
-	}
-
-	// Re-fetch the newly registered client — doRegisterClient replaces the
-	// old pending-auth entry with a fresh Client in addrMap.
-	c = r.addrMap[fromKey]
-	c.SessionKey = sessionKey
-	if r.pendingAuth > 0 {
-		r.pendingAuth--
-	}
-	r.mu.Unlock()
-
-	// Send AssignIP with ECDH flag
-	assign := &protocol.AssignIPPayload{
-		VirtualIP:  vip,
-		SubnetMask: r.subnet.Mask,
-		ServerIP:   r.serverIP,
-		Version:    protocol.SetECDHFlag(protocol.AppVersion),
-	}
-	assign.SessionToken = c.SessionToken
-	if data := assign.Marshal(); data != nil {
-		r.sendChecked(protocol.TypeAssignIP, data, from)
-	}
-	r.sendPeerInfoToClient(from)
-	r.invalidatePeerInfoCache()
-	r.markDirty()
-	go r.sendPeerInfoBroadcast()
-}
-
 func (r *Room) handleAuthResponse(payload []byte, from *net.UDPAddr) {
 	resp, err := protocol.UnmarshalAuthResponse(payload)
 	if err != nil {
@@ -490,30 +392,7 @@ func (r *Room) handleAuthResponse(payload []byte, from *net.UDPAddr) {
 		r.addrMap[fromKey] = c
 	}
 
-	// Initiate ECDH key exchange for forward secrecy (v1.7+ clients only).
-	// Old clients don't understand ECDHExchange, so skip for them.
-	if c.clientVersion >= protocol.MinTokenVersion {
-		priv, pub, err := auth.GenerateECDHKeyPair()
-		if err != nil {
-			log.Printf("[ecdh] failed to generate keypair: %v", err)
-			r.mu.Unlock()
-			r.sendKick(from, t.KickInternalError)
-			return
-		}
-		c.ecdhPriv = priv
-		c.ecdhPub = pub
-		c.ecdhPending = true
-		r.addrMap[fromKey] = c
-		r.pendingAuth++
-		r.mu.Unlock()
-
-		ecdhPkt := &protocol.ECDHExchangePayload{}
-		copy(ecdhPkt.PublicKey[:], pub)
-		r.sendChecked(protocol.TypeECDHExchange, ecdhPkt.Marshal(), from)
-		return
-	}
-
-	// Old client (pre-v1.7): skip ECDH, register directly
+	// Register directly
 	reg := &protocol.RegisterPayload{RoomID: c.authRoomID, Username: c.Username, Version: c.clientVersion}
 	vip, ok := r.doRegisterClient(reg, from)
 	r.mu.Unlock()

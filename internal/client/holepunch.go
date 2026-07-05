@@ -115,29 +115,6 @@ func (t *Tunnel) startHolePunch(ctx context.Context, peerIP net.IP) {
 		return
 	}
 
-	// If Symmetric NAT detected, try port prediction first
-	if strategy == nat.StrategyExtended {
-		t.mu.RLock()
-		pp := t.nat.portPredictor
-		peerPorts := make([]int, len(peer.observedPorts))
-		copy(peerPorts, peer.observedPorts)
-		t.mu.RUnlock()
-		if pp != nil && len(peerPorts) >= 2 {
-			if predictedPorts := pp.PredictPortsForPeer(peerPorts); len(predictedPorts) > 0 {
-				log.Printf("[hole-punch] trying port prediction for %v: %d candidates (from %d observed ports)", peerIP, len(predictedPorts), len(peerPorts))
-				for _, port := range predictedPorts {
-					predictedAddr := &net.UDPAddr{IP: peerAddr.IP, Port: port}
-					t.burstHolePunch(predictedAddr, 3, 50*time.Millisecond, ctx)
-				}
-				// If prediction worked, we're done
-				if t.hasDirectPeerTraffic(peerIP) {
-					log.Printf(i18n.T().LogP2PSuccess, 0, peerIP)
-					return
-				}
-			}
-		}
-	}
-
 	// Standard hole punch phases
 	for phase, interval := range holePunchIntervals {
 		t.burstHolePunch(peerAddr, holePunchBurstPerPhase, interval, ctx)

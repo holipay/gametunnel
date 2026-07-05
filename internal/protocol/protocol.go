@@ -73,10 +73,6 @@ const (
 	// Connection migration
 	TypeRebind    byte = 0x10 // client → server: request address migration (WiFi↔4G)
 	TypeRebindAck byte = 0x11 // server → client: migration confirmed
-
-	// Forward secrecy: X25519 ECDH key exchange
-	TypeECDHExchange byte = 0x12 // server → client: server's ephemeral public key
-	TypeECDHConfirm  byte = 0x13 // client → server: client's ephemeral public key + HMAC
 )
 
 // ── Common Errors ──────────────────────────────────────────────
@@ -211,6 +207,11 @@ func VersionMajor(v uint16) uint16 { return v >> 8 }
 
 // VersionMinor returns the minor version from an encoded version number.
 func VersionMinor(v uint16) uint16 { return v & 0xFF }
+
+// versionECDHFlag is a legacy flag embedded in the AssignIP Version field
+// by old servers (v1.7-v1.13) that negotiated ECDH key exchange. The flag
+// must be stripped before version comparison for backward compatibility.
+const versionECDHFlag uint16 = 0x8000
 
 // IsCompatible checks if two application versions are compatible.
 // Rules:

@@ -31,17 +31,15 @@ type session struct {
 // cryptoState holds end-to-end encryption state. Grouped together because
 // all ciphers are created during registration and cleared on disconnect.
 type cryptoState struct {
-	encCipher     *crypto.Cipher // client→server (relay send)
-	decCipher     *crypto.Cipher // server→client (relay receive)
-	p2pCipher     *crypto.Cipher // client↔client (P2P direct)
-	ecdhSessionKey []byte        // from ECDH negotiation (nil if not used)
-	decAvailable   atomic.Bool   // true once decCipher is set (set once, read often)
+	encCipher   *crypto.Cipher // client→server (relay send)
+	decCipher   *crypto.Cipher // server→client (relay receive)
+	p2pCipher   *crypto.Cipher // client↔client (P2P direct)
+	decAvailable atomic.Bool   // true once decCipher is set (set once, read often)
 }
 
 // natState holds NAT detection results and hole punch optimization state.
 type natState struct {
 	probeResult       *nat.NATProbeResult
-	portPredictor     *nat.PortPredictor
 	cachedPunchPacket atomic.Value // stores []byte
 	probeDone         chan struct{} // closed when async NAT probe completes
 	probeRunning      atomic.Bool  // true while a NAT probe goroutine is active
