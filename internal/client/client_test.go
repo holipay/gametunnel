@@ -73,18 +73,6 @@ func (m *mockTunDevice) ReadBatch(bufs [][]byte, sizes []int) (int, error) {
 	return 1, nil
 }
 
-func (m *mockTunDevice) WriteBatch(bufs [][]byte) (int, error) {
-	if m.writeErr != nil {
-		return 0, m.writeErr
-	}
-	total := 0
-	for _, b := range bufs {
-		m.writeBuf = append(m.writeBuf, b...)
-		total += len(b)
-	}
-	return total, nil
-}
-
 func (m *mockTunDevice) BatchSize() int { return 1 }
 
 // ── Test Helpers ───────────────────────────────────────────────

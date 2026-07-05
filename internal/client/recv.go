@@ -197,6 +197,11 @@ func (t *Tunnel) receiveFromTUN(ctx context.Context) {
 
 		n, err := dev.ReadBatch(bufs, sizes)
 		if err != nil {
+			// Return all pooled buffers before handling error
+			for i := range bufs {
+				pool.PktBufPut(bufs[i])
+				bufs[i] = nil
+			}
 			select {
 			case <-ctx.Done():
 				return

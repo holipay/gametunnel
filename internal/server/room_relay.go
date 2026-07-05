@@ -130,7 +130,7 @@ func (r *Room) handleRelay(payload []byte, from *net.UDPAddr) {
 	// Compare raw 4-byte VIP instead of net.IP.Equal to avoid heap allocation
 	senderVIP := sender.VirtualIP.To4()
 	if senderVIP == nil || [4]byte(senderVIP) != srcIP {
-		r.relayLog("[relay] srcIP mismatch")
+		r.relayLog("[relay] srcIP mismatch: sender=%s payload=%d.%d.%d.%d", sender.Username, srcIP[0], srcIP[1], srcIP[2], srcIP[3])
 		r.mu.RUnlock()
 		return
 	}
