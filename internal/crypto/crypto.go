@@ -18,7 +18,6 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
-	"sync"
 	"sync/atomic"
 
 	"golang.org/x/crypto/chacha20poly1305"
@@ -62,11 +61,9 @@ type Cipher struct {
 	// Replay protection: sliding window of recently received counter values.
 	// The window tracks counters in range [highestCounter - windowSize + 1, highestCounter].
 	// Packets with counters outside this window (too old or too far ahead) are rejected.
-	// This prevents replay attacks without requiring strict in-order delivery,
-	// which is important for UDP where packets may arrive slightly out of order.
-	replayMu       sync.Mutex
-	highestCounter uint64 // highest counter value seen, protected by replayMu
-	replayBitmap   uint64 // bitmap of received counters relative to highestCounter
+	// Uses atomic operations with CAS loop for lock-free concurrent access.
+	replayCounter atomic.Uint64 // highest counter value seen
+	replayBitmap  atomic.Uint64 // bitmap of received counters relative to highestCounter
 }
 
 // NewCipher creates a new Cipher with the given key and direction.
@@ -193,34 +190,45 @@ func (c *Cipher) DecryptInto(dst, data []byte) ([]byte, error) {
 
 // checkReplayWindow verifies that the counter is not a replay and updates the window.
 // Returns true if the counter is valid (not a replay), false if it's a duplicate or too old.
-// Uses a bitmap-based sliding window: tracks counters in range [highest-counterWindowSize+1, highest].
+// Uses lock-free atomic CAS for concurrent access without mutex overhead.
 func (c *Cipher) checkReplayWindow(ctr uint64) bool {
-	c.replayMu.Lock()
-	defer c.replayMu.Unlock()
+	for {
+		highest := c.replayCounter.Load()
+		bitmap := c.replayBitmap.Load()
 
-	highest := c.highestCounter
-
-	if ctr > highest {
-		shift := ctr - highest
-		if shift < replayWindowSize {
-			c.replayBitmap = (c.replayBitmap << shift) | 1
-		} else {
-			c.replayBitmap = 1
+		if ctr > highest {
+			// New highest counter — shift bitmap and set bit 0
+			shift := ctr - highest
+			var newBitmap uint64
+			if shift < replayWindowSize {
+				newBitmap = (bitmap << shift) | 1
+			} else {
+				newBitmap = 1
+			}
+			if c.replayCounter.CompareAndSwap(highest, ctr) {
+				c.replayBitmap.Store(newBitmap)
+				return true
+			}
+			// CAS failed — retry
+			continue
 		}
-		c.highestCounter = ctr
-		return true
-	}
 
-	diff := highest - ctr
-	if diff >= replayWindowSize {
-		return false
+		diff := highest - ctr
+		if diff >= replayWindowSize {
+			return false // too old
+		}
+
+		bit := uint64(1) << diff
+		if bitmap&bit != 0 {
+			return false // duplicate
+		}
+
+		// Set bit and retry CAS
+		if c.replayBitmap.CompareAndSwap(bitmap, bitmap|bit) {
+			return true
+		}
+		// CAS failed — retry (bitmap changed, but counter didn't)
 	}
-	bit := uint64(1) << diff
-	if c.replayBitmap&bit != 0 {
-		return false
-	}
-	c.replayBitmap |= bit
-	return true
 }
 
 // IsEncrypted checks if data starts with the encryption version byte.
