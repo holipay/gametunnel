@@ -17,27 +17,28 @@ import (
 // subnet-directed broadcast (e.g. 10.10.0.255). Windows may not deliver limited
 // broadcast packets arriving on a TUN adapter to game processes, but
 // subnet-directed broadcasts work reliably. Returns the (possibly rewritten)
-// packet and whether it was modified.
-func rewriteBroadcast(pkt []byte, subnet *net.IPNet) []byte {
+// packet, whether it was modified, and whether the caller should return the
+// buffer to the pool after use.
+func rewriteBroadcast(pkt []byte, subnet *net.IPNet) (out []byte, modified bool, pooled bool) {
 	if len(pkt) < 20 || subnet == nil || pkt[0]>>4 != 4 || len(subnet.Mask) == 0 {
-		return pkt
+		return pkt, false, false
 	}
 	// IPv4 header: dst offset = 16, length = 4
 	dstOff := 16
 	if binary.BigEndian.Uint32(pkt[dstOff:dstOff+4]) != 0xFFFFFFFF {
-		return pkt
+		return pkt, false, false
 	}
 	subIP := subnet.IP.To4()
 	if subIP == nil {
-		return pkt
+		return pkt, false, false
 	}
 	// Compute subnet broadcast: network IP | ~mask
 	var bcast [4]byte
 	for i := 0; i < 4; i++ {
 		bcast[i] = subIP[i] | ^subnet.Mask[i]
 	}
-	// Copy and rewrite — must not mutate pooled buffers
-	out := make([]byte, len(pkt))
+	// Use pooled buffer to reduce GC pressure on broadcast-heavy paths
+	out = pool.PktBufGet(len(pkt))[:len(pkt)]
 	copy(out, pkt)
 	copy(out[dstOff:dstOff+4], bcast[:])
 	// Recalculate IP header checksum (RFC 1071)
@@ -52,7 +53,7 @@ func rewriteBroadcast(pkt []byte, subnet *net.IPNet) []byte {
 		sum = (sum & 0xFFFF) + (sum >> 16)
 	}
 	binary.BigEndian.PutUint16(out[10:12], ^uint16(sum))
-	return out
+	return out, true, true
 }
 
 func (t *Tunnel) decryptWriteAndRelease(dp *protocol.DataPayload, cipher *crypto.Cipher) {
@@ -77,10 +78,14 @@ func (t *Tunnel) decryptWriteAndRelease(dp *protocol.DataPayload, cipher *crypto
 
 	// Rewrite limited broadcast (255.255.255.255) to subnet-directed
 	// broadcast so Windows delivers it to game processes on the TUN adapter.
-	outData = rewriteBroadcast(outData, t.session.cachedSubnet.Load())
-
-	if _, err := dev.Write(outData); err != nil {
+	// rewriteBroadcast returns a pooled buffer if rewrite was needed.
+	rewritten, _, pooled := rewriteBroadcast(outData, t.session.cachedSubnet.Load())
+	if _, err := dev.Write(rewritten); err != nil {
 		log.Printf(i18n.T().LogTUNWriteFail, err)
+	}
+	// Return pooled buffer if rewrite allocated one
+	if pooled {
+		pool.PktBufPut(rewritten)
 	}
 	protocol.PutDataPayload(dp)
 }
