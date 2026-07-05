@@ -208,16 +208,24 @@ func VersionMajor(v uint16) uint16 { return v >> 8 }
 // VersionMinor returns the minor version from an encoded version number.
 func VersionMinor(v uint16) uint16 { return v & 0xFF }
 
+// versionECDHFlag is a legacy flag embedded in the AssignIP Version field
+// by old servers (v1.7-v1.13) that negotiated ECDH key exchange. The flag
+// must be stripped before version comparison for backward compatibility.
+const versionECDHFlag uint16 = 0x8000
+
 // IsCompatible checks if two application versions are compatible.
 // Rules:
 //   - Major version must match (breaking wire-format change)
 //   - Client minor version must be ≤ server minor version (server supports older clients)
 //   - Version 0 means "unknown" (old client/server without version field) — always compatible
+//   - The ECDH flag (0x8000) is stripped before comparison — it is not a version component.
 func IsCompatible(clientVer, serverVer uint16) bool {
 	// Old clients/servers that don't send version are always allowed
 	if clientVer == 0 || serverVer == 0 {
 		return true
 	}
+	clientVer &^= versionECDHFlag
+	serverVer &^= versionECDHFlag
 	if VersionMajor(clientVer) != VersionMajor(serverVer) {
 		return false
 	}
