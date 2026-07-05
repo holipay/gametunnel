@@ -112,10 +112,6 @@ func (t *Tunnel) handlePeerInfo(ctx context.Context, payload []byte) {
 			existing.Username = entry.Username
 			existing.NATType = entry.NATType
 			existing.lastSeen.Store(now.UnixNano())
-			// Track observed ports for port prediction
-			if pubAddr != nil && pubAddr.Port > 0 {
-				existing.observedPorts = appendObservedPort(existing.observedPorts, pubAddr.Port)
-			}
 		} else {
 			// New peer — create and add
 			p := &Peer{
@@ -125,9 +121,6 @@ func (t *Tunnel) handlePeerInfo(ctx context.Context, payload []byte) {
 			}
 			if pubAddr != nil {
 				p.PublicAddr.Store(pubAddr)
-				if pubAddr.Port > 0 {
-					p.observedPorts = appendObservedPort(nil, pubAddr.Port)
-				}
 			}
 			p.lastSeen.Store(now.UnixNano())
 			t.peers[key] = p
@@ -163,15 +156,4 @@ func (t *Tunnel) handlePeerInfo(ctx context.Context, payload []byte) {
 	}
 }
 
-// appendObservedPort adds a port to the history, capping at 10 entries.
-func appendObservedPort(ports []int, port int) []int {
-	// Skip duplicate of the last entry
-	if len(ports) > 0 && ports[len(ports)-1] == port {
-		return ports
-	}
-	ports = append(ports, port)
-	if len(ports) > 10 {
-		ports = ports[len(ports)-10:]
-	}
-	return ports
-}
+

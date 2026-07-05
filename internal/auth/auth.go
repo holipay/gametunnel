@@ -8,7 +8,6 @@
 package auth
 
 import (
-	"crypto/ecdh"
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
@@ -95,65 +94,4 @@ func VerifyHMAC(key, clientHMAC []byte, challenge []byte, roomID, username strin
 	}
 	expected := ComputeHMAC(key, challenge, roomID, username, remoteAddr)
 	return hmac.Equal(clientHMAC, expected)
-}
-
-// DeriveSessionKey derives a 32-byte encryption key from an ECDH shared secret.
-// The roomID is bound as context to prevent cross-room key reuse.
-func DeriveSessionKey(ecdhShared []byte, roomID string) []byte {
-	if len(ecdhShared) == 0 {
-		return nil
-	}
-	hkdfReader := hkdf.New(sha256.New, ecdhShared, nil, []byte("GameTunnel:session:"+roomID))
-	key := make([]byte, KeySize)
-	if _, err := io.ReadFull(hkdfReader, key); err != nil {
-		return nil
-	}
-	return key
-}
-
-// ComputeECDHMAC computes an HMAC over both ECDH public keys using the password-derived key.
-// This prevents MITM attacks during the ECDH exchange.
-func ComputeECDHMAC(key []byte, serverPub, clientPub []byte) []byte {
-	if len(key) == 0 || len(serverPub) != 32 || len(clientPub) != 32 {
-		return nil
-	}
-	mac := hmac.New(sha256.New, key)
-	mac.Write(serverPub)
-	mac.Write(clientPub)
-	return mac.Sum(nil)
-}
-
-// VerifyECDHMAC verifies the HMAC over both ECDH public keys.
-func VerifyECDHMAC(key, clientHMAC, serverPub, clientPub []byte) bool {
-	if len(key) == 0 || len(clientHMAC) == 0 {
-		return false
-	}
-	expected := ComputeECDHMAC(key, serverPub, clientPub)
-	return hmac.Equal(clientHMAC, expected)
-}
-
-// GenerateECDHKeyPair generates an ephemeral X25519 key pair.
-// Returns the private key and 32-byte public key.
-func GenerateECDHKeyPair() (*ecdh.PrivateKey, []byte, error) {
-	priv, err := ecdh.X25519().GenerateKey(rand.Reader)
-	if err != nil {
-		return nil, nil, fmt.Errorf("generate ECDH key: %w", err)
-	}
-	pub := priv.PublicKey().Bytes()
-	return priv, pub, nil
-}
-
-// ComputeECDHSharedSecret computes the X25519 shared secret from a private key
-// and the peer's public key. Returns 32 bytes.
-func ComputeECDHSharedSecret(priv *ecdh.PrivateKey, peerPubBytes []byte) ([]byte, error) {
-	curve := ecdh.X25519()
-	peerPub, err := curve.NewPublicKey(peerPubBytes)
-	if err != nil {
-		return nil, fmt.Errorf("parse peer public key: %w", err)
-	}
-	shared, err := priv.ECDH(peerPub)
-	if err != nil {
-		return nil, fmt.Errorf("ECDH compute: %w", err)
-	}
-	return shared, nil
 }

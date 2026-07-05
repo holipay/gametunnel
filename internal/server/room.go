@@ -279,8 +279,6 @@ func (r *Room) HandlePacket(msgType byte, payload []byte, from *net.UDPAddr) {
 		r.handleDisconnect(from)
 	case protocol.TypePong:
 		r.handlePong(payload, from)
-	case protocol.TypeECDHConfirm:
-		r.handleECDHConfirm(payload, from)
 	}
 }
 

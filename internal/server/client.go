@@ -1,7 +1,6 @@
 package server
 
 import (
-	"crypto/ecdh"
 	"crypto/rand"
 	"fmt"
 	"net"
@@ -52,16 +51,6 @@ type Client struct {
 
 	// Client version from Register (0 = old client without version)
 	clientVersion uint16
-
-	// ECDH state (forward secrecy): ephemeral keypair for session key negotiation.
-	// Populated after HMAC auth success, used during ECDH handshake.
-	ecdhPriv    *ecdh.PrivateKey // server's ephemeral private key
-	ecdhPub     []byte           // server's ephemeral public key (32 bytes)
-	ecdhPending bool             // true if waiting for client's ECDHConfirm
-
-	// Session key derived from ECDH shared secret (nil if ECDH not used).
-	// Used to create encryption ciphers for this client's session.
-	SessionKey []byte
 }
 
 func (c *Client) GetLastSeen() time.Time {
