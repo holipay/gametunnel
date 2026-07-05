@@ -52,8 +52,8 @@ func (t *Tunnel) stalePeerCleanupLoop(ctx context.Context) {
 func (t *Tunnel) cleanStalePeers() {
 	now := time.Now()
 
-	// Collect stale keys under read lock to minimize write lock hold time.
-	t.mu.RLock()
+	// Collect stale peers under write lock to serialize with handlePeerInfo.
+	t.mu.Lock()
 	var staleKeys [][16]byte
 	var stalePeers []*Peer
 	for key, peer := range t.peers {
@@ -63,25 +63,22 @@ func (t *Tunnel) cleanStalePeers() {
 			stalePeers = append(stalePeers, peer)
 		}
 	}
-	t.mu.RUnlock()
 
 	if len(staleKeys) == 0 {
+		t.mu.Unlock()
 		return
 	}
 
-	// Delete under write lock. Re-check that the peer pointer still matches
-	// to avoid deleting a freshly-added peer with the same key (handlePeerInfo
-	// may have replaced the map between our read and write locks).
-	t.mu.Lock()
-	for i, key := range staleKeys {
-		if cur, ok := t.peers[key]; ok && cur == stalePeers[i] {
-			delete(t.peers, key)
-		}
+	// Delete stale peers and update snapshot
+	for _, key := range staleKeys {
+		delete(t.peers, key)
 	}
+	t.peerSnapshot.Store(t.peers)
 	t.mu.Unlock()
 
-	for _, peer := range stalePeers {
+	for i, peer := range stalePeers {
 		log.Printf(i18n.T().LogCleanPeer,
 			peer.Username, peer.VirtualIP, stalePeerGracePeriod)
+		_ = i // avoid unused variable
 	}
 }

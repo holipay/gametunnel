@@ -48,7 +48,7 @@ type Peer struct {
 	DirectReach   atomic.Bool               // true if P2P direct path has been confirmed
 	lastSeen      atomic.Int64 // last time server reported this peer (UnixNano)
 	lastPunchBack atomic.Int64  // rate limit: UnixNano of last hole punch response
-	stale         bool          // mark-and-sweep flag, only valid under t.mu in handlePeerInfo (not atomic)
+	stale         bool          // mark-and-sweep flag, only written by handlePeerInfo under t.mu
 }
 
 // tryRateLimitHolePunch checks and updates the hole-punch rate limiter.
@@ -107,7 +107,6 @@ func New(cfg *Config) *Tunnel {
 			roomID:   cfg.RoomID,
 			roomPass: cfg.RoomPassword,
 		},
-		peers:       make(map[[16]byte]*Peer),
 		sendCh:      make(chan sendJob, sendChanSize),
 		ctrlCh:      make(chan sendJob, ctrlChanSize),
 		tunCh:       make(chan tunJob, tunChanSize),
@@ -115,6 +114,9 @@ func New(cfg *Config) *Tunnel {
 		// Default: 50 Mbps client send limit, 512 KB burst
 		sendLimiter: newClientSendLimiter(50*1024*1024/8, 512*1024),
 	}
+	peers := make(map[[16]byte]*Peer)
+	t.peers = peers
+	t.peerSnapshot.Store(peers)
 	t.disconnectOnce.Store(&sync.Once{})
 	return t
 }
@@ -468,6 +470,9 @@ type TunnelStatus struct {
 
 // Status returns a snapshot of the current tunnel state.
 func (t *Tunnel) Status() TunnelStatus {
+	// Load peer snapshot without lock (atomic.Value is safe for concurrent reads)
+	peers := t.peerSnapshot.Load().(map[[16]byte]*Peer)
+
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 
@@ -476,7 +481,7 @@ func (t *Tunnel) Status() TunnelStatus {
 		VirtualIP:     t.session.virtualIP,
 		SubnetMask:    t.session.subnetMask,
 		ServerIP:      t.session.serverIP,
-		PeerCount:     len(t.peers),
+		PeerCount:     len(peers),
 		ServerVersion: uint16(t.session.serverVersion.Load()),
 	}
 
@@ -487,11 +492,11 @@ func (t *Tunnel) Status() TunnelStatus {
 		st.ExternalPort = t.nat.probeResult.ExternalPort
 	}
 
-	if !st.Connected || len(t.peers) == 0 {
+	if !st.Connected || len(peers) == 0 {
 		return st
 	}
 
-	for _, p := range t.peers {
+	for _, p := range peers {
 		if p.DirectReach.Load() {
 			st.P2PPeers++
 		} else {

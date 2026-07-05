@@ -81,6 +81,9 @@ func buildPacket(srcIP, dstIP net.IP, data []byte, cipher *crypto.Cipher, flags 
 func (t *Tunnel) routePacket(pkt []byte, srcIP, dstIP [4]byte) {
 	dstKey := netkey.IPKey(dstIP[:])
 
+	// Read peers from atomic snapshot — no lock needed for reads
+	peers := t.peerSnapshot.Load().(map[[16]byte]*Peer)
+
 	t.mu.RLock()
 	var serverIPKey [16]byte
 	if p := t.session.serverIPKey.Load(); p != nil {
@@ -94,7 +97,7 @@ func (t *Tunnel) routePacket(pkt []byte, srcIP, dstIP [4]byte) {
 	if serverVersion >= uint32(protocol.MinTokenVersion) {
 		token = t.session.sessionToken
 	}
-	peer, ok := t.peers[dstKey]
+	peer, ok := peers[dstKey]
 	var peerAddr *net.UDPAddr
 	var peerDirect bool
 	if ok {

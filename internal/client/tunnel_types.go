@@ -68,8 +68,11 @@ type Tunnel struct {
 	// TUN device
 	tunDev atomic.Value // stores TunDevice
 
-	// Peers
-	peers map[[16]byte]*Peer
+	// Peers — copy-on-write snapshot for lock-free reads in routePacket.
+	// peers is the authoritative map (written under mu).
+	// peerSnapshot is an atomic snapshot read by routePacket without lock.
+	peers        map[[16]byte]*Peer
+	peerSnapshot atomic.Value // stores map[[16]byte]*Peer
 	mu    sync.RWMutex
 
 	// Lifecycle

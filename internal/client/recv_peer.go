@@ -21,8 +21,10 @@ func (t *Tunnel) handleDirectHolePunch(ctx context.Context, from *net.UDPAddr, m
 	copy(peerIPBuf[:], msg.Payload[:4])
 	peerIP := net.IP(peerIPBuf[:])
 
+	peers := t.peerSnapshot.Load().(map[[16]byte]*Peer)
+	peer, ok := peers[netkey.IPKey(peerIP)]
+
 	t.mu.RLock()
-	peer, ok := t.peers[netkey.IPKey(peerIP)]
 	if !ok || peer.PublicAddr.Load() == nil {
 		t.mu.RUnlock()
 		return
@@ -62,50 +64,47 @@ func (t *Tunnel) handlePeerInfo(ctx context.Context, payload []byte) {
 	var changedPeerIPs []net.IP // peers whose public address changed (need re-punch)
 	now := time.Now()
 
-	// Collect log messages under lock, emit after release to avoid blocking readers.
+	// Collect log messages, emit after update to avoid blocking readers.
 	type peerLog struct {
 		format string
 		args   []interface{}
 	}
 	var logs []peerLog
 
+	// Serialize write access to t.peers under lock.
+	// routePacket reads from peerSnapshot (atomic.Value) without lock.
 	t.mu.Lock()
 
-	// Mark all existing peers as stale, then update/add from the broadcast.
-	// After processing, remove any peers still marked stale (they left).
+	// Copy-on-write: load current map, create new map with updates, store atomically.
+	oldPeers := t.peers
+	newPeers := make(map[[16]byte]*Peer, len(oldPeers))
 
-	// Phase 1: Mark all existing peers as stale
-	for _, peer := range t.peers {
+	// Copy all existing peers (mark as stale)
+	for key, peer := range oldPeers {
 		peer.stale = true
+		newPeers[key] = peer
 	}
 
-	// Phase 2: Update existing peers or add new ones
+	// Update existing peers or add new ones
 	for _, entry := range info.Peers {
-		// Skip self — server sends full list including this client
 		if entry.VirtualIP.Equal(t.session.virtualIP) {
 			continue
 		}
 		key := netkey.IPKey(entry.VirtualIP)
-		// Normalize PublicAddr.IP to 16 bytes (IPv4 → ::ffff:x.x.x.x) so
-		// that IP comparisons with addresses received on the IPv6 socket
-		// (always 16 bytes) work correctly. Required for fromServer check
-		// in receiveFromServer and P2P detection in handleDirectData.
 		pubAddr := entry.PublicAddr
 		if pubAddr != nil {
 			if ip16 := pubAddr.IP.To16(); ip16 != nil {
 				pubAddr = &net.UDPAddr{IP: ip16, Port: pubAddr.Port}
 			}
 		}
-		if existing, ok := t.peers[key]; ok {
-			// Existing peer — update in place, preserve DirectReach state
+		if existing, ok := newPeers[key]; ok {
 			existing.stale = false
-			// Check if peer's public address changed (NAT rebinding)
 			existingAddr := existing.PublicAddr.Load()
 			addrChanged := existingAddr != nil && pubAddr != nil &&
 				(!existingAddr.IP.Equal(pubAddr.IP) || existingAddr.Port != pubAddr.Port)
 			if addrChanged {
 				logs = append(logs, peerLog{i18n.T().LogPeerAddrChange, []interface{}{entry.Username, entry.VirtualIP, existing.PublicAddr.Load(), entry.PublicAddr}})
-				existing.DirectReach.Store(false) // reset P2P status, need re-punch
+				existing.DirectReach.Store(false)
 				changedPeerIPs = append(changedPeerIPs, entry.VirtualIP)
 			}
 			existing.PublicAddr.Store(pubAddr)
@@ -113,7 +112,6 @@ func (t *Tunnel) handlePeerInfo(ctx context.Context, payload []byte) {
 			existing.NATType = entry.NATType
 			existing.lastSeen.Store(now.UnixNano())
 		} else {
-			// New peer — create and add
 			p := &Peer{
 				VirtualIP: entry.VirtualIP,
 				Username:  entry.Username,
@@ -123,28 +121,31 @@ func (t *Tunnel) handlePeerInfo(ctx context.Context, payload []byte) {
 				p.PublicAddr.Store(pubAddr)
 			}
 			p.lastSeen.Store(now.UnixNano())
-			t.peers[key] = p
+			newPeers[key] = p
 			logs = append(logs, peerLog{i18n.T().LogNewPeer, []interface{}{entry.Username, entry.VirtualIP}})
 			newPeerIPs = append(newPeerIPs, entry.VirtualIP)
 		}
 	}
 
-	// Phase 3: Remove stale peers (those that left)
-	for key, peer := range t.peers {
+	// Remove stale peers
+	for key, peer := range newPeers {
 		if peer.stale {
 			logs = append(logs, peerLog{i18n.T().LogPeerLeave2, []interface{}{peer.Username, peer.VirtualIP}})
-			delete(t.peers, key)
+			delete(newPeers, key)
 		}
 	}
 
+	// Update authoritative map and atomic snapshot
+	t.peers = newPeers
+	t.peerSnapshot.Store(newPeers)
 	t.mu.Unlock()
 
-	// Emit log messages outside the lock.
+	// Emit log messages
 	for _, l := range logs {
 		log.Printf(l.format, l.args...)
 	}
 
-	// Launch hole punches outside the lock to avoid holding it during goroutine creation
+	// Launch hole punches
 	allPeerIPs := append(newPeerIPs, changedPeerIPs...)
 	for _, peerIP := range allPeerIPs {
 		t.holePunchWg.Add(1)
