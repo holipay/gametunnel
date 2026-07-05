@@ -269,6 +269,7 @@ func (t *Tunnel) handleAssignIP(payload []byte) error {
 	// Clear stale peers from previous session — they will be repopulated
 	// by the next PeerInfo message from the server.
 	t.peers = make(map[[16]byte]*Peer)
+	t.peerSnapshot.Store(t.peers)
 	t.mu.Unlock()
 
 	return nil

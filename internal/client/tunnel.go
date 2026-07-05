@@ -107,7 +107,6 @@ func New(cfg *Config) *Tunnel {
 			roomID:   cfg.RoomID,
 			roomPass: cfg.RoomPassword,
 		},
-		peers:       make(map[[16]byte]*Peer),
 		sendCh:      make(chan sendJob, sendChanSize),
 		ctrlCh:      make(chan sendJob, ctrlChanSize),
 		tunCh:       make(chan tunJob, tunChanSize),
@@ -115,6 +114,9 @@ func New(cfg *Config) *Tunnel {
 		// Default: 50 Mbps client send limit, 512 KB burst
 		sendLimiter: newClientSendLimiter(50*1024*1024/8, 512*1024),
 	}
+	peers := make(map[[16]byte]*Peer)
+	t.peers = peers
+	t.peerSnapshot.Store(peers)
 	t.disconnectOnce.Store(&sync.Once{})
 	return t
 }
@@ -471,12 +473,13 @@ func (t *Tunnel) Status() TunnelStatus {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 
+	peers := t.peerSnapshot.Load().(map[[16]byte]*Peer)
 	st := TunnelStatus{
 		Connected:     t.tunDev.Load() != nil && t.session.virtualIP != nil,
 		VirtualIP:     t.session.virtualIP,
 		SubnetMask:    t.session.subnetMask,
 		ServerIP:      t.session.serverIP,
-		PeerCount:     len(t.peers),
+		PeerCount:     len(peers),
 		ServerVersion: uint16(t.session.serverVersion.Load()),
 	}
 
@@ -487,11 +490,11 @@ func (t *Tunnel) Status() TunnelStatus {
 		st.ExternalPort = t.nat.probeResult.ExternalPort
 	}
 
-	if !st.Connected || len(t.peers) == 0 {
+	if !st.Connected || len(peers) == 0 {
 		return st
 	}
 
-	for _, p := range t.peers {
+	for _, p := range peers {
 		if p.DirectReach.Load() {
 			st.P2PPeers++
 		} else {

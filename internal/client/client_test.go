@@ -253,6 +253,7 @@ func TestRoutePacket_PeerP2P(t *testing.T) {
 	tunnel.peers = map[[16]byte]*Peer{
 		netkey.IPKey(peerIP): peer,
 	}
+	tunnel.peerSnapshot.Store(tunnel.peers)
 
 	pkt := []byte{0x45, 0, 0, 20}
 	srcIP := net.IPv4(10, 0, 0, 2).To4()
@@ -314,6 +315,7 @@ func TestRoutePacket_PeerNilAddr(t *testing.T) {
 	tunnel.peers = map[[16]byte]*Peer{
 		netkey.IPKey(peerIP): peer,
 	}
+	tunnel.peerSnapshot.Store(tunnel.peers)
 
 	pkt := []byte{0x45, 0, 0, 20}
 	srcIP := net.IPv4(10, 0, 0, 2).To4()
@@ -440,6 +442,7 @@ func TestHandlePeerInfo_UpdatePlayer(t *testing.T) {
 	tunnel.peers = map[[16]byte]*Peer{
 		netkey.IPKey(peerIP): existingPeer,
 	}
+	tunnel.peerSnapshot.Store(tunnel.peers)
 
 	payload := &protocol.PeerInfoPayload{
 		Peers: []protocol.PeerInfoEntry{
@@ -489,6 +492,7 @@ func TestHandlePeerInfo_PlayerLeaving(t *testing.T) {
 		netkey.IPKey(peer1IP): player1,
 		netkey.IPKey(peer2IP): player2,
 	}
+	tunnel.peerSnapshot.Store(tunnel.peers)
 
 	// Server sends updated list containing only peer2; peer1 has left
 	payload := &protocol.PeerInfoPayload{
@@ -528,6 +532,7 @@ func TestHandlePeerInfo_EmptyList(t *testing.T) {
 	tunnel.peers = map[[16]byte]*Peer{
 		netkey.IPKey(peerIP): player,
 	}
+	tunnel.peerSnapshot.Store(tunnel.peers)
 
 	// Server sends empty peer list
 	payload := &protocol.PeerInfoPayload{Peers: []protocol.PeerInfoEntry{}}
@@ -1014,6 +1019,7 @@ func TestHandleHolePunchReceived(t *testing.T) {
 	hpPeer := &Peer{VirtualIP: peerIP, Username: "peer1"}
 	hpPeer.PublicAddr.Store(peerAddr)
 	tunnel.peers[netkey.IPKey(peerIP)] = hpPeer
+	tunnel.peerSnapshot.Store(tunnel.peers)
 	tunnel.mu.Unlock()
 
 	// Build hole punch payload: 4 bytes virtual IP
@@ -1061,6 +1067,7 @@ func TestCleanStalePeers(t *testing.T) {
 
 	tunnel.mu.Lock()
 	tunnel.peers[netkey.IPKey(peerIP)] = peer
+	tunnel.peerSnapshot.Store(tunnel.peers)
 	tunnel.mu.Unlock()
 
 	tunnel.cleanStalePeers()
@@ -1088,6 +1095,7 @@ func TestCleanStalePeers_KeepsRecent(t *testing.T) {
 
 	tunnel.mu.Lock()
 	tunnel.peers[netkey.IPKey(peerIP)] = peer
+	tunnel.peerSnapshot.Store(tunnel.peers)
 	tunnel.mu.Unlock()
 
 	tunnel.cleanStalePeers()
@@ -1180,6 +1188,7 @@ func TestHandleDirectData_WrongAddress(t *testing.T) {
 	wdPeer := &Peer{VirtualIP: peerIP, Username: "peer1"}
 	wdPeer.PublicAddr.Store(correctAddr)
 	tunnel.peers[netkey.IPKey(peerIP)] = wdPeer
+	tunnel.peerSnapshot.Store(tunnel.peers)
 	tunnel.mu.Unlock()
 
 	dp := &protocol.DataPayload{
@@ -1295,6 +1304,7 @@ func TestHasDirectPeerTraffic_DirectReach(t *testing.T) {
 
 	tunnel.mu.Lock()
 	tunnel.peers[netkey.IPKey(peerIP)] = peer
+	tunnel.peerSnapshot.Store(tunnel.peers)
 	tunnel.mu.Unlock()
 
 	if !tunnel.hasDirectPeerTraffic(peerIP) {
@@ -1314,6 +1324,7 @@ func TestHasDirectPeerTraffic_NoDirectReach(t *testing.T) {
 
 	tunnel.mu.Lock()
 	tunnel.peers[netkey.IPKey(peerIP)] = peer
+	tunnel.peerSnapshot.Store(tunnel.peers)
 	tunnel.mu.Unlock()
 
 	if tunnel.hasDirectPeerTraffic(peerIP) {
@@ -1355,6 +1366,7 @@ func TestSendP2PKeepalives_WithDirectPeers(t *testing.T) {
 
 	tunnel.mu.Lock()
 	tunnel.peers[netkey.IPKey(peerIP)] = peer
+	tunnel.peerSnapshot.Store(tunnel.peers)
 	tunnel.nat.cachedPunchPacket.Store(protocol.EncodeChecked(protocol.TypeHolePunch, tunnel.session.virtualIP.To4()))
 	tunnel.mu.Unlock()
 
@@ -1793,6 +1805,7 @@ func TestHandleDirectData_TokenValidation_OldFormat(t *testing.T) {
 	wdPeer := &Peer{VirtualIP: peerIP, Username: "peer1"}
 	wdPeer.PublicAddr.Store(fromAddr)
 	tunnel.peers[netkey.IPKey(peerIP)] = wdPeer
+	tunnel.peerSnapshot.Store(tunnel.peers)
 	tunnel.mu.Unlock()
 
 	// Old format payload with valid token: srcIP(4) + dstIP(4) + flags(1) + token(16) + data
@@ -1825,6 +1838,7 @@ func TestHandleDirectData_TokenValidation_NewFormat(t *testing.T) {
 	wdPeer := &Peer{VirtualIP: peerIP, Username: "peer1"}
 	wdPeer.PublicAddr.Store(fromAddr)
 	tunnel.peers[netkey.IPKey(peerIP)] = wdPeer
+	tunnel.peerSnapshot.Store(tunnel.peers)
 	tunnel.mu.Unlock()
 
 	// New format payload with valid token: srcIP(4) + dstIP(4) + formatVer(1) + flags(1) + token(16) + data
@@ -1858,6 +1872,7 @@ func TestHandleDirectData_TokenValidation_WrongToken(t *testing.T) {
 	wdPeer := &Peer{VirtualIP: peerIP, Username: "peer1"}
 	wdPeer.PublicAddr.Store(fromAddr)
 	tunnel.peers[netkey.IPKey(peerIP)] = wdPeer
+	tunnel.peerSnapshot.Store(tunnel.peers)
 	tunnel.mu.Unlock()
 
 	// New format with WRONG token
@@ -2002,6 +2017,7 @@ func TestStartHolePunch_ContextCancel(t *testing.T) {
 
 	tunnel.mu.Lock()
 	tunnel.peers[netkey.IPKey(peerIP)] = peer
+	tunnel.peerSnapshot.Store(tunnel.peers)
 	tunnel.nat.cachedPunchPacket.Store(protocol.EncodeChecked(protocol.TypeHolePunch, tunnel.session.virtualIP.To4()))
 	tunnel.mu.Unlock()
 
@@ -2048,6 +2064,7 @@ func TestRetryFailedHolePunches_WithPeers(t *testing.T) {
 
 	tunnel.mu.Lock()
 	tunnel.peers[netkey.IPKey(peerIP)] = peer
+	tunnel.peerSnapshot.Store(tunnel.peers)
 	tunnel.nat.cachedPunchPacket.Store(protocol.EncodeChecked(protocol.TypeHolePunch, tunnel.session.virtualIP.To4()))
 	tunnel.mu.Unlock()
 
@@ -2145,6 +2162,7 @@ func TestRoutePacket_PeerFallbackToRelay(t *testing.T) {
 
 	tunnel.mu.Lock()
 	tunnel.peers[netkey.IPKey(peerIP)] = peer
+	tunnel.peerSnapshot.Store(tunnel.peers)
 	tunnel.mu.Unlock()
 
 	pkt := make([]byte, 20)

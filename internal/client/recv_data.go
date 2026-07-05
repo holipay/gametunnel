@@ -114,7 +114,8 @@ func (t *Tunnel) handleDirectData(ctx context.Context, from *net.UDPAddr, msg *p
 
 	// Validate srcIP is a known peer (anti-spoofing)
 	srcKey := netkey.IPKey(dp.SrcIP)
-	peer, known := t.peers[srcKey]
+	peers := t.peerSnapshot.Load().(map[[16]byte]*Peer)
+	peer, known := peers[srcKey]
 
 	// Snapshot session token for unencrypted P2P auth
 	sessionToken := t.session.sessionToken

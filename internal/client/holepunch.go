@@ -84,7 +84,8 @@ func (t *Tunnel) startHolePunch(ctx context.Context, peerIP net.IP) {
 	}
 
 	t.mu.RLock()
-	peer, ok := t.peers[netkey.IPKey(peerIP)]
+	peers := t.peerSnapshot.Load().(map[[16]byte]*Peer)
+	peer, ok := peers[netkey.IPKey(peerIP)]
 	if !ok || peer.PublicAddr.Load() == nil {
 		t.mu.RUnlock()
 		return
@@ -150,7 +151,8 @@ func (t *Tunnel) handleHolePunchReceived(ctx context.Context, payload []byte) {
 	peerIP := net.IP(append([]byte(nil), payload[:4]...))
 
 	t.mu.RLock()
-	peer, ok := t.peers[netkey.IPKey(peerIP)]
+	peers := t.peerSnapshot.Load().(map[[16]byte]*Peer)
+	peer, ok := peers[netkey.IPKey(peerIP)]
 	if !ok || peer.PublicAddr.Load() == nil {
 		t.mu.RUnlock()
 		return
@@ -174,7 +176,8 @@ func (t *Tunnel) handleHolePunchReceived(ctx context.Context, payload []byte) {
 // hasDirectPeerTraffic checks if we've received direct P2P traffic from a peer.
 func (t *Tunnel) hasDirectPeerTraffic(peerIP net.IP) bool {
 	t.mu.RLock()
-	peer, ok := t.peers[netkey.IPKey(peerIP)]
+	peers := t.peerSnapshot.Load().(map[[16]byte]*Peer)
+	peer, ok := peers[netkey.IPKey(peerIP)]
 	t.mu.RUnlock()
 	if !ok {
 		return false
@@ -204,7 +207,8 @@ func (t *Tunnel) holePunchRetryLoop(ctx context.Context) {
 func (t *Tunnel) retryFailedHolePunches(ctx context.Context) {
 	t.mu.RLock()
 	var retryPeers []net.IP
-	for _, peer := range t.peers {
+	peers := t.peerSnapshot.Load().(map[[16]byte]*Peer)
+	for _, peer := range peers {
 		if peer.PublicAddr.Load() != nil && !peer.DirectReach.Load() {
 			retryPeers = append(retryPeers, peer.VirtualIP)
 		}
