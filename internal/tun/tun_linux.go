@@ -86,20 +86,6 @@ func (d *Device) ReadBatch(bufs [][]byte, sizes []int) (int, error) {
 	return n, nil
 }
 
-// WriteBatch writes multiple packets to the TUN device in a single syscall.
-func (d *Device) WriteBatch(bufs [][]byte) (int, error) {
-	if d.offset > 0 {
-		padded := make([][]byte, len(bufs))
-		for i, b := range bufs {
-			p := make([]byte, d.offset+len(b))
-			copy(p[d.offset:], b)
-			padded[i] = p
-		}
-		return d.tunDev.Write(padded, d.offset)
-	}
-	return d.tunDev.Write(bufs, 0)
-}
-
 // Read reads a single packet from the TUN device.
 func (d *Device) Read(buf []byte) (int, error) {
 	bufs := [1][]byte{buf}

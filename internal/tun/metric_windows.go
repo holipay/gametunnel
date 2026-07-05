@@ -59,7 +59,7 @@ type ipAdapterAddresses struct {
 //
 // netsh interface ip set interface 对 wintun 虚拟适配器无效，
 // 必须用 PowerShell Set-NetIPInterface 才能真正生效。
-func setMetricAPI(ifIndex uint32, luid uint64) error {
+func setMetricAPI(ifIndex uint32) error {
 	name, err := findAdapterNameByIndex(ifIndex)
 	if err != nil {
 		return fmt.Errorf("find adapter name: %w", err)
@@ -185,7 +185,7 @@ func disableAllPhysicalAutoMetric(tunName string) {
 		nicName := windows.UTF16PtrToString(p.FriendlyName)
 		// 跳过 TUN、未启用、回环 (IF_TYPE_SOFTWARE_LOOPBACK = 24)
 		if nicName != tunName && p.OperStatus == 1 && p.IfType != 24 {
-			if err := setMetricAPI(p.IfIndex, 0); err != nil {
+			if err := setMetricAPI(p.IfIndex); err != nil {
 				log.Printf("[tun] disable AutoMetric %q: %v", nicName, err)
 			} else {
 				log.Printf("[tun] disabled AutoMetric: %s (idx=%d)", nicName, p.IfIndex)
