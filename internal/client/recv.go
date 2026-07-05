@@ -164,11 +164,9 @@ func (t *Tunnel) handleServerData(ctx context.Context, conn *net.UDPConn, msg *p
 
 
 // receiveFromTUN reads IP packets from the TUN device and dispatches them
-// to tunWorker goroutines for routing. The reader only does lightweight
-// validation (IPv4 header check) and copies the packet into a new buffer
-// before dispatching — the TUN read buffer is reused immediately.
+// to tunWorker goroutines for routing. Uses ReadBatch on Linux for reduced
+// syscall overhead; falls back to single-packet Read on other platforms.
 func (t *Tunnel) receiveFromTUN(ctx context.Context) {
-	buf := make([]byte, readBufSize)
 	consecutiveErrors := 0
 
 	for {
@@ -182,6 +180,86 @@ func (t *Tunnel) receiveFromTUN(ctx context.Context) {
 		if dev == nil {
 			return
 		}
+
+		batchSize := dev.BatchSize()
+		if batchSize <= 1 {
+			// Fallback: single-packet read
+			t.receiveFromTUNSingle(ctx, dev, &consecutiveErrors)
+			return
+		}
+
+		// Batch read path
+		bufs := make([][]byte, batchSize)
+		sizes := make([]int, batchSize)
+		for i := range bufs {
+			bufs[i] = pool.PktBufGet(readBufSize)
+		}
+
+		n, err := dev.ReadBatch(bufs, sizes)
+		if err != nil {
+			select {
+			case <-ctx.Done():
+				return
+			default:
+			}
+			consecutiveErrors++
+			if consecutiveErrors > maxConsecutiveErrors {
+				log.Printf(i18n.T().LogTUNConsecFail, consecutiveErrors, err)
+				return
+			}
+			time.Sleep(errorBackoff)
+			continue
+		}
+		consecutiveErrors = 0
+
+		for i := 0; i < n; i++ {
+			pkt := bufs[i][:sizes[i]]
+			if sizes[i] < 20 || pkt[0]>>4 != 4 {
+				pool.PktBufPut(pkt)
+				continue
+			}
+			ihl := int(pkt[0]&0x0F) * 4
+			if ihl < 20 || sizes[i] < ihl {
+				pool.PktBufPut(pkt)
+				continue
+			}
+			totalLen := int(binary.BigEndian.Uint16(pkt[2:4]))
+			if totalLen < ihl || totalLen > sizes[i] {
+				pool.PktBufPut(pkt)
+				continue
+			}
+
+			var srcIP, dstIP [4]byte
+			copy(srcIP[:], pkt[12:16])
+			copy(dstIP[:], pkt[16:20])
+
+			// Trim to actual IP length
+			pkt = pkt[:totalLen]
+
+			select {
+			case t.tunCh <- tunJob{data: pkt, srcIP: srcIP, dstIP: dstIP}:
+			default:
+				pool.PktBufPut(pkt)
+				n := t.tunDropped.Add(1)
+				if n&(n-1) == 0 {
+					log.Printf("[tunnel] TUN channel full, %d packets dropped total", n)
+				}
+			}
+		}
+	}
+}
+
+// receiveFromTUNSingle is the fallback single-packet read path.
+func (t *Tunnel) receiveFromTUNSingle(ctx context.Context, dev TunDevice, consecutiveErrors *int) {
+	buf := make([]byte, readBufSize)
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+
 		n, err := dev.Read(buf)
 		if err != nil {
 			select {
@@ -190,9 +268,9 @@ func (t *Tunnel) receiveFromTUN(ctx context.Context) {
 			default:
 			}
 
-			consecutiveErrors++
-			if consecutiveErrors > maxConsecutiveErrors {
-				log.Printf(i18n.T().LogTUNConsecFail, consecutiveErrors, err)
+			*consecutiveErrors++
+			if *consecutiveErrors > maxConsecutiveErrors {
+				log.Printf(i18n.T().LogTUNConsecFail, *consecutiveErrors, err)
 				return
 			}
 
@@ -200,13 +278,12 @@ func (t *Tunnel) receiveFromTUN(ctx context.Context) {
 			continue
 		}
 
-		consecutiveErrors = 0
+		*consecutiveErrors = 0
 
 		if n < 20 {
 			continue
 		}
 
-		// Validate IPv4 header
 		if buf[0]>>4 != 4 {
 			continue
 		}
@@ -214,31 +291,24 @@ func (t *Tunnel) receiveFromTUN(ctx context.Context) {
 		if ihl < 20 || n < ihl {
 			continue
 		}
-		// Validate IP total length matches actual read length
 		totalLen := int(binary.BigEndian.Uint16(buf[2:4]))
 		if totalLen < ihl || totalLen > n {
 			continue
 		}
 
-		// Extract src/dst IPs as [4]byte to avoid heap escape via channel send.
-		// net.IP(srcIP[:]) in the worker goroutine stays on its stack.
 		var srcIP, dstIP [4]byte
 		copy(srcIP[:], buf[12:16])
 		copy(dstIP[:], buf[16:20])
 
-		// Copy packet data — buf is reused on the next Read, but workers
-		// process packets asynchronously. Use pooled buffer to reduce
-		// GC pressure on the hot path.
 		pkt := pool.PktBufGet(n)[:n]
 		copy(pkt, buf[:n])
 
 		select {
 		case t.tunCh <- tunJob{data: pkt, srcIP: srcIP, dstIP: dstIP}:
 		default:
-			// Worker channel full — drop packet and return buffer to pool
 			pool.PktBufPut(pkt)
 			n := t.tunDropped.Add(1)
-			if n&(n-1) == 0 { // log every power of 2
+			if n&(n-1) == 0 {
 				log.Printf("[tunnel] TUN channel full, %d packets dropped total", n)
 			}
 		}

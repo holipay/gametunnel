@@ -68,6 +68,10 @@ func (d *Device) Name() string { return d.name }
 // MTU returns the configured MTU of the TUN device.
 func (d *Device) MTU() int { return d.mtu }
 
+// BatchSize returns the maximum number of packets that can be read/written
+// in a single batch operation.
+func (d *Device) BatchSize() int { return d.tunDev.BatchSize() }
+
 // ReadBatch reads up to batchSize packets from the TUN device in a single syscall.
 func (d *Device) ReadBatch(bufs [][]byte, sizes []int) (int, error) {
 	n, err := d.tunDev.Read(bufs, sizes, d.offset)

@@ -24,6 +24,16 @@ func IPKey(ip net.IP) [16]byte {
 	return k
 }
 
+// IPKey4 creates an IPKey directly from 4 raw bytes, avoiding net.IP allocation.
+// Used on hot paths where the IP is already available as a byte array.
+func IPKey4(ip [4]byte) [16]byte {
+	var k [16]byte
+	k[10] = 0xff
+	k[11] = 0xff
+	copy(k[12:16], ip[:])
+	return k
+}
+
 // RateKey is a fixed-size key for rate limiting, avoiding string
 // allocation per packet. Uses 16-byte IP to support both IPv4
 // (as v4-in-v6 mapped) and IPv6 addresses.

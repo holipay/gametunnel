@@ -72,6 +72,9 @@ func (p *Peer) tryRateLimitHolePunch(backoff time.Duration) bool {
 type TunDevice interface {
 	Read(buf []byte) (int, error)
 	Write(data []byte) (int, error)
+	ReadBatch(bufs [][]byte, sizes []int) (int, error)
+	WriteBatch(bufs [][]byte) (int, error)
+	BatchSize() int
 	Close() error
 	Name() string
 	MTU() int

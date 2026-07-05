@@ -99,14 +99,17 @@ func (r *Room) handleRelay(payload []byte, from *net.UDPAddr) {
 		return
 	}
 
-	srcIP := net.IP(payload[0:4])
-	dstIP := net.IP(payload[4:8])
+	var srcIP, dstIP [4]byte
+	copy(srcIP[:], payload[0:4])
+	copy(dstIP[:], payload[4:8])
 
 	// Determine broadcast before taking the lock — r.subnet is immutable
 	// after Room creation, so this is safe outside the critical section.
-	isBroadcast := netutil.IsRelayTarget(dstIP, r.subnet)
+	isBroadcast := netutil.IsRelayTargetRaw(dstIP, r.subnet)
 
-	r.relayLog("[relay] received relay from %s: srcIP=%s dstIP=%s len=%d", from, srcIP, dstIP, len(payload))
+	r.relayLog("[relay] received relay from %s: src=%d.%d.%d.%d dst=%d.%d.%d.%d len=%d",
+		from, srcIP[0], srcIP[1], srcIP[2], srcIP[3],
+		dstIP[0], dstIP[1], dstIP[2], dstIP[3], len(payload))
 
 	r.mu.RLock()
 	sender := r.addrMap[netkey.AddrToRateKey(from)]
@@ -114,7 +117,7 @@ func (r *Room) handleRelay(payload []byte, from *net.UDPAddr) {
 		// addrMap miss — NAT rebinding or source port change.
 		// Try to find client by VIP and validate session token.
 		r.mu.RUnlock()
-		sender = r.tryMigrateAddrMap(from, srcIP, payload)
+		sender = r.tryMigrateAddrMap(from, srcIP[:], payload)
 		if sender == nil {
 			r.relayLog("[relay] sender not found in addrMap")
 			return
@@ -124,8 +127,10 @@ func (r *Room) handleRelay(payload []byte, from *net.UDPAddr) {
 
 	r.relayLog("[relay] sender=%s vip=%s", sender.Username, sender.VirtualIP)
 
-	if !srcIP.Equal(sender.VirtualIP) {
-		r.relayLog("[relay] srcIP mismatch: payload=%s != sender=%s", srcIP, sender.VirtualIP)
+	// Compare raw 4-byte VIP instead of net.IP.Equal to avoid heap allocation
+	senderVIP := sender.VirtualIP.To4()
+	if senderVIP == nil || [4]byte(senderVIP) != srcIP {
+		r.relayLog("[relay] srcIP mismatch")
 		r.mu.RUnlock()
 		return
 	}
@@ -155,7 +160,7 @@ func (r *Room) handleRelay(payload []byte, from *net.UDPAddr) {
 		}
 	}
 
-	r.relayLog("[relay] isBroadcast=%v subnet=%s", isBroadcast, r.subnet)
+	r.relayLog("[relay] isBroadcast=%v", isBroadcast)
 
 	var stackTargets [maxInlineTargets]*net.UDPAddr
 	targets := stackTargets[:0]
@@ -167,7 +172,7 @@ func (r *Room) handleRelay(payload []byte, from *net.UDPAddr) {
 			}
 		}
 	} else {
-		if dst, ok := r.clients[netkey.IPKey(dstIP)]; ok && dst.PublicAddr != nil {
+		if dst, ok := r.clients[netkey.IPKey4(dstIP)]; ok && dst.PublicAddr != nil {
 			targets = append(targets, dst.PublicAddr)
 		}
 	}
@@ -216,11 +221,12 @@ func (r *Room) handleHolePunch(payload []byte, from *net.UDPAddr) {
 	if len(payload) < 4 {
 		return
 	}
-	dstIP := net.IP(payload[:4])
+	var dstIP [4]byte
+	copy(dstIP[:], payload[:4])
 
 	r.mu.RLock()
 	src, ok1 := r.addrMap[netkey.AddrToRateKey(from)]
-	dst, ok2 := r.clients[netkey.IPKey(dstIP)]
+	dst, ok2 := r.clients[netkey.IPKey4(dstIP)]
 	var dstAddr *net.UDPAddr
 	if ok2 {
 		dstAddr = dst.PublicAddr

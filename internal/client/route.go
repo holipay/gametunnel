@@ -8,6 +8,7 @@ import (
 	"github.com/holipay/gametunnel/internal/crypto"
 	"github.com/holipay/gametunnel/internal/netkey"
 	"github.com/holipay/gametunnel/internal/netutil"
+	"github.com/holipay/gametunnel/internal/pool"
 	"github.com/holipay/gametunnel/internal/protocol"
 )
 
@@ -44,7 +45,7 @@ func buildDataPacket(srcIP, dstIP net.IP, data []byte, flags byte, token [16]byt
 		tokenLen = 16
 	}
 	size := protocol.HeaderLen + protocol.DataHeaderLen + tokenLen + len(data) + protocol.ChecksumLen
-	dst := make([]byte, size)
+	dst := pool.PktBufGet(size)[:size]
 	off := buildDataHeader(dst, srcIP, dstIP, flags, token)
 	copy(dst[off:], data)
 	off += len(data)
@@ -61,7 +62,7 @@ func buildEncryptedDataPacket(srcIP, dstIP net.IP, pkt []byte, cipher *crypto.Ci
 		tokenLen = 16
 	}
 	size := protocol.HeaderLen + protocol.DataHeaderLen + tokenLen + crypto.Overhead + len(pkt)
-	dst := make([]byte, size)
+	dst := pool.PktBufGet(size)[:size]
 	off := buildDataHeader(dst, srcIP, dstIP, flags, token)
 	dst = dst[:off]
 	dst = cipher.EncryptTo(dst, pkt)
