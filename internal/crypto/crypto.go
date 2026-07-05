@@ -199,18 +199,23 @@ func (c *Cipher) checkReplayWindow(ctr uint64) bool {
 		if ctr > highest {
 			// New highest counter — shift bitmap and set bit 0
 			shift := ctr - highest
-			var newBitmap uint64
-			if shift < replayWindowSize {
-				newBitmap = (bitmap << shift) | 1
-			} else {
-				newBitmap = 1
+			if !c.replayCounter.CompareAndSwap(highest, ctr) {
+				continue // CAS failed — retry
 			}
-			if c.replayCounter.CompareAndSwap(highest, ctr) {
-				c.replayBitmap.Store(newBitmap)
-				return true
+			// CAS succeeded — now update bitmap with CAS loop to preserve concurrent writes
+			for {
+				curBitmap := c.replayBitmap.Load()
+				var newBitmap uint64
+				if shift < replayWindowSize {
+					newBitmap = (curBitmap << shift) | 1
+				} else {
+					newBitmap = 1
+				}
+				if c.replayBitmap.CompareAndSwap(curBitmap, newBitmap) {
+					break
+				}
 			}
-			// CAS failed — retry
-			continue
+			return true
 		}
 
 		diff := highest - ctr
