@@ -58,10 +58,8 @@ func ipToSockaddrInet(ip net.IP) windows.RawSockaddrInet {
 // addRoute adds a route to the system routing table via CreateIpForwardEntry2.
 func addRoute(luid uint64, dest net.IP, mask net.IPMask, nextHop net.IP, metric uint32) error {
 	var row windows.MibIpForwardRow2
-	r1, _, _ := procInitializeIpForwardEntry.Call(uintptr(unsafe.Pointer(&row)))
-	if r1 != 0 {
-		return fmt.Errorf("InitializeIpForwardEntry: ret=%d", r1)
-	}
+	// Skip InitializeIpForwardEntry — it fails on some Windows versions (ret=0xFFFFFFFF).
+	// Zero-value struct is sufficient; CreateIpForwardEntry2 fills in defaults.
 
 	prefixLen, _ := mask.Size()
 
@@ -74,7 +72,7 @@ func addRoute(luid uint64, dest net.IP, mask net.IPMask, nextHop net.IP, metric 
 	row.Metric = metric
 	row.Protocol = windows.MIB_IPPROTO_NT_STATIC
 
-	r1, _, _ = procCreateIpForwardEntry2.Call(uintptr(unsafe.Pointer(&row)))
+	r1, _, _ := procCreateIpForwardEntry2.Call(uintptr(unsafe.Pointer(&row)))
 	if r1 != 0 {
 		return fmt.Errorf("CreateIpForwardEntry2(%s/%d via %s metric=%d): ret=%d",
 			dest, prefixLen, nextHop, metric, r1)
@@ -157,15 +155,18 @@ func deleteIPAddress(luid uint64, ifIndex uint32, ip net.IP) error {
 }
 
 // setInterfaceMetric sets the metric and disables AutomaticMetric on an interface.
+// Uses GetIpInterfaceEntry + SetIpInterfaceEntry with full struct initialization.
 func setInterfaceMetric(luid uint64, family uint16, metric uint32) error {
 	var row windows.MibIpInterfaceRow
+	// Initialize all required fields before GetIpInterfaceEntry
 	row.Family = family
 	row.InterfaceLuid = luid
+	row.SitePrefixLength = 0 // Required by SetIpInterfaceEntry
 
 	// Read existing row first (SetIpInterfaceEntry requires this on some Windows versions)
 	r1, _, _ := procGetIpInterfaceEntry.Call(uintptr(unsafe.Pointer(&row)))
 	if r1 != 0 {
-		return fmt.Errorf("GetIpInterfaceEntry(luid=%d): ret=%d", luid, r1)
+		return fmt.Errorf("GetIpInterfaceEntry(luid=%d family=%d): ret=%d", luid, family, r1)
 	}
 
 	row.UseAutomaticMetric = 0
