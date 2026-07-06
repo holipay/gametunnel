@@ -132,9 +132,15 @@ func runWindows(cfg *client.Config, tunFactory func(client.TunConfig) (client.Tu
 	}()))
 	defer func() { k32.NewProc("LocalFree").Call(uintptr(unsafe.Pointer(m))) }()
 
+	log.Printf("[ui] message loop started")
 	for {
 		ret, _, _ := pGetMsg.Call(uintptr(unsafe.Pointer(m)), 0, 0, 0)
-		if ret == 0 || ret == ^uintptr(0) {
+		if ret == 0 {
+			log.Printf("[ui] message loop exiting: WM_QUIT received")
+			break
+		}
+		if ret == ^uintptr(0) {
+			log.Printf("[ui] message loop exiting: GetMessage error")
 			break
 		}
 		pTranslate.Call(uintptr(unsafe.Pointer(m)))
@@ -283,9 +289,9 @@ func showMenu() {
 
 	add := func(text string, id uintptr, enabled bool) {
 		p, _ := syscall.UTF16PtrFromString(text)
-		f := uintptr(0)
+		f := uintptr(0x0000) // MF_STRING
 		if !enabled {
-			f = 1
+			f = 0x0001 // MF_GRAYED
 		}
 		pAppendMenu.Call(hMenu, f, id, uintptr(unsafe.Pointer(p)))
 	}
@@ -301,16 +307,26 @@ func showMenu() {
 	sep()
 	add("Exit", 5, true)
 
-	var pt [8]byte
-	pGetCursorPos.Call(uintptr(unsafe.Pointer(&pt[0])))
+	var pt struct{ X, Y int32 }
+	pGetCursorPos.Call(uintptr(unsafe.Pointer(&pt)))
 	pSetForeground.Call(msgHwnd)
-	cmd, _, _ := pTrackMenu.Call(hMenu, 0x0008,
-		uintptr(pt[0])|uintptr(pt[1])<<8|uintptr(pt[2])<<16|uintptr(pt[3])<<24,
-		uintptr(pt[4])|uintptr(pt[5])<<8|uintptr(pt[6])<<16|uintptr(pt[7])<<24,
+
+	// TPM_RETURNCMD (0x0100) | TPM_NONOTIFY (0x0080)
+	// Returns the selected command ID instead of sending WM_COMMAND
+	cmd, _, _ := pTrackMenu.Call(hMenu, 0x0180,
+		uintptr(pt.X), uintptr(pt.Y),
 		0, msgHwnd, 0)
-	pSendMsg.Call(msgHwnd, 0x0122, 0, 0)
+	pSendMsg.Call(msgHwnd, 0x0122, 0, 0) // dismiss menu highlight
+
 	if cmd != 0 {
-		pSendMsg.Call(msgHwnd, 0x0011, cmd, 0)
+		// Process the command directly
+		switch cmd {
+		case 1: toggleWin()
+		case 2: app.Connect(app.Cfg)
+		case 3: app.Disconnect()
+		case 4: openSettings()
+		case 5: pPostQuit.Call(0)
+		}
 	}
 	pDestroyMenu.Call(hMenu)
 }
