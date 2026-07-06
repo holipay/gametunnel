@@ -45,8 +45,31 @@ var (
 	pDestroyMenu   = u32.NewProc("DestroyMenu")
 	pGetCursorPos  = u32.NewProc("GetCursorPos")
 	pSetForeground = u32.NewProc("SetForegroundWindow")
-	pSendMsg       = u32.NewProc("SendMessageW")
 )
+
+// NOTIFYICONDATAW — matches the Windows API layout exactly.
+// Using Go struct avoids manual byte-offset errors on 64-bit.
+type nidW struct {
+	cbSize           uint32
+	_                [4]byte // padding: cbSize(4) → hWnd(8-byte align)
+	hWnd             uintptr
+	uID              uint32
+	_                [4]byte // padding: uID(4) → uFlags(8-byte align)
+	uFlags           uint32
+	uCallbackMessage uint32
+	_                [4]byte // padding to 8-byte align
+	hIcon            uintptr
+	szTip            [128]uint16
+	dwState          uint32
+	dwStateMask      uint32
+	szInfo           [256]uint16
+	uVersion         uint32
+	szInfoTitle      [64]uint16
+	dwInfoFlags      uint32
+	_                [4]byte // padding
+	guidItem         [16]byte
+	hBalloonIcon     uintptr
+}
 
 var (
 	app     *client.App
@@ -77,14 +100,14 @@ func runWindows(cfg *client.Config, tunFactory func(client.TunConfig) (client.Tu
 	app = client.NewApp(cfg)
 	app.SetTUNFactory(tunFactory)
 
-	// Message-only window for tray
+	// Message-only window for tray events
 	msgHwnd = createMsgWindow()
 
-	// Tray icon
-	hIcon, _, _ := pLoadIcon.Call(0, 32512)
-	addTray(hIcon, "GameTunnel - 未连接")
+	// Create tray icon
+	hIcon, _, _ := pLoadIcon.Call(0, 32512) // IDI_APPLICATION
+	addTray(hIcon, "GameTunnel")
 
-	// First-run settings dialog (uses walk)
+	// Settings dialog on first run
 	if cfg.ServerAddr == "" {
 		tmp := tmpForm()
 		newCfg := ui.ShowSettingsDialog(tmp, cfg)
@@ -114,11 +137,10 @@ func runWindows(cfg *client.Config, tunFactory func(client.TunConfig) (client.Tu
 
 	app.Connect(cfg)
 	log.Printf("GameTunnel Client %s (commit: %s, built: %s)", Version, Commit, BuildTime)
-
 	hideConsole()
 
 	// Message loop
-	type msgT struct {
+	type winMSG struct {
 		HWnd    uintptr
 		Message uint32
 		WParam  uintptr
@@ -126,21 +148,16 @@ func runWindows(cfg *client.Config, tunFactory func(client.TunConfig) (client.Tu
 		Time    uint32
 		Pt      struct{ X, Y int32 }
 	}
-	m := (*msgT)(unsafe.Pointer(func() uintptr {
-		r, _, _ := k32.NewProc("LocalAlloc").Call(0x0040, unsafe.Sizeof(msgT{}))
-		return r
-	}()))
-	defer func() { k32.NewProc("LocalFree").Call(uintptr(unsafe.Pointer(m))) }()
-
+	m := new(winMSG)
 	log.Printf("[ui] message loop started")
 	for {
 		ret, _, _ := pGetMsg.Call(uintptr(unsafe.Pointer(m)), 0, 0, 0)
 		if ret == 0 {
-			log.Printf("[ui] message loop exiting: WM_QUIT received")
+			log.Printf("[ui] WM_QUIT received, exiting")
 			break
 		}
 		if ret == ^uintptr(0) {
-			log.Printf("[ui] message loop exiting: GetMessage error")
+			log.Printf("[ui] GetMessage error, exiting")
 			break
 		}
 		pTranslate.Call(uintptr(unsafe.Pointer(m)))
@@ -160,13 +177,35 @@ func runWindows(cfg *client.Config, tunFactory func(client.TunConfig) (client.Tu
 func createMsgWindow() uintptr {
 	cn, _ := syscall.UTF16PtrFromString("GameTunnelTray")
 	hInst, _, _ := pGetModHandle.Call(0)
-	wp := syscall.NewCallback(trayProc)
+
+	wp := syscall.NewCallback(func(hwnd uintptr, msg uint32, wp, lp uintptr) uintptr {
+		switch msg {
+		case trayCBMsg:
+			if lp == 0x0204 { // WM_RBUTTONUP
+				showMenu()
+			} else if lp == 0x0205 { // WM_LBUTTONDBLCLK
+				toggleWin()
+			}
+			return 0
+		case 0x0011: // WM_COMMAND
+			switch wp & 0xFFFF {
+			case 1: toggleWin()
+			case 2: app.Connect(app.Cfg)
+			case 3: app.Disconnect()
+			case 4: openSettings()
+			case 5: pPostQuit.Call(0)
+			}
+			return 0
+		}
+		r, _, _ := pDefWndProc.Call(hwnd, uintptr(msg), wp, lp)
+		return r
+	})
 
 	var wc struct {
-		Size, Style, WndProc uintptr
-		ClsExtra, WndExtra int32
-		Instance, Icon, Cursor, Brush uintptr
-		MenuName, ClassName, IconSm uintptr
+		Size, Style, WndProc             uintptr
+		ClsExtra, WndExtra               int32
+		Instance, Icon, Cursor, Brush     uintptr
+		MenuName, ClassName, IconSm       uintptr
 	}
 	wc.Size = unsafe.Sizeof(wc)
 	wc.WndProc = wp
@@ -178,33 +217,8 @@ func createMsgWindow() uintptr {
 	h, _, _ := pCreateWindow.Call(
 		0, uintptr(unsafe.Pointer(cn)), uintptr(unsafe.Pointer(t)),
 		0, 0, 0, 0, 0, 3, 0, 0, hInst)
-	pShowWin.Call(h, 0)
+	pShowWin.Call(h, 0) // SW_HIDE
 	return h
-}
-
-func trayProc(hwnd uintptr, msg uint32, wp, lp uintptr) uintptr {
-	switch msg {
-	case trayCBMsg:
-		if lp == 0x0204 {
-			showMenu()
-			return 0
-		}
-		if lp == 0x0205 {
-			toggleWin()
-			return 0
-		}
-	case 0x0011:
-		switch wp & 0xFFFF {
-		case 1: toggleWin()
-		case 2: app.Connect(app.Cfg)
-		case 3: app.Disconnect()
-		case 4: openSettings()
-		case 5: pPostQuit.Call(0)
-		}
-		return 0
-	}
-	r, _, _ := pDefWndProc.Call(hwnd, uintptr(msg), wp, lp)
-	return r
 }
 
 // --- Walk main window (on-demand) ---
@@ -254,33 +268,42 @@ func openSettings() {
 	}
 }
 
-// --- Raw Win32 tray icon ---
+// --- Tray icon (Win32 Shell_NotifyIcon) ---
 
 func addTray(hIcon uintptr, tip string) {
-	nid := make([]byte, 264)
-	*(*uint32)(unsafe.Pointer(&nid[0])) = 264
-	*(*uintptr)(unsafe.Pointer(&nid[4])) = msgHwnd
-	*(*uint32)(unsafe.Pointer(&nid[12])) = 1
-	*(*uint32)(unsafe.Pointer(&nid[16])) = 0x07
-	*(*uint32)(unsafe.Pointer(&nid[20])) = trayCBMsg
-	*(*uintptr)(unsafe.Pointer(&nid[24])) = hIcon
-	p, _ := syscall.UTF16PtrFromString(tip)
-	for i := 0; i < 128; i++ {
-		ch := *(*uint16)(unsafe.Pointer(uintptr(unsafe.Pointer(p)) + uintptr(i*2)))
-		if ch == 0 {
-			break
-		}
-		*(*uint16)(unsafe.Pointer(&nid[28+i*2])) = ch
-	}
-	pShellNotify.Call(0, uintptr(unsafe.Pointer(&nid[0])))
+	var nid nidW
+	nid.cbSize = uint32(unsafe.Sizeof(nid))
+	nid.hWnd = msgHwnd
+	nid.uID = 1
+	nid.uFlags = 0x01 | 0x02 | 0x04 // NIF_MESSAGE | NIF_ICON | NIF_TIP
+	nid.uCallbackMessage = trayCBMsg
+	nid.hIcon = hIcon
+	tipPtr, _ := syscall.UTF16PtrFromString(tip)
+	copy(nid.szTip[:], (*[128]uint16)(unsafe.Pointer(tipPtr))[:])
+
+	log.Printf("[ui] adding tray icon, nid size=%d", unsafe.Sizeof(nid))
+	ret, _, err := pShellNotify.Call(0, uintptr(unsafe.Pointer(&nid))) // NIM_ADD
+	log.Printf("[ui] Shell_NotifyIconW NIM_ADD: ret=%d err=%v", ret, err)
 }
 
 func removeTray() {
-	nid := make([]byte, 264)
-	*(*uint32)(unsafe.Pointer(&nid[0])) = 264
-	*(*uintptr)(unsafe.Pointer(&nid[4])) = msgHwnd
-	*(*uint32)(unsafe.Pointer(&nid[12])) = 1
-	pShellNotify.Call(2, uintptr(unsafe.Pointer(&nid[0])))
+	var nid nidW
+	nid.cbSize = uint32(unsafe.Sizeof(nid))
+	nid.hWnd = msgHwnd
+	nid.uID = 1
+	pShellNotify.Call(2, uintptr(unsafe.Pointer(&nid))) // NIM_DELETE
+}
+
+func updateTray(hIcon uintptr, tip string) {
+	var nid nidW
+	nid.cbSize = uint32(unsafe.Sizeof(nid))
+	nid.hWnd = msgHwnd
+	nid.uID = 1
+	nid.uFlags = 0x02 | 0x04 // NIF_ICON | NIF_TIP
+	nid.hIcon = hIcon
+	tipPtr, _ := syscall.UTF16PtrFromString(tip)
+	copy(nid.szTip[:], (*[128]uint16)(unsafe.Pointer(tipPtr))[:])
+	pShellNotify.Call(1, uintptr(unsafe.Pointer(&nid))) // NIM_MODIFY
 }
 
 func showMenu() {
@@ -289,7 +312,7 @@ func showMenu() {
 
 	add := func(text string, id uintptr, enabled bool) {
 		p, _ := syscall.UTF16PtrFromString(text)
-		f := uintptr(0x0000) // MF_STRING
+		f := uintptr(0x0000)
 		if !enabled {
 			f = 0x0001 // MF_GRAYED
 		}
@@ -312,14 +335,12 @@ func showMenu() {
 	pSetForeground.Call(msgHwnd)
 
 	// TPM_RETURNCMD (0x0100) | TPM_NONOTIFY (0x0080)
-	// Returns the selected command ID instead of sending WM_COMMAND
 	cmd, _, _ := pTrackMenu.Call(hMenu, 0x0180,
-		uintptr(pt.X), uintptr(pt.Y),
-		0, msgHwnd, 0)
-	pSendMsg.Call(msgHwnd, 0x0122, 0, 0) // dismiss menu highlight
+		uintptr(pt.X), uintptr(pt.Y), 0, msgHwnd, 0)
+	pSendMsg := u32.NewProc("SendMessageW")
+	pSendMsg.Call(msgHwnd, 0x0122, 0, 0)
 
 	if cmd != 0 {
-		// Process the command directly
 		switch cmd {
 		case 1: toggleWin()
 		case 2: app.Connect(app.Cfg)
