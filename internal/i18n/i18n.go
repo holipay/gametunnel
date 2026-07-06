@@ -75,22 +75,9 @@ type Strings struct {
 	DlgStatusConn  string // "已连接 · %s · %d人在线"
 	DlgFirstRun    string // "首次设置 - GameTunnel"
 	DlgConnect     string // "连接"
-	DlgDisconnect  string // "断开"
-	DlgSettings    string // "设置..."
 	DlgShowPass    string // "显示密码"
 	DlgInvalidAddr string // "服务器地址格式不正确，应为 IP:端口"
 	DlgNameEmpty   string // "玩家名称不能为空"
-
-	// ── Client GUI ──
-	UIStatus        string // "连接状态"
-	UIStatusTitle   string // "状态"
-	UIVirtualIP     string // "虚拟 IP"
-	UIRoom          string // "房间"
-	UIOnlinePlayers string // "在线玩家"
-	UIUptime        string // "运行时间"
-	UIQuality       string // "质量"
-	UIQualityFmt    string // "延迟 %.0fms · 丢包 %.0f%%"
-	UIConnecting    string // "连接中..."
 
 	// ── Client Web UI ──
 	WebUITitle        string // "GameTunnel"
@@ -238,20 +225,8 @@ var zhStrings = &Strings{
 	DlgStatusConn: "已连接 · %s · %d人在线",
 	DlgFirstRun:   "首次设置 - GameTunnel",
 	DlgConnect:    "连接",
-	DlgDisconnect: "断开",
-	DlgSettings:   "设置...",
 	DlgShowPass:   "显示密码",
 	DlgInvalidAddr: "服务器地址格式不正确，应为 IP:端口",
-
-	UIStatus:        "连接状态",
-	UIStatusTitle:   "状态",
-	UIVirtualIP:     "虚拟 IP",
-	UIRoom:          "房间",
-	UIOnlinePlayers: "在线玩家",
-	UIUptime:        "运行时间",
-	UIQuality:       "质量",
-	UIQualityFmt:    "延迟 %.0fms · 丢包 %.0f%%",
-	UIConnecting:    "连接中...",
 
 	WebUITitle:        "GameTunnel",
 	WebUISettings:     "设置",
@@ -395,20 +370,8 @@ var enStrings = &Strings{
 	DlgStatusConn: "Connected · %s · %d online",
 	DlgFirstRun:   "First-Time Setup - GameTunnel",
 	DlgConnect:    "Connect",
-	DlgDisconnect: "Disconnect",
-	DlgSettings:   "Settings...",
 	DlgShowPass:   "Show password",
 	DlgInvalidAddr: "Invalid server address, should be IP:port",
-
-	UIStatus:        "Connection Status",
-	UIStatusTitle:   "Status",
-	UIVirtualIP:     "Virtual IP",
-	UIRoom:          "Room",
-	UIOnlinePlayers: "Online Players",
-	UIUptime:        "Uptime",
-	UIQuality:       "Quality",
-	UIQualityFmt:    "Latency %.0fms · Loss %.0f%%",
-	UIConnecting:    "Connecting...",
 
 	WebUITitle:        "GameTunnel",
 	WebUISettings:     "Settings",
