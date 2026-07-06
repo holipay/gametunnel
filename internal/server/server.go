@@ -68,6 +68,10 @@ type Server struct {
 	// Room password (propagated to auto-created rooms in multi-room mode)
 	roomPass string
 
+	// Cached encrypted flag (true if any room uses password-based AEAD).
+	// Computed once in New(); avoids re-evaluating per packet in handlePacket.
+	cachedEncrypted bool
+
 	// Bandwidth limiting
 	bwLimiter    *BandwidthLimiter // per-client outbound bandwidth limiter
 
@@ -252,6 +256,15 @@ func New(cfg Config) (*Server, error) {
 	} else {
 		// Multi-room mode: store the base subnet for allocateSubnet()
 		s.baseSubnet = cfg.Subnet
+	}
+
+	// Cache the encrypted flag — true if any room uses password-based AEAD.
+	// In single-room mode, check the default room; in multi-room mode, all
+	// rooms share the server password.
+	if s.defaultRoom != nil && s.defaultRoom.roomPass != "" {
+		s.cachedEncrypted = true
+	} else if s.multiRoom && s.roomPass != "" {
+		s.cachedEncrypted = true
 	}
 
 	// Load persisted state (if any)
@@ -445,15 +458,8 @@ func (s *Server) worker(ctx context.Context) {
 // ── Packet Dispatch ────────────────────────────────────────────
 
 func (s *Server) handlePacket(data []byte, from *net.UDPAddr) {
-	// Determine if the packet is likely encrypted (AEAD provides integrity,
-	// so CRC32 is skipped). In single-room mode, check the default room's
-	// password. In multi-room mode, all rooms share the server password.
-	encrypted := false
-	if s.defaultRoom != nil && s.defaultRoom.roomPass != "" {
-		encrypted = true
-	} else if s.multiRoom && s.roomPass != "" {
-		encrypted = true
-	}
+	// Use the cached encrypted flag (computed once in New()).
+	encrypted := s.cachedEncrypted
 
 	// Decode: use DecodeLenient for encrypted rooms to handle both
 	// CRC32-wrapped (from EncodeChecked clients) and bare (from Encode
