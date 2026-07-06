@@ -45,16 +45,16 @@ func runWindows(cfg *client.Config, tunFactory func(client.TunConfig) (client.Tu
 	app.SetTUNFactory(tunFactory)
 
 	// Create a hidden owner window (needed for tray and dialog)
+	// Position off-screen instead of hiding — Windows destroys hidden
+	// top-level windows, which kills the message loop and tray icon.
 	owner, err := walk.NewMainWindow()
 	if err != nil {
 		log.Fatalf("create owner window: %v", err)
 	}
 	owner.SetTitle("GameTunnel")
-	owner.SetSize(walk.Size{Width: 1, Height: 1})
-	owner.SetVisible(false)
+	owner.SetBounds(walk.Rectangle{X: -32000, Y: -32000, Width: 1, Height: 1})
 
-	// Prevent owner window from closing — the app runs via tray icon.
-	// Only walk.App().Exit() (from tray quit) should end the message loop.
+	// Prevent owner from being closed by the user — only tray exit should quit
 	owner.Closing().Attach(func(canceled *bool, reason walk.CloseReason) {
 		*canceled = true
 	})
