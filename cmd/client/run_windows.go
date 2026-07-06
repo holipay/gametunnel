@@ -8,8 +8,11 @@ import (
 	"net"
 	"net/http"
 	_ "net/http/pprof"
+	"syscall"
+	"unsafe"
 
 	"github.com/lxn/walk"
+	"github.com/lxn/win"
 
 	"github.com/holipay/gametunnel/internal/auth"
 	"github.com/holipay/gametunnel/internal/client"
@@ -17,8 +20,6 @@ import (
 	"github.com/holipay/gametunnel/internal/logfile"
 )
 
-// runWindows is the Windows GUI entry point. It starts the system tray,
-// main window, and manages the app lifecycle.
 func runWindows(cfg *client.Config, tunFactory func(client.TunConfig) (client.TunDevice, error)) {
 	logFile := logfile.Setup(cfg.LogFile)
 	defer func() {
@@ -33,20 +34,16 @@ func runWindows(cfg *client.Config, tunFactory func(client.TunConfig) (client.Tu
 	}
 	defer cleanup()
 
-	// Password strength warning
 	if _, warnings := auth.CheckPasswordStrength(cfg.RoomPassword); len(warnings) > 0 {
 		for _, w := range warnings {
 			log.Printf("[auth] %s", w)
 		}
 	}
 
-	// Create the app
 	app := client.NewApp(cfg)
 	app.SetTUNFactory(tunFactory)
 
-	// Create a hidden owner window (needed for tray and dialog)
-	// Position off-screen instead of hiding — Windows destroys hidden
-	// top-level windows, which kills the message loop and tray icon.
+	// Create owner window
 	owner, err := walk.NewMainWindow()
 	if err != nil {
 		log.Fatalf("create owner window: %v", err)
@@ -54,12 +51,7 @@ func runWindows(cfg *client.Config, tunFactory func(client.TunConfig) (client.Tu
 	owner.SetTitle("GameTunnel")
 	owner.SetBounds(walk.Rectangle{X: -32000, Y: -32000, Width: 1, Height: 1})
 
-	// Prevent owner from being closed by the user — only tray exit should quit
-	owner.Closing().Attach(func(canceled *bool, reason walk.CloseReason) {
-		*canceled = true
-	})
-
-	// Show settings dialog on first run (no server configured)
+	// Show settings dialog on first run
 	if cfg.ServerAddr == "" {
 		newCfg := ui.ShowSettingsDialog(owner, cfg)
 		if newCfg == nil {
@@ -85,7 +77,7 @@ func runWindows(cfg *client.Config, tunFactory func(client.TunConfig) (client.Tu
 		}()
 	}
 
-	// Create tray (uses owner as parent)
+	// Create tray
 	tray, err := ui.NewTray(app, owner)
 	if err != nil {
 		log.Fatalf("create tray: %v", err)
@@ -104,11 +96,34 @@ func runWindows(cfg *client.Config, tunFactory func(client.TunConfig) (client.Tu
 	app.Connect(cfg)
 	log.Printf("GameTunnel Client %s (commit: %s, built: %s)", Version, Commit, BuildTime)
 
-	// Hide console window AFTER GUI is fully initialized
 	hideConsole()
 
-	// Run the walk message loop (blocks until exit)
-	owner.Run()
+	// Custom message loop: pump messages on the owner's thread.
+	// This loop does NOT depend on owner.hWnd — it processes all
+	// thread messages. The loop only exits when tray "Exit" calls
+	// walk.App().Exit(0) which posts WM_QUIT.
+	msg := (*win.MSG)(unsafe.Pointer(win.GlobalAlloc(0, unsafe.Sizeof(win.MSG{}))))
+	defer win.GlobalFree(win.HGLOBAL(unsafe.Pointer(msg)))
+
+	user32 := syscall.NewLazyDLL("user32.dll")
+	getMessage := user32.NewProc("GetMessageW")
+	translate := user32.NewProc("TranslateMessage")
+	dispatch := user32.NewProc("DispatchMessageW")
+
+	for {
+		ret, _, _ := getMessage.Call(
+			uintptr(unsafe.Pointer(msg)),
+			0, 0, 0,
+		)
+		if ret == 0 { // WM_QUIT
+			break
+		}
+		if ret == ^uintptr(0) { // -1 = error
+			break
+		}
+		translate.Call(uintptr(unsafe.Pointer(msg)))
+		dispatch.Call(uintptr(unsafe.Pointer(msg)))
+	}
 
 	// Cleanup
 	if pprofLn != nil {
