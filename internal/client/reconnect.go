@@ -2,7 +2,7 @@ package client
 
 import (
 	"context"
-	"math/rand"
+	"math/rand/v2"
 	"net"
 	"time"
 )
@@ -39,14 +39,7 @@ func jitter(maxJitter time.Duration) time.Duration {
 	if maxJitter <= 0 {
 		return 0
 	}
-	return time.Duration(rand.Int63n(int64(maxJitter)*2)) - maxJitter
-}
-
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
+	return time.Duration(rand.Int64N(int64(maxJitter)*2)) - maxJitter
 }
 
 // IsNetworkAvailable checks if the network is likely available by
