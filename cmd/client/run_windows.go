@@ -98,9 +98,6 @@ func runWindows(cfg *client.Config, tunFactory func(client.TunConfig) (client.Tu
 	app.Connect(cfg)
 	log.Printf("GameTunnel Client %s (commit: %s, built: %s)", Version, Commit, BuildTime)
 
-	// Hide console window AFTER GUI is fully initialized
-	hideConsole()
-
 	// Run the walk message loop (blocks until exit)
 	owner.Run()
 
