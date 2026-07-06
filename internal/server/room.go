@@ -400,10 +400,13 @@ func (r *Room) notifyShutdown() {
 
 // decrementIPConnCount decrements the per-IP connection counter and removes
 // the entry if it reaches zero. Caller must NOT hold r.mu (ipConnMu is internal).
+// Guards against underflow when multiple cleanup paths (keepalive, disconnect,
+// auth timeout) race on the same IP.
 func (r *Room) decrementIPConnCount(ip [16]byte) {
 	r.ipConnMu.Lock()
-	r.ipConnCount[ip]--
-	if r.ipConnCount[ip] <= 0 {
+	if n, ok := r.ipConnCount[ip]; ok && n > 1 {
+		r.ipConnCount[ip] = n - 1
+	} else {
 		delete(r.ipConnCount, ip)
 	}
 	r.ipConnMu.Unlock()
