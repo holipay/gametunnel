@@ -200,9 +200,16 @@ func (b *UDPTCPBridge) RemoteAddr() *net.UDPAddr {
 
 // ReceiveLoop reads packets from TCP and calls the handler for each one.
 // Runs until the TCP connection is closed or the bridge is stopped.
+// Sets a read deadline before each receive to detect idle/zombie connections.
 func (b *UDPTCPBridge) ReceiveLoop(handler func(data []byte, addr *net.UDPAddr)) {
 	defer close(b.done)
 	for {
+		// Set a read deadline to detect idle connections. The server sends
+		// keepalive pings every 5s, so 30s is generous headroom.
+		if err := b.tcp.SetReadDeadline(time.Now().Add(30 * time.Second)); err != nil {
+			log.Printf("[tcp-bridge] set deadline: %v", err)
+			return
+		}
 		data, err := b.tcp.Receive()
 		if err != nil {
 			log.Printf("[tcp-bridge] receive error: %v", err)
