@@ -9,10 +9,8 @@ import (
 	"net/http"
 	_ "net/http/pprof"
 	"syscall"
-	"unsafe"
 
 	"github.com/lxn/walk"
-	"github.com/lxn/win"
 
 	"github.com/holipay/gametunnel/internal/auth"
 	"github.com/holipay/gametunnel/internal/client"
@@ -98,32 +96,29 @@ func runWindows(cfg *client.Config, tunFactory func(client.TunConfig) (client.Tu
 
 	hideConsole()
 
-	// Custom message loop: pump messages on the owner's thread.
-	// This loop does NOT depend on owner.hWnd — it processes all
-	// thread messages. The loop only exits when tray "Exit" calls
-	// walk.App().Exit(0) which posts WM_QUIT.
-	msg := (*win.MSG)(unsafe.Pointer(win.GlobalAlloc(0, unsafe.Sizeof(win.MSG{}))))
-	defer win.GlobalFree(win.HGLOBAL(unsafe.Pointer(msg)))
-
-	user32 := syscall.NewLazyDLL("user32.dll")
-	getMessage := user32.NewProc("GetMessageW")
-	translate := user32.NewProc("TranslateMessage")
-	dispatch := user32.NewProc("DispatchMessageW")
-
-	for {
-		ret, _, _ := getMessage.Call(
-			uintptr(unsafe.Pointer(msg)),
-			0, 0, 0,
-		)
-		if ret == 0 { // WM_QUIT
-			break
+	// Safety net: if the owner window gets destroyed, recreate it
+	// so the message loop stays alive.
+	go func() {
+		kernel32 := syscall.NewLazyDLL("kernel32.dll")
+		sleep := kernel32.NewProc("Sleep")
+		for {
+			sleep.Call(2000)
+			if owner.IsDisposed() {
+				log.Printf("[ui] owner window lost, recreating...")
+				newOwner, err := walk.NewMainWindow()
+				if err != nil {
+					log.Printf("[ui] failed to recreate owner: %v", err)
+					continue
+				}
+				newOwner.SetTitle("GameTunnel")
+				newOwner.SetBounds(walk.Rectangle{X: -32000, Y: -32000, Width: 1, Height: 1})
+				owner = newOwner
+			}
 		}
-		if ret == ^uintptr(0) { // -1 = error
-			break
-		}
-		translate.Call(uintptr(unsafe.Pointer(msg)))
-		dispatch.Call(uintptr(unsafe.Pointer(msg)))
-	}
+	}()
+
+	// Run walk message loop
+	owner.Run()
 
 	// Cleanup
 	if pprofLn != nil {
