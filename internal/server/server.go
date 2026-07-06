@@ -359,10 +359,9 @@ func (s *Server) Close() error {
 	}
 	s.roomMu.RUnlock()
 
-	// Give sendQueue time to flush disconnect packets
-	time.Sleep(100 * time.Millisecond)
-
-	// Cancel context to signal all goroutines to exit
+	// Cancel context to signal all goroutines to exit.
+	// This triggers sendQueue.run() to drain() all pending packets (including
+	// the disconnect notifications just sent) before exiting.
 	s.closeMu.Lock()
 	cancel := s.cancelCtx
 	s.cancelCtx = nil
@@ -370,6 +369,11 @@ func (s *Server) Close() error {
 	if cancel != nil {
 		cancel()
 	}
+
+	// Stop the sendQueue and wait for it to drain all pending packets
+	// (including the disconnect notifications just sent).
+	s.sendQueue.Stop()
+	s.sendQueue.WaitDrain()
 
 	// Close the UDP connection first to unblock ReadFromUDP in Run().
 	// ReadFromUDP will return "use of closed network connection" error,

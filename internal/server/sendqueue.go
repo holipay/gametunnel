@@ -34,11 +34,13 @@ const batchBufSize = 64
 // When the main (unicast) queue is full, low-priority packets are dropped first.
 // Uses batch draining to reduce syscall overhead under high packet rates.
 type sendQueue struct {
-	conn       *net.UDPConn
-	ch         chan sendEntry    // unicast + control packets
+	conn        *net.UDPConn
+	ch          chan sendEntry    // unicast + control packets
 	broadcastCh chan sendEntry   // broadcast relay packets (isolated from unicast)
-	maxSize    int
-	tcpWrite   func(addr *net.UDPAddr, data []byte) bool // optional TCP bridge routing
+	maxSize     int
+	tcpWrite    func(addr *net.UDPAddr, data []byte) bool // optional TCP bridge routing
+	stopCh      chan struct{}    // closed by Stop() to trigger drain
+	drained     chan struct{}    // closed after run() exits and drain() completes
 }
 
 // broadcastChSize is the capacity of the broadcast send queue.
@@ -54,6 +56,8 @@ func newSendQueue(conn *net.UDPConn, maxSize int, tcpWrite func(addr *net.UDPAdd
 		broadcastCh: make(chan sendEntry, broadcastChSize),
 		maxSize:     maxSize,
 		tcpWrite:    tcpWrite,
+		stopCh:      make(chan struct{}),
+		drained:     make(chan struct{}),
 	}
 }
 
@@ -126,6 +130,11 @@ func (sq *sendQueue) run(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			sq.drain()
+			close(sq.drained)
+			return
+		case <-sq.stopCh:
+			sq.drain()
+			close(sq.drained)
 			return
 		case e := <-sq.broadcastCh:
 			// Broadcast relay: send immediately, drain batch
@@ -249,6 +258,23 @@ func (sq *sendQueue) pending() int {
 	return len(sq.ch) + len(sq.broadcastCh)
 }
 
+// WaitDrain blocks until the sendQueue's run() goroutine has exited and
+// drained all remaining packets.
+func (sq *sendQueue) WaitDrain() {
+	<-sq.drained
+}
+
+// Stop signals the sendQueue to stop and drain all pending packets.
+// Call WaitDrain() after Stop() to block until draining completes.
+func (sq *sendQueue) Stop() {
+	select {
+	case <-sq.stopCh:
+		// already stopped
+	default:
+		close(sq.stopCh)
+	}
+}
+
 // ── Rate Limiter Integration ────────────────────────────────
 
 // rateLimitedQueue wraps a sendQueue with a bandwidth limiter check.
@@ -282,4 +308,15 @@ func (rlq *rateLimitedQueue) sendBypass(data []byte, addr *net.UDPAddr) bool {
 
 func (rlq *rateLimitedQueue) run(ctx context.Context) {
 	rlq.sq.run(ctx)
+}
+
+// WaitDrain blocks until the underlying sendQueue's run() goroutine has exited
+// and drained all remaining packets.
+func (rlq *rateLimitedQueue) WaitDrain() {
+	rlq.sq.WaitDrain()
+}
+
+// Stop signals the underlying sendQueue to stop and drain.
+func (rlq *rateLimitedQueue) Stop() {
+	rlq.sq.Stop()
 }
