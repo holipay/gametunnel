@@ -30,13 +30,8 @@ type initCommonControlsEx struct {
 }
 
 const (
-	iccStandardClasses  = 0x00000040
-	iccWin95Classes     = 0x000000FF
-	iccTreeViewClasses  = 0x00000004
-	iccListViewClasses  = 0x00000001
-	iccProgressBarClass = 0x00000008
-	iccTabClasses       = 0x00000002
-	iccTooltipClass     = 0x00000080
+	iccWin95Classes = 0x000000FF // all Win95 common control classes
+	iccTooltipClass = 0x00000080 // tooltip class (needed for walk)
 )
 
 func main() {
@@ -84,8 +79,8 @@ func main() {
 	// Launch GUI
 	runWindows(cfg, tunFactory)
 
-	// Hide console AFTER GUI is ready (defer so it runs after walk.App().Run() returns)
-	// Note: if the user exits before GUI is ready, console stays visible briefly
+	// Hide console after runWindows returns (GUI message loop ended)
+	hideConsole()
 }
 
 // initCommonControls initializes Win32 common controls required by walk.
@@ -93,9 +88,11 @@ func main() {
 func initCommonControls() {
 	var icc initCommonControlsEx
 	icc.dwSize = uint32(unsafe.Sizeof(icc))
-	// Enable all common control classes including tooltips
 	icc.dwICC = iccWin95Classes | iccTooltipClass
-	procInitCommonCtrls.Call(uintptr(unsafe.Pointer(&icc)))
+	ret, _, _ := procInitCommonCtrls.Call(uintptr(unsafe.Pointer(&icc)))
+	if ret == 0 {
+		log.Printf("warning: InitCommonControlsEx failed")
+	}
 }
 
 func requestAdmin() {
