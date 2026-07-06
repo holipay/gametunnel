@@ -28,6 +28,15 @@ var (
 )
 
 // ipToSockaddrInet converts a net.IP to a SOCKADDR_INET for use with IP Helper APIs.
+//
+// Layout of SOCKADDR_INET (union):
+//
+//	AF_INET:  Family(2) + Port(2) + sin_addr(4) + zero(8) = 16 bytes
+//	AF_INET6: Family(2) + Port(2) + Flowinfo(4) + Addr(16) + ScopeId(4) = 28 bytes
+//
+// RawSockaddrInet.Data is [6]uint32 starting at offset 4.
+// For AF_INET, sin_addr overlaps Data[0].
+// For AF_INET6, sin6_addr overlaps Data[1..4], Flowinfo overlaps Data[0].
 func ipToSockaddrInet(ip net.IP) windows.RawSockaddrInet {
 	var sa windows.RawSockaddrInet
 	ip4 := ip.To4()
@@ -37,9 +46,10 @@ func ipToSockaddrInet(ip net.IP) windows.RawSockaddrInet {
 	} else {
 		ip16 := ip.To16()
 		sa.Family = windows.AF_INET6
-		// Data is [6]uint32 = 24 bytes = enough for 16-byte IPv6
+		// Data[0] = Flowinfo (leave as 0)
+		// Data[1..4] = Addr (16 bytes)
 		for i := 0; i < 4; i++ {
-			sa.Data[i] = uint32(ip16[i*4]) | uint32(ip16[i*4+1])<<8 | uint32(ip16[i*4+2])<<16 | uint32(ip16[i*4+3])<<24
+			sa.Data[1+i] = uint32(ip16[i*4]) | uint32(ip16[i*4+1])<<8 | uint32(ip16[i*4+2])<<16 | uint32(ip16[i*4+3])<<24
 		}
 	}
 	return sa
@@ -94,13 +104,21 @@ func deleteRoute(luid uint64, dest net.IP, mask net.IPMask, nextHop net.IP) erro
 }
 
 // ipToSockaddrInet4ForRow creates a RawSockaddrInet6 suitable for MibUnicastIpAddressRow.Address.
-// The address is stored as IPv4-in-IPv4-mapped-IPv6 or just raw IPv4 bytes in the union.
+//
+// SOCKADDR_INET union layout:
+//
+//	AF_INET (SOCKADDR_IN):  Family(2) + Port(2) + sin_addr(4) + zero(8) = 16 bytes
+//	AF_INET6:               Family(2) + Port(2) + Flowinfo(4) + Addr(16) + ScopeId(4) = 28 bytes
+//
+// For AF_INET, sin_addr is at offset 4, which overlaps with Flowinfo in the
+// RawSockaddrInet6 layout. So the IPv4 address must be written into Flowinfo.
 func ipToSockaddrInet4ForRow(ip net.IP) windows.RawSockaddrInet6 {
 	var sa windows.RawSockaddrInet6
 	sa.Family = windows.AF_INET
 	ip4 := ip.To4()
 	if ip4 != nil {
-		copy(sa.Addr[:4], ip4)
+		sa.Flowinfo = uint32(ip4[0]) | uint32(ip4[1])<<8 |
+			uint32(ip4[2])<<16 | uint32(ip4[3])<<24
 	}
 	return sa
 }
@@ -170,10 +188,14 @@ func detectPhysicalGateway(prefix string, tunName string) (gateway net.IP, ifInd
 		uintptr(unsafe.Pointer(&table)),
 		0, // allocate
 	)
+	defer func() {
+		if table != nil {
+			windows.FreeMibTable(unsafe.Pointer(table))
+		}
+	}()
 	if r1 != 0 {
 		return nil, 0, fmt.Errorf("GetIpForwardTable2: ret=%d", r1)
 	}
-	defer windows.FreeMibTable(unsafe.Pointer(table))
 
 	wantIPv4 := prefix == "0.0.0.0/0"
 	wantFamily := uint16(windows.AF_INET6)
@@ -215,11 +237,14 @@ func detectPhysicalGateway(prefix string, tunName string) (gateway net.IP, ifInd
 // sockaddrInetToIP converts a SOCKADDR_INET to net.IP.
 func sockaddrInetToIP(sa windows.RawSockaddrInet) net.IP {
 	if sa.Family == windows.AF_INET {
+		// SOCKADDR_IN: sin_addr at offset 4 = Data[0]
 		addr := (*[4]byte)(unsafe.Pointer(&sa.Data[0]))
 		return net.IPv4(addr[0], addr[1], addr[2], addr[3])
 	}
 	if sa.Family == windows.AF_INET6 {
-		addr := (*[16]byte)(unsafe.Pointer(&sa.Data[0]))
+		// SOCKADDR_INET6: sin6_addr at offset 8 = Data[1]
+		// (Data[0] is Flowinfo, Data[1..4] is Addr)
+		addr := (*[16]byte)(unsafe.Pointer(&sa.Data[1]))
 		ip := make(net.IP, 16)
 		copy(ip, addr[:])
 		return ip

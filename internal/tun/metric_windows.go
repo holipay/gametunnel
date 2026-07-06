@@ -55,10 +55,13 @@ type ipAdapterAddresses struct {
 }
 
 // setMetricAPI 通过 IP Helper API (SetIpInterfaceEntry) 禁用指定网卡的 AutomaticMetric 并设置 metric 值。
+// 同时设置 IPv4 和 IPv6 的 metric。
 func setMetricAPI(luid uint64) error {
 	if err := setInterfaceMetric(luid, windows.AF_INET, 1); err != nil {
 		return err
 	}
+	// IPv6: best-effort (not all adapters have IPv6 enabled)
+	setInterfaceMetric(luid, windows.AF_INET6, 1)
 	log.Printf("[tun] metric=1 set via IP Helper API (luid=%d)", luid)
 	return nil
 }

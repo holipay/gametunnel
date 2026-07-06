@@ -195,12 +195,16 @@ func (d *Device) ReconfigureRoutes() {
 
 	// Subnet route
 	deleteRoute(luid, d.virtualIP.Mask(d.subnetMask), d.subnetMask, nil)
-	addRoute(luid, d.virtualIP.Mask(d.subnetMask), d.subnetMask, d.virtualIP, 1)
+	if err := addRoute(luid, d.virtualIP.Mask(d.subnetMask), d.subnetMask, d.virtualIP, 1); err != nil {
+		log.Printf("[tun] ReconfigureRoutes: subnet route: %v", err)
+	}
 
 	// Global broadcast 255.255.255.255
 	bcast := net.IPv4(255, 255, 255, 255)
 	deleteRoute(luid, bcast, zeroMask, nil)
-	addRoute(luid, bcast, zeroMask, d.virtualIP, 1)
+	if err := addRoute(luid, bcast, zeroMask, d.virtualIP, 1); err != nil {
+		log.Printf("[tun] ReconfigureRoutes: broadcast route: %v", err)
+	}
 
 	// Subnet broadcast
 	subnet := d.virtualIP.Mask(d.subnetMask)
@@ -209,11 +213,15 @@ func (d *Device) ReconfigureRoutes() {
 		subnetBroadcast[i] = subnet[i] | byte(^d.subnetMask[i])
 	}
 	deleteRoute(luid, subnetBroadcast, d.subnetMask, nil)
-	addRoute(luid, subnetBroadcast, d.subnetMask, d.virtualIP, 1)
+	if err := addRoute(luid, subnetBroadcast, d.subnetMask, d.virtualIP, 1); err != nil {
+		log.Printf("[tun] ReconfigureRoutes: subnet broadcast route: %v", err)
+	}
 
 	// mDNS multicast
 	mdns := net.IPv4(224, 0, 0, 251)
-	addRoute(luid, mdns, zeroMask, d.virtualIP, 1)
+	if err := addRoute(luid, mdns, zeroMask, d.virtualIP, 1); err != nil {
+		log.Printf("[tun] ReconfigureRoutes: mDNS route: %v", err)
+	}
 
 	// Server exclusion route
 	if d.serverPublicIP != nil {
@@ -244,7 +252,9 @@ func (d *Device) ReconfigureRoutes() {
 						fmt.Sprintf("%s/128", d.serverPublicIP), fmt.Sprintf("interface=%d", phyIfIdx),
 						fmt.Sprintf("nexthop=%s", gw), "metric=1")
 				} else {
-					addRoute(luid, d.serverPublicIP, zeroMask, gw, 1)
+					if err := addRoute(luid, d.serverPublicIP, zeroMask, gw, 1); err != nil {
+						log.Printf("[tun] ReconfigureRoutes: server exclusion route: %v", err)
+					}
 				}
 			}
 		} else {
