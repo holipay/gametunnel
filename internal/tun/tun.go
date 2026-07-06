@@ -27,8 +27,10 @@ type Device struct {
 	subnetMask      net.IPMask
 	serverPublicIP  net.IP
 	mtu             int
-	physicalGateway string
-	physicalIfIdx   int // physical NIC interface index for IPv6 route cleanup
+	ifIndex         uint32  // TUN adapter interface index
+	luid            uint64  // TUN adapter LUID for IP Helper API calls
+	physicalGateway net.IP  // physical NIC gateway IP (for server exclusion route)
+	physicalIfIdx   uint32  // physical NIC interface index for IPv6 route cleanup
 
 	maintMu     sync.Mutex
 	maintStopCh chan struct{}  // closed to signal the route maintenance goroutine to stop
@@ -174,39 +176,27 @@ func (d *Device) stopRouteMaintenance() {
 // is excluded — if Windows drops it, the TUN device is unreachable for all
 // traffic and a full reconnect is needed rather than a silent repair.
 func (d *Device) repairRoutes() {
-	ip := d.virtualIP.String()
-	mask := net.IP(d.subnetMask).String()
-	subnet := d.virtualIP.Mask(d.subnetMask)
+	zeroMask := net.IPMask(net.CIDRMask(32, 32))
 
 	// Step 1: Global broadcast 255.255.255.255
-	// route add 优先于 netsh — netsh 在 Windows NLA 重置后可能静默失败或路由被
-	// 立即删除。route add 直接操作路由表，更可靠。
-	// 先删除可能已存在的路由，避免 "The route already exists" 错误。
-	RunCmd("route", "delete", "255.255.255.255")
-	RunCmd("netsh", "interface", "ipv4", "delete", "route",
-		"255.255.255.255/32", fmt.Sprintf("name=%s", d.name))
-	if err := RunCmd("route", "add",
-		"255.255.255.255", "mask", "255.255.255.255", ip, "metric", "1"); err != nil {
-		log.Printf("[tun] route repair: 255.255.255.255 via route add: %v, trying netsh", err)
-		if err := RunCmd("netsh", "interface", "ipv4", "add", "route",
-			"255.255.255.255/32", fmt.Sprintf("name=%s", d.name), ip, "metric=1"); err != nil {
-			log.Printf("[tun] route repair: global broadcast: %v", err)
-		}
+	deleteRoute(d.luid, net.IPv4(255, 255, 255, 255), zeroMask, nil)
+	if err := addRoute(d.luid, net.IPv4(255, 255, 255, 255), zeroMask, d.virtualIP, 1); err != nil {
+		log.Printf("[tun] route repair: global broadcast: %v", err)
 	}
 
 	// Step 2: Subnet broadcast
+	subnet := d.virtualIP.Mask(d.subnetMask)
 	subnetBroadcast := net.IP(make([]byte, 4))
 	for i := 0; i < 4; i++ {
 		subnetBroadcast[i] = subnet[i] | byte(^d.subnetMask[i])
 	}
-	if err := RunCmd("route", "add",
-		subnetBroadcast.String(), "mask", mask, ip, "metric", "1"); err != nil {
+	deleteRoute(d.luid, subnetBroadcast, d.subnetMask, nil)
+	if err := addRoute(d.luid, subnetBroadcast, d.subnetMask, d.virtualIP, 1); err != nil {
 		log.Printf("[tun] route repair: subnet broadcast: %v", err)
 	}
 
 	// Step 3: mDNS multicast
-	if err := RunCmd("route", "add",
-		"224.0.0.251", "mask", "255.255.255.255", ip, "metric", "1"); err != nil {
+	if err := addRoute(d.luid, net.IPv4(224, 0, 0, 251), zeroMask, d.virtualIP, 1); err != nil {
 		log.Printf("[tun] route repair: mDNS: %v", err)
 	}
 }
