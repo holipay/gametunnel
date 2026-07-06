@@ -76,9 +76,8 @@ func (t *Tunnel) cleanStalePeers() {
 	t.peerSnapshot.Store(t.peers)
 	t.mu.Unlock()
 
-	for i, peer := range stalePeers {
+	for _, peer := range stalePeers {
 		log.Printf(i18n.T().LogCleanPeer,
 			peer.Username, peer.VirtualIP, stalePeerGracePeriod)
-		_ = i // avoid unused variable
 	}
 }
