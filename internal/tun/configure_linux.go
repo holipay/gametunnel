@@ -67,9 +67,12 @@ func (d *Device) configure() error {
 	if err := runCmd("ip", "route", "replace", "255.255.255.255", "dev", d.name, "table", fmt.Sprint(broadcastTableID)); err != nil {
 		log.Printf("[tun] global broadcast table route warning: %v", err)
 	}
-	// Insert policy rule: match dst 255.255.255.255 → lookup custom table
-	// "ip rule add" is idempotent when the exact match already exists.
-	if err := runCmd("ip", "rule", "add", "to", "255.255.255.255", "lookup", fmt.Sprint(broadcastTableID), "priority", fmt.Sprint(broadcastRulePriority)); err != nil {
+	// Insert policy rule: match dst 255.255.255.255 → lookup custom table.
+	// Uses "replace" (not "add") for idempotency — "add" fails with
+	// RTNETLINK File exists when the rule already exists.
+	// No iif filter: we want to capture limited broadcasts originated by
+	// any process on this host, regardless of which interface they egress.
+	if err := runCmd("ip", "rule", "replace", "to", "255.255.255.255", "lookup", fmt.Sprint(broadcastTableID), "priority", fmt.Sprint(broadcastRulePriority)); err != nil {
 		log.Printf("[tun] global broadcast rule warning: %v", err)
 	}
 	// Also keep a main-table route as fallback for systems where the rule
