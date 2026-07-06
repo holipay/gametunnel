@@ -53,6 +53,12 @@ func runWindows(cfg *client.Config, tunFactory func(client.TunConfig) (client.Tu
 	owner.SetSize(walk.Size{Width: 1, Height: 1})
 	owner.SetVisible(false)
 
+	// Prevent owner window from closing — the app runs via tray icon.
+	// Only walk.App().Exit() (from tray quit) should end the message loop.
+	owner.Closing().Attach(func(canceled *bool, reason walk.CloseReason) {
+		*canceled = true
+	})
+
 	// Show settings dialog on first run (no server configured)
 	if cfg.ServerAddr == "" {
 		newCfg := ui.ShowSettingsDialog(owner, cfg)
