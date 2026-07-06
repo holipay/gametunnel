@@ -10,6 +10,7 @@ import (
 	. "github.com/lxn/walk/declarative"
 
 	"github.com/holipay/gametunnel/internal/client"
+	"github.com/holipay/gametunnel/internal/i18n"
 )
 
 // StatusWindow is the main status window showing connection info.
@@ -18,7 +19,8 @@ type StatusWindow struct {
 
 	app  *client.App
 	tray *Tray
-	timer *time.Timer
+	ticker *time.Ticker
+	stopCh chan struct{}
 
 	// UI elements
 	statusLabel  *walk.Label
@@ -44,25 +46,25 @@ func NewStatusWindow(app *client.App, tray *Tray, owner walk.Form) (*StatusWindo
 		Layout:   VBox{Margins: Margins{Left: 10, Top: 10, Right: 10, Bottom: 10}, Spacing: 8},
 		Children: []Widget{
 			GroupBox{
-				Title:  "连接状态",
+				Title:  i18n.T().UIStatus,
 				Layout: Grid{Columns: 2, Spacing: 6, Margins: Margins{Left: 10, Top: 10, Right: 10, Bottom: 10}},
 				Children: []Widget{
-					Label{Text: "状态:"},
-					Label{AssignTo: &sw.statusLabel, Text: "未连接"},
+					Label{Text: i18n.T().UIStatusTitle + ":"},
+					Label{AssignTo: &sw.statusLabel, Text: i18n.T().DlgStatusIdle},
 
-					Label{Text: "虚拟 IP:"},
+					Label{Text: i18n.T().UIVirtualIP + ":"},
 					Label{AssignTo: &sw.vipLabel, Text: "-"},
 
-					Label{Text: "房间:"},
+					Label{Text: i18n.T().UIRoom + ":"},
 					Label{AssignTo: &sw.roomLabel, Text: "-"},
 
-					Label{Text: "在线玩家:"},
+					Label{Text: i18n.T().UIOnlinePlayers + ":"},
 					Label{AssignTo: &sw.playerLabel, Text: "0"},
 
-					Label{Text: "运行时间:"},
+					Label{Text: i18n.T().UIUptime + ":"},
 					Label{AssignTo: &sw.uptimeLabel, Text: "-"},
 
-					Label{Text: "质量:"},
+					Label{Text: i18n.T().UIQuality + ":"},
 					Label{AssignTo: &sw.qualityLabel, Text: "-"},
 				},
 			},
@@ -70,19 +72,19 @@ func NewStatusWindow(app *client.App, tray *Tray, owner walk.Form) (*StatusWindo
 				Layout: HBox{Spacing: 6},
 				Children: []Widget{
 					PushButton{
-						Text: "连接",
+						Text: i18n.T().DlgConnect,
 						OnClicked: func() {
 							app.Connect(app.Cfg)
 						},
 					},
 					PushButton{
-						Text: "断开",
+						Text: i18n.T().DlgDisconnect,
 						OnClicked: func() {
 							app.Disconnect()
 						},
 					},
 					PushButton{
-						Text: "设置...",
+						Text: i18n.T().DlgSettings,
 						OnClicked: func() {
 							cfg := ShowSettingsDialog(sw.window, app.Cfg)
 							if cfg != nil {
@@ -131,7 +133,18 @@ func (sw *StatusWindow) SetFocus() {
 }
 
 func (sw *StatusWindow) startRefresh() {
-	sw.timer = time.AfterFunc(time.Second, sw.refresh)
+	sw.stopCh = make(chan struct{})
+	sw.ticker = time.NewTicker(time.Second)
+	go func() {
+		for {
+			select {
+			case <-sw.ticker.C:
+				sw.refresh()
+			case <-sw.stopCh:
+				return
+			}
+		}
+	}()
 }
 
 func (sw *StatusWindow) refresh() {
@@ -143,29 +156,29 @@ func (sw *StatusWindow) refresh() {
 
 	sw.window.Synchronize(func() {
 		if status.Connected {
-			sw.statusLabel.SetText("已连接")
+			sw.statusLabel.SetText(i18n.T().DlgStatusConn)
 			sw.vipLabel.SetText(status.VirtualIP)
 			sw.roomLabel.SetText(status.RoomID)
 			sw.playerLabel.SetText(fmt.Sprintf("%d", status.PeerCount))
 			sw.uptimeLabel.SetText(status.Uptime)
 			if status.AvgRTT > 0 {
-				sw.qualityLabel.SetText(fmt.Sprintf("延迟 %.0fms · 丢包 %.0f%%",
+				sw.qualityLabel.SetText(fmt.Sprintf(i18n.T().UIQualityFmt,
 					status.AvgRTT, status.LossRate*100))
 			} else {
 				sw.qualityLabel.SetText("-")
 			}
 		} else if status.Connecting {
-			sw.statusLabel.SetText("连接中...")
+			sw.statusLabel.SetText(i18n.T().UIConnecting)
 			sw.vipLabel.SetText("-")
 			sw.roomLabel.SetText(status.RoomID)
 			sw.playerLabel.SetText("0")
 			sw.uptimeLabel.SetText("-")
 			sw.qualityLabel.SetText("-")
 			if status.LastError != "" {
-				sw.statusLabel.SetText("连接失败: " + status.LastError)
+				sw.statusLabel.SetText(status.LastError)
 			}
 		} else {
-			sw.statusLabel.SetText("未连接")
+			sw.statusLabel.SetText(i18n.T().DlgStatusIdle)
 			sw.vipLabel.SetText("-")
 			sw.roomLabel.SetText("-")
 			sw.playerLabel.SetText("0")
@@ -175,14 +188,15 @@ func (sw *StatusWindow) refresh() {
 
 		sw.tray.UpdateStatus(status.Connected, status.PeerCount, status.VirtualIP)
 	})
-
-	sw.timer = time.AfterFunc(time.Second, sw.refresh)
 }
 
 // Dispose cleans up the main window.
 func (sw *StatusWindow) Dispose() {
-	if sw.timer != nil {
-		sw.timer.Stop()
+	if sw.ticker != nil {
+		sw.ticker.Stop()
+	}
+	if sw.stopCh != nil {
+		close(sw.stopCh)
 	}
 	if sw.window != nil {
 		sw.window.Dispose()

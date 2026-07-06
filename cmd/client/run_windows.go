@@ -96,7 +96,7 @@ func runWindows(cfg *client.Config, tunFactory func(client.TunConfig) (client.Tu
 
 	// Connect
 	app.Connect(cfg)
-	log.Printf("GameTunnel Client %s started (commit: %s)", Version, Commit)
+	log.Printf("GameTunnel Client %s (commit: %s, built: %s)", Version, Commit, BuildTime)
 
 	// Run the walk message loop (blocks until exit)
 	owner.Run()

@@ -13,7 +13,8 @@ import (
 // ShowSettingsDialog shows the settings dialog and returns a new Config if OK was clicked.
 // Returns nil if the user cancelled.
 func ShowSettingsDialog(owner walk.Form, cfg *client.Config) *client.Config {
-	var serverAddr, playerName, roomID, password *walk.TextEdit
+	var serverAddr, playerName, roomID *walk.TextEdit
+	var password *walk.LineEdit
 
 	t := i18n.T()
 	newCfg := *cfg // copy
@@ -27,7 +28,7 @@ func ShowSettingsDialog(owner walk.Form, cfg *client.Config) *client.Config {
 		Layout:   VBox{Margins: Margins{Left: 15, Top: 15, Right: 15, Bottom: 15}, Spacing: 10},
 		Children: []Widget{
 			GroupBox{
-				Title:  "服务器",
+				Title:  t.DlgServerAddr[:len(t.DlgServerAddr)-1], // remove trailing ":"
 				Layout: Grid{Columns: 2, Spacing: 6, Margins: Margins{Left: 10, Top: 10, Right: 10, Bottom: 10}},
 				Children: []Widget{
 					Label{Text: t.DlgServerAddr + " "},
@@ -40,7 +41,7 @@ func ShowSettingsDialog(owner walk.Form, cfg *client.Config) *client.Config {
 					TextEdit{AssignTo: &roomID, Text: cfg.RoomID},
 
 					Label{Text: t.DlgPassword + " "},
-					TextEdit{AssignTo: &password, Text: cfg.RoomPassword},
+					LineEdit{AssignTo: &password, Text: cfg.RoomPassword, PasswordMode: true},
 				},
 			},
 			Composite{
@@ -56,7 +57,7 @@ func ShowSettingsDialog(owner walk.Form, cfg *client.Config) *client.Config {
 							newCfg.RoomPassword = password.Text()
 
 							if err := newCfg.Validate(); err != nil {
-								walk.MsgBox(dlg, "错误", err.Error(),
+								walk.MsgBox(dlg, t.DlgTitle, err.Error(),
 									walk.MsgBoxIconError|walk.MsgBoxOK)
 								return
 							}

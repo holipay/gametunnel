@@ -4,11 +4,11 @@ package ui
 
 import (
 	"fmt"
-	"syscall"
 
 	"github.com/lxn/walk"
 
 	"github.com/holipay/gametunnel/internal/client"
+	"github.com/holipay/gametunnel/internal/i18n"
 )
 
 // Tray manages the system tray icon and context menu.
@@ -44,7 +44,7 @@ func NewTray(app *client.App, owner walk.Form) (*Tray, error) {
 
 	t.setupMenu()
 	t.updateIcon(false)
-	ni.SetToolTip("GameTunnel - 未连接")
+	ni.SetToolTip(i18n.T().DlgStatusIdle)
 
 	// Left-click shows main window
 	ni.MouseDown().Attach(func(x, y int, button walk.MouseButton) {
@@ -62,67 +62,69 @@ func (t *Tray) SetMainWindow(mw *walk.MainWindow) {
 	t.mw = mw
 }
 
-func (t *Tray) setupMenu() {
-	t.ni.SetIcon(walk.IconApplication())
+func (tr *Tray) setupMenu() {
+	tt := i18n.T()
+
+	tr.ni.SetIcon(walk.IconApplication())
 
 	// Status (disabled, display only)
-	t.mStatus = walk.NewAction()
-	t.mStatus.SetText("未连接")
-	t.mStatus.SetEnabled(false)
-	t.ni.ContextMenu().Actions().Add(t.mStatus)
+	tr.mStatus = walk.NewAction()
+	tr.mStatus.SetText(tt.DlgStatusIdle)
+	tr.mStatus.SetEnabled(false)
+	tr.ni.ContextMenu().Actions().Add(tr.mStatus)
 
-	t.ni.ContextMenu().Actions().Add(walk.NewSeparatorAction())
+	tr.ni.ContextMenu().Actions().Add(walk.NewSeparatorAction())
 
 	// Show window
-	t.mShowWindow = walk.NewAction()
-	t.mShowWindow.SetText("打开主窗口")
-	t.mShowWindow.Triggered().Attach(func() {
-		if t.mw != nil {
-			t.mw.Show()
-			t.mw.SetFocus()
+	tr.mShowWindow = walk.NewAction()
+	tr.mShowWindow.SetText(tt.DlgSettings)
+	tr.mShowWindow.Triggered().Attach(func() {
+		if tr.mw != nil {
+			tr.mw.Show()
+			tr.mw.SetFocus()
 		}
 	})
-	t.ni.ContextMenu().Actions().Add(t.mShowWindow)
+	tr.ni.ContextMenu().Actions().Add(tr.mShowWindow)
 
 	// Connect
-	t.mConnect = walk.NewAction()
-	t.mConnect.SetText("连接")
-	t.mConnect.Triggered().Attach(func() {
-		t.app.Connect(t.app.Cfg)
+	tr.mConnect = walk.NewAction()
+	tr.mConnect.SetText(tt.DlgConnect)
+	tr.mConnect.Triggered().Attach(func() {
+		tr.app.Connect(tr.app.Cfg)
 	})
-	t.ni.ContextMenu().Actions().Add(t.mConnect)
+	tr.ni.ContextMenu().Actions().Add(tr.mConnect)
 
 	// Disconnect
-	t.mDisconnect = walk.NewAction()
-	t.mDisconnect.SetText("断开连接")
-	t.mDisconnect.SetEnabled(false)
-	t.mDisconnect.Triggered().Attach(func() {
-		t.app.Disconnect()
+	tr.mDisconnect = walk.NewAction()
+	tr.mDisconnect.SetText(tt.DlgDisconnect)
+	tr.mDisconnect.SetEnabled(false)
+	tr.mDisconnect.Triggered().Attach(func() {
+		tr.app.Disconnect()
 	})
-	t.ni.ContextMenu().Actions().Add(t.mDisconnect)
+	tr.ni.ContextMenu().Actions().Add(tr.mDisconnect)
 
-	t.ni.ContextMenu().Actions().Add(walk.NewSeparatorAction())
+	tr.ni.ContextMenu().Actions().Add(walk.NewSeparatorAction())
 
 	// Settings
-	t.mSettings = walk.NewAction()
-	t.mSettings.SetText("设置...")
-	t.mSettings.Triggered().Attach(func() {
-		cfg := ShowSettingsDialog(t.owner, t.app.Cfg)
+	tr.mSettings = walk.NewAction()
+	tr.mSettings.SetText(tt.DlgSettings)
+	tr.mSettings.Triggered().Attach(func() {
+		cfg := ShowSettingsDialog(tr.owner, tr.app.Cfg)
 		if cfg != nil {
-			t.app.Connect(cfg)
+			tr.app.Connect(cfg)
 		}
 	})
-	t.ni.ContextMenu().Actions().Add(t.mSettings)
+	tr.ni.ContextMenu().Actions().Add(tr.mSettings)
 
-	t.ni.ContextMenu().Actions().Add(walk.NewSeparatorAction())
+	tr.ni.ContextMenu().Actions().Add(walk.NewSeparatorAction())
 
 	// Quit
-	t.mQuit = walk.NewAction()
-	t.mQuit.SetText("退出")
-	t.mQuit.Triggered().Attach(func() {
+	tr.mQuit = walk.NewAction()
+	tr.mQuit.SetText("Exit")
+	tr.mQuit.Triggered().Attach(func() {
 		walk.App().Exit(0)
 	})
-	t.ni.ContextMenu().Actions().Add(t.mQuit)
+	tr.ni.ContextMenu().Actions().Add(tr.mQuit)
 }
 
 // UpdateStatus updates the tray icon and menu based on connection status.
@@ -135,20 +137,21 @@ func (t *Tray) UpdateStatus(connected bool, peerCount int, virtualIP string) {
 	t.mConnect.SetEnabled(!connected)
 	t.mDisconnect.SetEnabled(connected)
 
+	tt := i18n.T()
 	var statusText, tooltip string
 	if connected {
-		statusText = fmt.Sprintf("已连接 · %s · %d人在线", virtualIP, peerCount)
-		tooltip = fmt.Sprintf("GameTunnel - 已连接 (%d人)", peerCount)
+		statusText = fmt.Sprintf(tt.DlgStatusConn, virtualIP, peerCount)
+		tooltip = fmt.Sprintf("GameTunnel - %s (%d)", tt.DlgConnect, peerCount)
 	} else {
-		statusText = "未连接"
-		tooltip = "GameTunnel - 未连接"
+		statusText = tt.DlgStatusIdle
+		tooltip = "GameTunnel - " + tt.DlgStatusIdle
 	}
 	t.mStatus.SetText(statusText)
 	t.ni.SetToolTip(tooltip)
 
 	// Show balloon on state change
 	if connected {
-		t.ni.ShowMessage("GameTunnel", fmt.Sprintf("已连接到服务器\n虚拟 IP: %s", virtualIP))
+		t.ni.ShowMessage("GameTunnel", fmt.Sprintf("Connected\nVirtual IP: %s", virtualIP))
 	}
 }
 
@@ -164,16 +167,5 @@ func (t *Tray) updateIcon(connected bool) {
 func (t *Tray) Dispose() {
 	if t.ni != nil {
 		t.ni.Dispose()
-	}
-}
-
-// HideConsole hides the console window on Windows.
-func HideConsole() {
-	user32 := syscall.NewLazyDLL("user32.dll")
-	kernel32 := syscall.NewLazyDLL("kernel32.dll")
-
-	hwnd, _, _ := kernel32.NewProc("GetConsoleWindow").Call()
-	if hwnd != 0 {
-		user32.NewProc("ShowWindow").Call(hwnd, 0) // SW_HIDE
 	}
 }
