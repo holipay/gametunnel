@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"runtime"
+	"syscall"
 
 	"golang.org/x/sys/windows"
 
@@ -19,10 +21,14 @@ import (
 func main() {
 	defer crashlog.WriteCrashLog("GameTunnel Client")
 
+	// Lock OS thread for Win32 GUI (walk requirement)
+	runtime.LockOSThread()
+
 	// Request admin rights if not elevated (needed for TUN device)
 	requestAdmin()
 
-	windows.SetConsoleOutputCP(65001)
+	// Hide console window (GUI takes over)
+	hideConsole()
 
 	// Prevent multiple instances
 	if _, err := singleinstance.Acquire("GameTunnel-Client"); err != nil {
@@ -53,7 +59,8 @@ func main() {
 		})
 	}
 
-	run(cfg, tunFactory)
+	// Launch GUI
+	runWindows(cfg, tunFactory)
 }
 
 func requestAdmin() {
@@ -76,4 +83,17 @@ func requestAdmin() {
 	}
 
 	os.Exit(0)
+}
+
+func hideConsole() {
+	kernel32 := syscall.NewLazyDLL("kernel32.dll")
+	user32 := syscall.NewLazyDLL("user32.dll")
+
+	procGetConsoleWindow := kernel32.NewProc("GetConsoleWindow")
+	procShowWindow := user32.NewProc("ShowWindow")
+
+	hwnd, _, _ := procGetConsoleWindow.Call()
+	if hwnd != 0 {
+		procShowWindow.Call(hwnd, 0) // SW_HIDE
+	}
 }
