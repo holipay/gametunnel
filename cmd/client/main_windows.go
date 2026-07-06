@@ -8,6 +8,7 @@ import (
 	"os"
 	"runtime"
 	"syscall"
+	"unsafe"
 
 	"golang.org/x/sys/windows"
 
@@ -18,17 +19,38 @@ import (
 	"github.com/holipay/gametunnel/internal/tun"
 )
 
+var (
+	modComctl32         = syscall.NewLazyDLL("comctl32.dll")
+	procInitCommonCtrls = modComctl32.NewProc("InitCommonControlsEx")
+)
+
+type initCommonControlsEx struct {
+	dwSize uint32
+	dwICC  uint32
+}
+
+const (
+	iccStandardClasses  = 0x00000040
+	iccWin95Classes     = 0x000000FF
+	iccTreeViewClasses  = 0x00000004
+	iccListViewClasses  = 0x00000001
+	iccProgressBarClass = 0x00000008
+	iccTabClasses       = 0x00000002
+	iccTooltipClass     = 0x00000080
+)
+
 func main() {
 	defer crashlog.WriteCrashLog("GameTunnel Client")
+
+	// Initialize Win32 common controls BEFORE any walk/Win32 GUI calls.
+	// This is critical — walk's tooltip (TTM_ADDTOOL) fails without it.
+	initCommonControls()
 
 	// Lock OS thread for Win32 GUI (walk requirement)
 	runtime.LockOSThread()
 
 	// Request admin rights if not elevated (needed for TUN device)
 	requestAdmin()
-
-	// Hide console window (GUI takes over)
-	hideConsole()
 
 	// Prevent multiple instances
 	if _, err := singleinstance.Acquire("GameTunnel-Client"); err != nil {
@@ -61,6 +83,19 @@ func main() {
 
 	// Launch GUI
 	runWindows(cfg, tunFactory)
+
+	// Hide console AFTER GUI is ready (defer so it runs after walk.App().Run() returns)
+	// Note: if the user exits before GUI is ready, console stays visible briefly
+}
+
+// initCommonControls initializes Win32 common controls required by walk.
+// Must be called before any walk widget creation.
+func initCommonControls() {
+	var icc initCommonControlsEx
+	icc.dwSize = uint32(unsafe.Sizeof(icc))
+	// Enable all common control classes including tooltips
+	icc.dwICC = iccWin95Classes | iccTooltipClass
+	procInitCommonCtrls.Call(uintptr(unsafe.Pointer(&icc)))
 }
 
 func requestAdmin() {
