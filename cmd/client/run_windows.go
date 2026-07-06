@@ -96,29 +96,28 @@ func runWindows(cfg *client.Config, tunFactory func(client.TunConfig) (client.Tu
 
 	hideConsole()
 
-	// Safety net: if the owner window gets destroyed, recreate it
-	// so the message loop stays alive.
-	go func() {
-		kernel32 := syscall.NewLazyDLL("kernel32.dll")
-		sleep := kernel32.NewProc("Sleep")
-		for {
-			sleep.Call(2000)
-			if owner.IsDisposed() {
-				log.Printf("[ui] owner window lost, recreating...")
-				newOwner, err := walk.NewMainWindow()
-				if err != nil {
-					log.Printf("[ui] failed to recreate owner: %v", err)
-					continue
-				}
-				newOwner.SetTitle("GameTunnel")
-				newOwner.SetBounds(walk.Rectangle{X: -32000, Y: -32000, Width: 1, Height: 1})
-				owner = newOwner
+	// Run walk message loop.
+	// If the owner is destroyed (hWnd=0), recreate and restart.
+	kernel32 := syscall.NewLazyDLL("kernel32.dll")
+	sleep := kernel32.NewProc("Sleep")
+	for {
+		owner.Run()
+		if owner.IsDisposed() {
+			log.Printf("[ui] owner window lost, recreating...")
+			newOwner, err := walk.NewMainWindow()
+			if err != nil {
+				log.Printf("[ui] failed to recreate: %v", err)
+				break
 			}
+			newOwner.SetTitle("GameTunnel")
+			newOwner.SetBounds(walk.Rectangle{X: -32000, Y: -32000, Width: 1, Height: 1})
+			owner = newOwner
+			tray.SetMainWindow(nil) // tray will use new owner next time
+			sleep.Call(100)
+			continue
 		}
-	}()
-
-	// Run walk message loop
-	owner.Run()
+		break
+	}
 
 	// Cleanup
 	if pprofLn != nil {
