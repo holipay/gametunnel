@@ -20,7 +20,12 @@ import (
 )
 
 var (
+	modKernel32         = syscall.NewLazyDLL("kernel32.dll")
+	modUser32           = syscall.NewLazyDLL("user32.dll")
 	modComctl32         = syscall.NewLazyDLL("comctl32.dll")
+	procLoadLibrary     = modKernel32.NewProc("LoadLibraryW")
+	procGetConsoleWindow = modKernel32.NewProc("GetConsoleWindow")
+	procShowWindow      = modUser32.NewProc("ShowWindow")
 	procInitCommonCtrls = modComctl32.NewProc("InitCommonControlsEx")
 )
 
@@ -29,19 +34,24 @@ type initCommonControlsEx struct {
 	dwICC  uint32
 }
 
-const (
-	iccWin95Classes = 0x000000FF // all Win95 common control classes
-	iccTooltipClass = 0x00000080 // tooltip class (needed for walk)
-)
-
 func main() {
 	defer crashlog.WriteCrashLog("GameTunnel Client")
 
-	// Initialize Win32 common controls BEFORE any walk/Win32 GUI calls.
-	// This is critical — walk's tooltip (TTM_ADDTOOL) fails without it.
-	initCommonControls()
+	// Step 1: Force-load comctl32.dll to ensure tooltip class is available.
+	// Some Windows configurations don't load it automatically.
+	comctl32, _ := syscall.UTF16PtrFromString("comctl32.dll")
+	procLoadLibrary.Call(uintptr(unsafe.Pointer(comctl32)))
 
-	// Lock OS thread for Win32 GUI (walk requirement)
+	// Step 2: Initialize common controls with tooltip class enabled.
+	var icc initCommonControlsEx
+	icc.dwSize = uint32(unsafe.Sizeof(icc))
+	icc.dwICC = 0x000000FF | 0x00000080 // ICC_WIN95_CLASSES | ICC_TOOLTIP_CLASS
+	ret, _, _ := procInitCommonCtrls.Call(uintptr(unsafe.Pointer(&icc)))
+	if ret == 0 {
+		log.Printf("warning: InitCommonControlsEx failed")
+	}
+
+	// Step 3: Lock OS thread for Win32 GUI (walk requirement)
 	runtime.LockOSThread()
 
 	// Request admin rights if not elevated (needed for TUN device)
@@ -79,20 +89,8 @@ func main() {
 	// Launch GUI
 	runWindows(cfg, tunFactory)
 
-	// Hide console after runWindows returns (GUI message loop ended)
+	// Hide console after runWindows returns
 	hideConsole()
-}
-
-// initCommonControls initializes Win32 common controls required by walk.
-// Must be called before any walk widget creation.
-func initCommonControls() {
-	var icc initCommonControlsEx
-	icc.dwSize = uint32(unsafe.Sizeof(icc))
-	icc.dwICC = iccWin95Classes | iccTooltipClass
-	ret, _, _ := procInitCommonCtrls.Call(uintptr(unsafe.Pointer(&icc)))
-	if ret == 0 {
-		log.Printf("warning: InitCommonControlsEx failed")
-	}
 }
 
 func requestAdmin() {
@@ -118,12 +116,6 @@ func requestAdmin() {
 }
 
 func hideConsole() {
-	kernel32 := syscall.NewLazyDLL("kernel32.dll")
-	user32 := syscall.NewLazyDLL("user32.dll")
-
-	procGetConsoleWindow := kernel32.NewProc("GetConsoleWindow")
-	procShowWindow := user32.NewProc("ShowWindow")
-
 	hwnd, _, _ := procGetConsoleWindow.Call()
 	if hwnd != 0 {
 		procShowWindow.Call(hwnd, 0) // SW_HIDE
