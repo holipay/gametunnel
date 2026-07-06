@@ -186,6 +186,7 @@ func (s *Server) handleStatusHTML(w http.ResponseWriter, r *http.Request) {
 
 	if err := getStatusTmpl().Execute(w, tmplData); err != nil {
 		log.Printf("%s", i18n.Format(i18n.T().ServerTmplFail, err))
+		http.Error(w, "template execution failed", http.StatusInternalServerError)
 	}
 }
 
