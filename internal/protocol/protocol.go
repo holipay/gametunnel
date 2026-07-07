@@ -19,7 +19,7 @@ const ProtocolVersion byte = 1
 
 // AppVersion is the application version encoded as (major << 8 | minor).
 // Used for client-server compatibility negotiation during handshake.
-const AppVersion uint16 = 0x010E
+const AppVersion uint16 = 0x0110
 
 // MinTokenVersion is the minimum server version that supports session tokens.
 const MinTokenVersion uint16 = 0x0107
