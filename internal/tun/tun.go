@@ -196,8 +196,8 @@ func (d *Device) addRouteRouteCmd(dest net.IP, mask net.IPMask, nextHop net.IP, 
 	return RunCmd("route", "add", dest.String(),
 		"mask", net.IP(mask).String(),
 		nextHop.String(),
-		fmt.Sprintf("metric=%d", metric),
-		fmt.Sprintf("if=%d", d.ifIndex),
+		"metric", fmt.Sprintf("%d", metric),
+		"if", fmt.Sprintf("%d", d.ifIndex),
 	)
 }
 
