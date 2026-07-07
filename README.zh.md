@@ -192,12 +192,12 @@ API 返回示例：
   "window": "1h",
   "samples": [
     {
-      "ts": "2026-05-20T12:00:00Z",
-      "players": 5,
-      "relay_pkts": 1234,
-      "dropped_pkts": 0,
-      "avg_rtt": 23.5,
-      "avg_loss": 0.01
+      "t": 1747987200,
+      "p": 5,
+      "rp": 1234,
+      "dp": 0,
+      "r": 23.5,
+      "l": 0.01
     }
   ]
 }
