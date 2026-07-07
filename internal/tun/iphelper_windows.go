@@ -17,10 +17,9 @@ import (
 )
 
 var (
-	procCreateIpForwardEntry2          = modIphlpapi.NewProc("CreateIpForwardEntry2")
-	procDeleteIpForwardEntry2          = modIphlpapi.NewProc("DeleteIpForwardEntry2")
-	procInitializeIpForwardEntry       = modIphlpapi.NewProc("InitializeIpForwardEntry")
-	procGetIpForwardTable2             = modIphlpapi.NewProc("GetIpForwardTable2")
+	procCreateIpForwardEntry2 = modIphlpapi.NewProc("CreateIpForwardEntry2")
+	procDeleteIpForwardEntry2 = modIphlpapi.NewProc("DeleteIpForwardEntry2")
+	procGetIpForwardTable2    = modIphlpapi.NewProc("GetIpForwardTable2")
 	procSetIpInterfaceEntry            = modIphlpapi.NewProc("SetIpInterfaceEntry")
 	procGetIpInterfaceEntry            = modIphlpapi.NewProc("GetIpInterfaceEntry")
 	procCreateUnicastIpAddressEntry    = modIphlpapi.NewProc("CreateUnicastIpAddressEntry")
@@ -56,12 +55,13 @@ func ipToSockaddrInet(ip net.IP) windows.RawSockaddrInet {
 }
 
 // addRoute adds a route to the system routing table via CreateIpForwardEntry2.
+//
+// InitializeIpForwardEntry is skipped — it only zeros the struct (which Go's
+// var declaration already does) and sets defaults we don't need. On some Windows
+// systems it returns ERROR_GEN_FAILURE (0xFFFFFFFF) for no clear reason, breaking
+// all route operations. Skipping it has been tested to work reliably.
 func addRoute(luid uint64, dest net.IP, mask net.IPMask, nextHop net.IP, metric uint32) error {
 	var row windows.MibIpForwardRow2
-	r1, _, _ := procInitializeIpForwardEntry.Call(uintptr(unsafe.Pointer(&row)))
-	if r1 != 0 {
-		return fmt.Errorf("InitializeIpForwardEntry: ret=%d", r1)
-	}
 
 	prefixLen, _ := mask.Size()
 
@@ -74,7 +74,7 @@ func addRoute(luid uint64, dest net.IP, mask net.IPMask, nextHop net.IP, metric 
 	row.Metric = metric
 	row.Protocol = windows.MIB_IPPROTO_NT_STATIC
 
-	r1, _, _ = procCreateIpForwardEntry2.Call(uintptr(unsafe.Pointer(&row)))
+	r1, _, _ := procCreateIpForwardEntry2.Call(uintptr(unsafe.Pointer(&row)))
 	if r1 != 0 {
 		return fmt.Errorf("CreateIpForwardEntry2(%s/%d via %s metric=%d): ret=%d",
 			dest, prefixLen, nextHop, metric, r1)

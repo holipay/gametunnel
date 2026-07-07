@@ -13,7 +13,6 @@ import (
 	"fmt"
 	"log"
 	"net"
-	"strings"
 	"time"
 )
 
@@ -51,16 +50,13 @@ func (d *Device) configure() error {
 
 	// ── Step 3: 禁用 AutomaticMetric ──
 	if err := setMetricAPI(luid); err != nil {
-		log.Printf("[tun] IP Helper metric failed (%v), trying PowerShell", err)
-		d.applyMetricPowerShell()
+		log.Printf("[tun] set metric failed: %v", err)
 	}
 
 	// ── Step 4: 验证 + 重试 ──
 	if !checkAutoMetricDisabled(luid) {
 		time.Sleep(2 * time.Second)
-		if err := setMetricAPI(luid); err != nil {
-			d.applyMetricPowerShell()
-		}
+		setMetricAPI(luid)
 		if checkAutoMetricDisabled(luid) {
 			log.Printf("[tun] metric=1 verified")
 		} else {
@@ -241,50 +237,6 @@ func (d *Device) ReconfigureRoutes() {
 
 	d.startRouteMaintenance()
 	log.Printf("[tun] routes reconfigured on reconnect")
-}
-
-// applyMetricAPI 通过 IP Helper API 禁用 TUN + 物理网卡的 AutomaticMetric。
-func (d *Device) applyMetricAPI() error {
-	idx, luid, err := findAdapter(d.name)
-	if err != nil {
-		return fmt.Errorf("find TUN: %w", err)
-	}
-	log.Printf("[tun] TUN adapter: idx=%d luid=%d", idx, luid)
-
-	if err := setMetricAPI(luid); err != nil {
-		return fmt.Errorf("set TUN: %w", err)
-	}
-	log.Printf("[tun] AutomaticMetric disabled (IP Helper API)")
-
-	// 同时禁用所有物理网卡
-	disableAllPhysicalAutoMetric(d.name)
-	return nil
-}
-
-// applyMetricPowerShell 是 PowerShell 回退方案。
-func (d *Device) applyMetricPowerShell() {
-	// TUN: 禁用自动 metric + 设为 1
-	psTUN := fmt.Sprintf(
-		"Set-NetIPInterface -InterfaceAlias '%s' -AutomaticMetric Disabled -InterfaceMetric 1 -ErrorAction Stop",
-		d.name)
-	if err := RunCmd("powershell", "-NoProfile", "-Command", psTUN); err != nil {
-		log.Printf("[tun] PS TUN metric: %v", err)
-	}
-
-	// 物理网卡: 禁用自动 metric + 设为 100
-	out, err := runCmdOutput("powershell", "-NoProfile", "-Command",
-		fmt.Sprintf("Get-NetAdapter | Where-Object { $_.Status -eq 'Up' -and $_.Name -ne '%s' -and $_.InterfaceDescription -notmatch 'Loopback' } | Select-Object -ExpandProperty Name", d.name))
-	if err != nil {
-		return
-	}
-	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
-		nic := strings.TrimSpace(line)
-		if nic == "" || nic == d.name {
-			continue
-		}
-		RunCmd("powershell", "-NoProfile", "-Command",
-			fmt.Sprintf("Set-NetIPInterface -InterfaceAlias '%s' -AutomaticMetric Disabled -InterfaceMetric 100 -ErrorAction SilentlyContinue", nic))
-	}
 }
 
 // CleanupRoutes removes routes added by configure().

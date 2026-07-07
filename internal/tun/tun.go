@@ -6,9 +6,7 @@ import (
 	"fmt"
 	"log"
 	"net"
-	"os/exec"
 	"sync"
-	"syscall"
 	"time"
 
 	"golang.zx2c4.com/wireguard/tun"
@@ -229,14 +227,4 @@ func (d *Device) repairRoutes() {
 
 	// Step 3: mDNS multicast
 	d.addRouteWithFallback(net.IPv4(224, 0, 0, 251), zeroMask, d.virtualIP, 1, "route repair: mDNS")
-}
-
-func runCmdOutput(name string, args ...string) (string, error) {
-	cmd := exec.Command(name, args...)
-	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		return string(out), fmt.Errorf("%s %v: %w (%s)", name, args, err, string(out))
-	}
-	return string(out), nil
 }
