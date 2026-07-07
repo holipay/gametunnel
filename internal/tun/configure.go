@@ -49,6 +49,11 @@ func (d *Device) configure() error {
 	}
 
 	// ── Step 3: 禁用 AutomaticMetric ──
+	// NOTE: SetIpInterfaceEntry may fail with ERROR_INVALID_PARAMETER on some
+	// Windows systems (wintun adapters). If so, TUN metric stays at AutoMetric
+	// default (~50). This is harmless in subnet-route-only mode (no default route),
+	// but would matter if a default route is ever added — metric priority would
+	// need to be set correctly then.
 	if err := setMetricAPI(luid); err != nil {
 		log.Printf("[tun] set metric failed: %v", err)
 	}

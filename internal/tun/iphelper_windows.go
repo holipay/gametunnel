@@ -17,13 +17,13 @@ import (
 )
 
 var (
-	procCreateIpForwardEntry2 = modIphlpapi.NewProc("CreateIpForwardEntry2")
-	procDeleteIpForwardEntry2 = modIphlpapi.NewProc("DeleteIpForwardEntry2")
-	procGetIpForwardTable2    = modIphlpapi.NewProc("GetIpForwardTable2")
-	procSetIpInterfaceEntry            = modIphlpapi.NewProc("SetIpInterfaceEntry")
-	procGetIpInterfaceEntry            = modIphlpapi.NewProc("GetIpInterfaceEntry")
-	procCreateUnicastIpAddressEntry    = modIphlpapi.NewProc("CreateUnicastIpAddressEntry")
-	procDeleteUnicastIpAddressEntry    = modIphlpapi.NewProc("DeleteUnicastIpAddressEntry")
+	procCreateIpForwardEntry2       = modIphlpapi.NewProc("CreateIpForwardEntry2")
+	procDeleteIpForwardEntry2       = modIphlpapi.NewProc("DeleteIpForwardEntry2")
+	procGetIpForwardTable2          = modIphlpapi.NewProc("GetIpForwardTable2")
+	procSetIpInterfaceEntry         = modIphlpapi.NewProc("SetIpInterfaceEntry")
+	procGetIpInterfaceEntry         = modIphlpapi.NewProc("GetIpInterfaceEntry")
+	procCreateUnicastIpAddressEntry = modIphlpapi.NewProc("CreateUnicastIpAddressEntry")
+	procDeleteUnicastIpAddressEntry = modIphlpapi.NewProc("DeleteUnicastIpAddressEntry")
 )
 
 // ipToSockaddrInet converts a net.IP to a SOCKADDR_INET for use with IP Helper APIs.
