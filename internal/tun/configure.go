@@ -75,17 +75,13 @@ func (d *Device) configure() error {
 	// CleanupRoutes() 在前面已删除旧路由，但 WireGuard 内核驱动会在
 	// TUN 创建时重新添加子网路由（metric 257），需要再删一次。
 	deleteRoute(luid, d.virtualIP.Mask(d.subnetMask), d.subnetMask, nil)
-	if err := addRoute(luid, d.virtualIP.Mask(d.subnetMask), d.subnetMask, d.virtualIP, 1); err != nil {
-		log.Printf("[tun] subnet route warning: %v", err)
-	}
+	d.addRouteWithFallback(d.virtualIP.Mask(d.subnetMask), d.subnetMask, d.virtualIP, 1, "subnet route")
 
 	// ── Step 6: 全局广播 255.255.255.255 ──
 	// 游戏（如星际争霸）发 UDP 广播到 255.255.255.255:6112 发现局域网。
 	bcast := net.IPv4(255, 255, 255, 255)
 	deleteRoute(luid, bcast, zeroMask, nil)
-	if err := addRoute(luid, bcast, zeroMask, d.virtualIP, 1); err != nil {
-		log.Printf("[tun] broadcast route warning: %v", err)
-	}
+	d.addRouteWithFallback(bcast, zeroMask, d.virtualIP, 1, "broadcast route")
 
 	// ── Step 7: 子网广播（如 10.10.0.255）──
 	subnetBroadcast := net.IP(make([]byte, 4))
@@ -94,15 +90,11 @@ func (d *Device) configure() error {
 		subnetBroadcast[i] = subnet[i] | byte(^d.subnetMask[i])
 	}
 	deleteRoute(luid, subnetBroadcast, d.subnetMask, nil)
-	if err := addRoute(luid, subnetBroadcast, d.subnetMask, d.virtualIP, 1); err != nil {
-		log.Printf("[tun] subnet broadcast route warning: %v", err)
-	}
+	d.addRouteWithFallback(subnetBroadcast, d.subnetMask, d.virtualIP, 1, "subnet broadcast route")
 
 	// ── Step 8: mDNS 组播 224.0.0.251 ──
 	mdns := net.IPv4(224, 0, 0, 251)
-	if err := addRoute(luid, mdns, zeroMask, d.virtualIP, 1); err != nil {
-		log.Printf("[tun] mDNS route warning: %v", err)
-	}
+	d.addRouteWithFallback(mdns, zeroMask, d.virtualIP, 1, "mDNS route")
 
 	// ── Step 9: 隧道服务器排除路由 ──
 	// 隧道服务器必须走物理网卡，否则 UDP 封装的隧道流量会回环进 TUN。
@@ -146,12 +138,8 @@ func (d *Device) configure() error {
 						log.Printf("[tun] server exclusion (IPv6): %s → %s via NIC idx=%d", serverIP, gw, phyIfIdx)
 					}
 				} else {
-					// IPv4: use IP Helper API
-					if err := addRoute(luid, serverIP, zeroMask, gw, 1); err != nil {
-						log.Printf("[tun] server exclusion route warning: %v", err)
-					} else {
-						log.Printf("[tun] server exclusion: %s → %s (physical NIC)", serverIP, gw)
-					}
+					// IPv4: use IP Helper API with netsh fallback
+					d.addRouteWithFallback(serverIP, zeroMask, gw, 1, "server exclusion route")
 				}
 			}
 		} else {
@@ -191,20 +179,14 @@ func (d *Device) ReconfigureRoutes() {
 	d.CleanupRoutes()
 
 	zeroMask := net.IPMask(net.CIDRMask(32, 32))
-	luid := d.luid
-
 	// Subnet route
-	deleteRoute(luid, d.virtualIP.Mask(d.subnetMask), d.subnetMask, nil)
-	if err := addRoute(luid, d.virtualIP.Mask(d.subnetMask), d.subnetMask, d.virtualIP, 1); err != nil {
-		log.Printf("[tun] ReconfigureRoutes: subnet route: %v", err)
-	}
+	deleteRoute(d.luid, d.virtualIP.Mask(d.subnetMask), d.subnetMask, nil)
+	d.addRouteWithFallback(d.virtualIP.Mask(d.subnetMask), d.subnetMask, d.virtualIP, 1, "ReconfigureRoutes: subnet route")
 
 	// Global broadcast 255.255.255.255
 	bcast := net.IPv4(255, 255, 255, 255)
-	deleteRoute(luid, bcast, zeroMask, nil)
-	if err := addRoute(luid, bcast, zeroMask, d.virtualIP, 1); err != nil {
-		log.Printf("[tun] ReconfigureRoutes: broadcast route: %v", err)
-	}
+	deleteRoute(d.luid, bcast, zeroMask, nil)
+	d.addRouteWithFallback(bcast, zeroMask, d.virtualIP, 1, "ReconfigureRoutes: broadcast route")
 
 	// Subnet broadcast
 	subnet := d.virtualIP.Mask(d.subnetMask)
@@ -212,16 +194,12 @@ func (d *Device) ReconfigureRoutes() {
 	for i := 0; i < 4; i++ {
 		subnetBroadcast[i] = subnet[i] | byte(^d.subnetMask[i])
 	}
-	deleteRoute(luid, subnetBroadcast, d.subnetMask, nil)
-	if err := addRoute(luid, subnetBroadcast, d.subnetMask, d.virtualIP, 1); err != nil {
-		log.Printf("[tun] ReconfigureRoutes: subnet broadcast route: %v", err)
-	}
+	deleteRoute(d.luid, subnetBroadcast, d.subnetMask, nil)
+	d.addRouteWithFallback(subnetBroadcast, d.subnetMask, d.virtualIP, 1, "ReconfigureRoutes: subnet broadcast route")
 
 	// mDNS multicast
 	mdns := net.IPv4(224, 0, 0, 251)
-	if err := addRoute(luid, mdns, zeroMask, d.virtualIP, 1); err != nil {
-		log.Printf("[tun] ReconfigureRoutes: mDNS route: %v", err)
-	}
+	d.addRouteWithFallback(mdns, zeroMask, d.virtualIP, 1, "ReconfigureRoutes: mDNS route")
 
 	// Server exclusion route
 	if d.serverPublicIP != nil {
@@ -252,9 +230,8 @@ func (d *Device) ReconfigureRoutes() {
 						fmt.Sprintf("%s/128", d.serverPublicIP), fmt.Sprintf("interface=%d", phyIfIdx),
 						fmt.Sprintf("nexthop=%s", gw), "metric=1")
 				} else {
-					if err := addRoute(luid, d.serverPublicIP, zeroMask, gw, 1); err != nil {
-						log.Printf("[tun] ReconfigureRoutes: server exclusion route: %v", err)
-					}
+					// IPv4: use IP Helper API with netsh fallback
+					d.addRouteWithFallback(d.serverPublicIP, zeroMask, gw, 1, "ReconfigureRoutes: server exclusion route")
 				}
 			}
 		} else {

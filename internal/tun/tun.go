@@ -167,6 +167,42 @@ func (d *Device) stopRouteMaintenance() {
 	d.stopRouteMaintenanceLocked()
 }
 
+// addRouteWithFallback tries IP Helper API first; on failure, falls back to netsh,
+// then to route.exe.
+func (d *Device) addRouteWithFallback(dest net.IP, mask net.IPMask, nextHop net.IP, metric uint32, desc string) {
+	if err := addRoute(d.luid, dest, mask, nextHop, metric); err != nil {
+		log.Printf("[tun] %s: API failed (%v), trying netsh", desc, err)
+		if err := d.addRouteNetsh(dest, mask, nextHop, metric); err != nil {
+			log.Printf("[tun] %s: netsh failed (%v), trying route add", desc, err)
+			if err := d.addRouteRouteCmd(dest, mask, nextHop, metric); err != nil {
+				log.Printf("[tun] %s: route add also failed: %v", desc, err)
+			}
+		}
+	}
+}
+
+// addRouteNetsh adds a route via netsh (fallback when IP Helper API fails).
+func (d *Device) addRouteNetsh(dest net.IP, mask net.IPMask, nextHop net.IP, metric uint32) error {
+	prefixLen, _ := mask.Size()
+	return RunCmd("netsh", "interface", "ipv4", "add", "route",
+		fmt.Sprintf("%s/%d", dest, prefixLen),
+		fmt.Sprintf("interface=%s", d.name),
+		fmt.Sprintf("nexthop=%s", nextHop),
+		fmt.Sprintf("metric=%d", metric),
+	)
+}
+
+// addRouteRouteCmd adds a route via route.exe (fallback when netsh rejects the prefix).
+// Unlike netsh, route.exe accepts broadcast IPs with a subnet mask (e.g. 10.10.0.255/24).
+func (d *Device) addRouteRouteCmd(dest net.IP, mask net.IPMask, nextHop net.IP, metric uint32) error {
+	return RunCmd("route", "add", dest.String(),
+		"mask", net.IP(mask).String(),
+		nextHop.String(),
+		fmt.Sprintf("metric=%d", metric),
+		fmt.Sprintf("if=%d", d.ifIndex),
+	)
+}
+
 // repairRoutes re-applies broadcast routes without cleaning them first.
 // The commands are idempotent — if a route already exists, the error is
 // logged at debug level and ignored. This is called periodically by the
@@ -180,9 +216,7 @@ func (d *Device) repairRoutes() {
 
 	// Step 1: Global broadcast 255.255.255.255
 	deleteRoute(d.luid, net.IPv4(255, 255, 255, 255), zeroMask, nil)
-	if err := addRoute(d.luid, net.IPv4(255, 255, 255, 255), zeroMask, d.virtualIP, 1); err != nil {
-		log.Printf("[tun] route repair: global broadcast: %v", err)
-	}
+	d.addRouteWithFallback(net.IPv4(255, 255, 255, 255), zeroMask, d.virtualIP, 1, "route repair: global broadcast")
 
 	// Step 2: Subnet broadcast
 	subnet := d.virtualIP.Mask(d.subnetMask)
@@ -191,14 +225,10 @@ func (d *Device) repairRoutes() {
 		subnetBroadcast[i] = subnet[i] | byte(^d.subnetMask[i])
 	}
 	deleteRoute(d.luid, subnetBroadcast, d.subnetMask, nil)
-	if err := addRoute(d.luid, subnetBroadcast, d.subnetMask, d.virtualIP, 1); err != nil {
-		log.Printf("[tun] route repair: subnet broadcast: %v", err)
-	}
+	d.addRouteWithFallback(subnetBroadcast, d.subnetMask, d.virtualIP, 1, "route repair: subnet broadcast")
 
 	// Step 3: mDNS multicast
-	if err := addRoute(d.luid, net.IPv4(224, 0, 0, 251), zeroMask, d.virtualIP, 1); err != nil {
-		log.Printf("[tun] route repair: mDNS: %v", err)
-	}
+	d.addRouteWithFallback(net.IPv4(224, 0, 0, 251), zeroMask, d.virtualIP, 1, "route repair: mDNS")
 }
 
 func runCmdOutput(name string, args ...string) (string, error) {
