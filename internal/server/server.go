@@ -388,6 +388,14 @@ func (s *Server) Close() error {
 	s.sendQueue.Stop()
 	s.sendQueue.WaitDrain()
 
+	// Final state save after sendQueue drain (may have triggered onDirty callbacks)
+	s.saveState()
+
+	// Close TCP listener first to stop accepting new connections
+	if s.tcpListener != nil {
+		s.tcpListener.Close()
+	}
+
 	// Close the UDP connection first to unblock ReadFromUDP in Run().
 	// ReadFromUDP will return "use of closed network connection" error,
 	// allowing Run() to exit and runWg.Wait() to complete.
@@ -402,11 +410,6 @@ func (s *Server) Close() error {
 		room.Stop()
 	}
 	s.roomMu.RUnlock()
-
-	// Close TCP fallback listener (if enabled)
-	if s.tcpListener != nil {
-		s.tcpListener.Close()
-	}
 
 	// Clean up all TCP bridges to prevent goroutine leak
 	s.tcpBridges.Range(func(key, value interface{}) bool {

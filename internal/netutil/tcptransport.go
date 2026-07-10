@@ -91,6 +91,13 @@ func (t *TCPTransport) Send(data []byte) error {
 // Blocks until a complete packet is available or an error occurs.
 // Returns the raw protocol packet (without length prefix).
 func (t *TCPTransport) Receive() ([]byte, error) {
+	t.mu.Lock()
+	closed := t.closed
+	t.mu.Unlock()
+	if closed {
+		return nil, fmt.Errorf("tcp transport closed")
+	}
+
 	// Read 2-byte length header
 	var header [2]byte
 	if _, err := io.ReadFull(t.conn, header[:]); err != nil {
