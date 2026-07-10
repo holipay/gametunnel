@@ -212,9 +212,6 @@ func (s *Server) handleRebind(payload []byte, from *net.UDPAddr) {
 	// Migration valid — update the client's address
 	newKey := netkey.AddrToRateKey(from)
 
-	// Snapshot username before releasing lock to avoid data race
-	username := foundClient.Username
-
 	foundRoom.mu.Lock()
 	// Re-check that the client is still present (TOCTOU guard).
 	if _, stillThere := foundRoom.clients[vipKey]; !stillThere {
@@ -244,7 +241,7 @@ func (s *Server) handleRebind(payload []byte, from *net.UDPAddr) {
 		s.roomMu.Unlock()
 	}
 
-	log.Printf("[rebind] %s migrated: %v → %s", username, clientPublicAddr, from)
+	log.Printf("[rebind] %s migrated: %v → %s", clientUsername, clientPublicAddr, from)
 	s.sendRebindAck(from, true)
 
 	// Send current peer info to the client on new address

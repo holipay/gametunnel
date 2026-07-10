@@ -251,6 +251,11 @@ func (t *Tunnel) receiveFromTUN(ctx context.Context) {
 				}
 			}
 		}
+
+		// Return remaining unused buffers to pool
+		for i := n; i < batchSize; i++ {
+			pool.PktBufPut(bufs[i])
+		}
 	}
 }
 

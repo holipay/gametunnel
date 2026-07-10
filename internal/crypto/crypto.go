@@ -18,6 +18,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"sync"
 	"sync/atomic"
 
 	"golang.org/x/crypto/chacha20poly1305"
@@ -54,16 +55,17 @@ var (
 
 // Cipher performs ChaCha20-Poly1305 encryption/decryption.
 type Cipher struct {
-	aead     cipher.AEAD
-	counter  atomic.Uint64 // 64-bit counter; nonce uses all 8 bytes. Collision risk: 2^64 packets ≈ impossible.
-	dirTag  [4]byte       // direction tag to prevent nonce reuse (value type for safe concurrent reads)
+	aead    cipher.AEAD
+	counter atomic.Uint64 // 64-bit counter; nonce uses all 8 bytes. Collision risk: 2^64 packets ≈ impossible.
+	dirTag  [4]byte      // direction tag to prevent nonce reuse (value type for safe concurrent reads)
 
 	// Replay protection: sliding window of recently received counter values.
 	// The window tracks counters in range [highestCounter - windowSize + 1, highestCounter].
 	// Packets with counters outside this window (too old or too far ahead) are rejected.
-	// Uses atomic operations with CAS loop for lock-free concurrent access.
-	replayCounter atomic.Uint64 // highest counter value seen
-	replayBitmap  atomic.Uint64 // bitmap of received counters relative to highestCounter
+	// Uses mutex to protect combined counter+bitmap updates atomically.
+	replayMu      sync.Mutex
+	replayCounter uint64 // highest counter value seen
+	replayBitmap  uint64 // bitmap of received counters relative to highestCounter
 }
 
 // NewCipher creates a new Cipher with the given key and direction.
@@ -190,50 +192,39 @@ func (c *Cipher) DecryptInto(dst, data []byte) ([]byte, error) {
 
 // checkReplayWindow verifies that the counter is not a replay and updates the window.
 // Returns true if the counter is valid (not a replay), false if it's a duplicate or too old.
-// Uses lock-free atomic CAS for concurrent access without mutex overhead.
+// Uses mutex to protect combined counter+bitmap updates atomically.
 func (c *Cipher) checkReplayWindow(ctr uint64) bool {
-	for {
-		highest := c.replayCounter.Load()
-		bitmap := c.replayBitmap.Load()
+	c.replayMu.Lock()
+	defer c.replayMu.Unlock()
 
-		if ctr > highest {
-			// New highest counter — shift bitmap and set bit 0
-			shift := ctr - highest
-			if !c.replayCounter.CompareAndSwap(highest, ctr) {
-				continue // CAS failed — retry
-			}
-			// CAS succeeded — now update bitmap with CAS loop to preserve concurrent writes
-			for {
-				curBitmap := c.replayBitmap.Load()
-				var newBitmap uint64
-				if shift < replayWindowSize {
-					newBitmap = (curBitmap << shift) | 1
-				} else {
-					newBitmap = 1
-				}
-				if c.replayBitmap.CompareAndSwap(curBitmap, newBitmap) {
-					break
-				}
-			}
-			return true
-		}
+	highest := c.replayCounter
+	bitmap := c.replayBitmap
 
-		diff := highest - ctr
-		if diff >= replayWindowSize {
-			return false // too old
+	if ctr > highest {
+		// New highest counter — shift bitmap and set bit 0
+		shift := ctr - highest
+		if shift < replayWindowSize {
+			c.replayBitmap = (bitmap << shift) | 1
+		} else {
+			c.replayBitmap = 1
 		}
-
-		bit := uint64(1) << diff
-		if bitmap&bit != 0 {
-			return false // duplicate
-		}
-
-		// Set bit and retry CAS
-		if c.replayBitmap.CompareAndSwap(bitmap, bitmap|bit) {
-			return true
-		}
-		// CAS failed — retry (bitmap changed, but counter didn't)
+		c.replayCounter = ctr
+		return true
 	}
+
+	diff := highest - ctr
+	if diff >= replayWindowSize {
+		return false // too old
+	}
+
+	bit := uint64(1) << diff
+	if bitmap&bit != 0 {
+		return false // duplicate
+	}
+
+	// Set bit
+	c.replayBitmap = bitmap | bit
+	return true
 }
 
 // IsEncrypted checks if data starts with the encryption version byte.
