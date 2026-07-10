@@ -288,8 +288,10 @@ func (t *Tunnel) probeNATAsync(conn *net.UDPConn, sAddr *net.UDPAddr) {
 func (t *Tunnel) startRelayLoops(ctx context.Context, conn *net.UDPConn, sAddr *net.UDPAddr) error {
 	runCtx, runCancel := context.WithCancel(ctx)
 	t.runCancel = runCancel
-	t.runDone = make(chan struct{})
-	t.runWg = sync.WaitGroup{}
+	runDone := make(chan struct{})
+	t.runDone = runDone
+	runWg := &sync.WaitGroup{}
+	t.runWg = runWg
 
 	var once sync.Once
 	onGoroutineExit := func(name string) {
@@ -300,9 +302,9 @@ func (t *Tunnel) startRelayLoops(ctx context.Context, conn *net.UDPConn, sAddr *
 	}
 
 	startGoroutine := func(name string, fn func()) {
-		t.runWg.Add(1)
+		runWg.Add(1)
 		go func() {
-			defer t.runWg.Done()
+			defer runWg.Done()
 			fn()
 			onGoroutineExit(name)
 		}()
@@ -323,13 +325,13 @@ func (t *Tunnel) startRelayLoops(ctx context.Context, conn *net.UDPConn, sAddr *
 	<-runCtx.Done()
 
 	go func() {
-		t.runWg.Wait()
-		close(t.runDone)
+		runWg.Wait()
+		close(runDone)
 	}()
 
 	timer := time.NewTimer(5 * time.Second)
 	select {
-	case <-t.runDone:
+	case <-runDone:
 		timer.Stop()
 	case <-timer.C:
 		log.Printf("[tunnel] old goroutines did not exit within 5s, proceeding anyway")

@@ -80,7 +80,7 @@ type Tunnel struct {
 	closeTUNOnce   sync.Once
 	runCancel      context.CancelFunc
 	runDone        chan struct{}
-	runWg          sync.WaitGroup
+	runWg          *sync.WaitGroup
 	holePunchWg    sync.WaitGroup
 
 	// Rate limiting & liveness

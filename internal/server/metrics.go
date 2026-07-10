@@ -130,11 +130,13 @@ func (s *Server) metricsLoop(ctx context.Context) {
 			room.mu.RLock()
 			playerCount += len(room.clients)
 			for _, c := range room.clients {
-				if c.RTT > 0 {
-					totalRTT += c.RTT
+				rtt := c.RTT
+				pingIdx := c.pingIdx
+				if rtt > 0 {
+					totalRTT += rtt
 					rttCount++
 				}
-				if c.pingIdx > 0 {
+				if pingIdx > 0 {
 					loss, _ := c.PingStats()
 					totalLoss += loss
 					lossCount++
