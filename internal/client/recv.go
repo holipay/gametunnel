@@ -71,6 +71,10 @@ func (t *Tunnel) receiveFromServer(ctx context.Context, conn *net.UDPConn, serve
 			msg, err = protocol.DecodeChecked(buf[:n])
 		}
 		if err != nil {
+			decodeErrs := t.sendErrors.Add(1)
+			if decodeErrs%100 == 0 {
+				log.Printf("[tunnel] decode error (%d total): %v", decodeErrs, err)
+			}
 			continue
 		}
 

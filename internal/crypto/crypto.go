@@ -47,9 +47,9 @@ const (
 
 // Direction tags to prevent nonce reuse across send/receive.
 var (
-	DirClientToServer = []byte{0x00, 0x00, 0x00, 0x01}
-	DirServerToClient = []byte{0x00, 0x00, 0x00, 0x02}
-	DirClientToClient = []byte{0x00, 0x00, 0x00, 0x03}
+	DirClientToServer = [4]byte{0x00, 0x00, 0x00, 0x01}
+	DirServerToClient = [4]byte{0x00, 0x00, 0x00, 0x02}
+	DirClientToClient = [4]byte{0x00, 0x00, 0x00, 0x03}
 )
 
 // Cipher performs ChaCha20-Poly1305 encryption/decryption.
@@ -69,22 +69,17 @@ type Cipher struct {
 // NewCipher creates a new Cipher with the given key and direction.
 // Key must be 32 bytes (from HKDF derivation). dirTag is 4 bytes.
 // Counter is initialized to a random value to prevent nonce reuse across reconnects.
-func NewCipher(key []byte, dirTag []byte) (*Cipher, error) {
+func NewCipher(key []byte, dirTag [4]byte) (*Cipher, error) {
 	if len(key) != KeySize {
 		return nil, fmt.Errorf("crypto: key must be %d bytes, got %d", KeySize, len(key))
-	}
-	if len(dirTag) != 4 {
-		return nil, fmt.Errorf("crypto: dirTag must be 4 bytes, got %d", len(dirTag))
 	}
 	aead, err := chacha20poly1305.New(key)
 	if err != nil {
 		return nil, fmt.Errorf("crypto: chacha20poly1305: %w", err)
 	}
-	var dt [4]byte
-	copy(dt[:], dirTag)
 	c := &Cipher{
 		aead:   aead,
-		dirTag: dt,
+		dirTag: dirTag,
 	}
 	if err := c.initCounter(); err != nil {
 		return nil, err
@@ -138,9 +133,12 @@ func (c *Cipher) Encrypt(plaintext []byte) []byte {
 // Returns the extended slice. Caller must ensure dst has enough capacity:
 // cap(dst) - len(dst) >= Overhead + len(plaintext).
 // This avoids allocation when the caller provides a pre-sized buffer.
-func (c *Cipher) EncryptTo(dst []byte, plaintext []byte) []byte {
+func (c *Cipher) EncryptTo(dst []byte, plaintext []byte) ([]byte, error) {
 	if plaintext == nil {
-		return dst
+		return dst, nil
+	}
+	if cap(dst)-len(dst) < Overhead+len(plaintext) {
+		return dst, fmt.Errorf("crypto: dst capacity insufficient: need %d, have %d", Overhead+len(plaintext), cap(dst)-len(dst))
 	}
 	var nonceBuf [NonceSize]byte
 	c.makeNonce(&nonceBuf)
@@ -148,7 +146,7 @@ func (c *Cipher) EncryptTo(dst []byte, plaintext []byte) []byte {
 	dst = append(dst, EncVersion)
 	dst = append(dst, nonceBuf[:]...)
 	dst = c.aead.Seal(dst, nonceBuf[:], plaintext, nil)
-	return dst
+	return dst, nil
 }
 
 // Decrypt decrypts data produced by Encrypt.

@@ -122,6 +122,8 @@ func (sq *sendQueue) sendBroadcast(data []byte, addr *net.UDPAddr) bool {
 // Uses batch draining: drains up to batchBufSize high-priority packets first,
 // then up to batchBufSize low-priority packets, reducing channel select overhead.
 func (sq *sendQueue) run(ctx context.Context) {
+	defer close(sq.drained)
+
 	var batch [batchBufSize]sendEntry
 	var deferredLow [batchBufSize]sendEntry // low-priority packets found during high-priority drain
 	deferredCount := 0
@@ -130,11 +132,9 @@ func (sq *sendQueue) run(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			sq.drain()
-			close(sq.drained)
 			return
 		case <-sq.stopCh:
 			sq.drain()
-			close(sq.drained)
 			return
 		case e := <-sq.broadcastCh:
 			// Broadcast relay: send immediately, drain batch

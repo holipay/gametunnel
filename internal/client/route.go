@@ -65,7 +65,12 @@ func buildEncryptedDataPacket(srcIP, dstIP net.IP, pkt []byte, cipher *crypto.Ci
 	dst := pool.PktBufGet(size)[:size]
 	off := buildDataHeader(dst, srcIP, dstIP, flags, token)
 	dst = dst[:off]
-	dst = cipher.EncryptTo(dst, pkt)
+	var err error
+	dst, err = cipher.EncryptTo(dst, pkt)
+	if err != nil {
+		pool.PktBufPut(dst)
+		return nil
+	}
 	return dst
 }
 
