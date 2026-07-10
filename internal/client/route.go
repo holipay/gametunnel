@@ -6,7 +6,6 @@ import (
 	"net"
 
 	"github.com/holipay/gametunnel/internal/crypto"
-	"github.com/holipay/gametunnel/internal/netkey"
 	"github.com/holipay/gametunnel/internal/netutil"
 	"github.com/holipay/gametunnel/internal/pool"
 	"github.com/holipay/gametunnel/internal/protocol"
@@ -84,7 +83,7 @@ func buildPacket(srcIP, dstIP net.IP, data []byte, cipher *crypto.Cipher, flags 
 
 // routePacket determines how to route an outgoing IP packet.
 func (t *Tunnel) routePacket(pkt []byte, srcIP, dstIP [4]byte) {
-	dstKey := netkey.IPKey(dstIP[:])
+	dstKey := netutil.IPKey(dstIP[:])
 
 	// Read peers from atomic snapshot — no lock needed for reads
 	peers := t.peerSnapshot.Load().(map[[16]byte]*Peer)
@@ -114,7 +113,7 @@ func (t *Tunnel) routePacket(pkt []byte, srcIP, dstIP [4]byte) {
 	srcNet := net.IP(srcIP[:])
 	dstNet := net.IP(dstIP[:])
 
-	if dstKey == serverIPKey || (cachedSubnet != nil && netutil.IsRelayTarget(dstNet, cachedSubnet)) {
+	if dstKey == serverIPKey || (cachedSubnet != nil && isRelayTarget(dstNet, cachedSubnet)) {
 		t.sendToServer(pkt, srcNet, dstNet, p2pCipher, token, serverAddr)
 		return
 	}
@@ -129,4 +128,34 @@ func (t *Tunnel) routePacket(pkt []byte, srcIP, dstIP [4]byte) {
 // sendToServer sends a packet via server relay.
 func (t *Tunnel) sendToServer(data []byte, srcIP, dstIP net.IP, cipher *crypto.Cipher, token [16]byte, serverAddr *net.UDPAddr) {
 	t.sendUDP(buildPacket(srcIP, dstIP, data, cipher, 0, token), serverAddr)
+}
+
+// isRelayTarget checks if an IP packet should be relayed through the server.
+// This includes broadcast, IPv4 multicast, and IPv6 multicast packets.
+func isRelayTarget(dst net.IP, subnet *net.IPNet) bool {
+	if ip4 := dst.To4(); ip4 != nil {
+		if ip4.Equal(net.IPv4bcast) {
+			return true
+		}
+		if subnet != nil {
+			subIP := subnet.IP.To4()
+			if subIP != nil {
+				var bcast [4]byte
+				for i := 0; i < 4; i++ {
+					bcast[i] = subIP[i] | ^subnet.Mask[i]
+				}
+				if ip4.Equal(bcast[:]) {
+					return true
+				}
+			}
+		}
+		if ip4[0] >= 224 && ip4[0] <= 239 {
+			return true
+		}
+		return false
+	}
+	if dst.To4() != nil {
+		return false
+	}
+	return dst.To16()[0] == 0xff
 }

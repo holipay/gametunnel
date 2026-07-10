@@ -1,12 +1,11 @@
 package server
 
 import (
-	"github.com/holipay/gametunnel/internal/netkey"
 	"net"
 	"sync"
 	"time"
 
-	"github.com/holipay/gametunnel/internal/ratelimit"
+	"github.com/holipay/gametunnel/internal/netutil"
 )
 
 const (
@@ -25,7 +24,7 @@ const (
 type BandwidthLimiter struct {
 	limit   int
 	burst   int
-	buckets sync.Map // rateKey → *ratelimit.TokenBucket
+	buckets sync.Map // rateKey → *tokenBucket
 }
 
 // NewBandwidthLimiter creates a new limiter.
@@ -58,14 +57,14 @@ func (bl *BandwidthLimiter) Allow(dest *net.UDPAddr, size int) bool {
 }
 
 // getBucket returns (or creates) the token bucket for a destination.
-func (bl *BandwidthLimiter) getBucket(dest *net.UDPAddr) *ratelimit.TokenBucket {
-	key := netkey.AddrToRateKey(dest)
+func (bl *BandwidthLimiter) getBucket(dest *net.UDPAddr) *tokenBucket {
+	key := netutil.AddrToRateKey(dest)
 	if v, ok := bl.buckets.Load(key); ok {
-		return v.(*ratelimit.TokenBucket)
+		return v.(*tokenBucket)
 	}
-	b := ratelimit.New(float64(bl.limit), float64(bl.burst))
+	b := newTokenBucket(float64(bl.limit), float64(bl.burst))
 	actual, _ := bl.buckets.LoadOrStore(key, b)
-	return actual.(*ratelimit.TokenBucket)
+	return actual.(*tokenBucket)
 }
 
 // Remove deletes the bucket for a client (call on disconnect to free memory).
@@ -73,7 +72,7 @@ func (bl *BandwidthLimiter) Remove(dest *net.UDPAddr) {
 	if !bl.Enabled() {
 		return
 	}
-	bl.buckets.Delete(netkey.AddrToRateKey(dest))
+	bl.buckets.Delete(netutil.AddrToRateKey(dest))
 }
 
 // Cleanup removes stale buckets that haven't been used in the given duration.
@@ -83,7 +82,7 @@ func (bl *BandwidthLimiter) Cleanup(stale time.Duration) {
 	}
 	cutoff := time.Now().Add(-stale)
 	bl.buckets.Range(func(key, value any) bool {
-		b := value.(*ratelimit.TokenBucket)
+		b := value.(*tokenBucket)
 		if b.LastUsed().Before(cutoff) {
 			bl.buckets.Delete(key)
 		}

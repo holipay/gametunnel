@@ -5,7 +5,7 @@ import (
 	"testing"
 
 	"github.com/holipay/gametunnel/internal/crypto"
-	"github.com/holipay/gametunnel/internal/netkey"
+	"github.com/holipay/gametunnel/internal/netutil"
 )
 
 func BenchmarkBuildDataPacket(b *testing.B) {
@@ -47,6 +47,6 @@ func BenchmarkIpKey(b *testing.B) {
 	ip := net.IPv4(10, 0, 0, 3).To4()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		netkey.IPKey(ip)
+		netutil.IPKey(ip)
 	}
 }

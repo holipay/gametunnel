@@ -1,7 +1,6 @@
 package server
 
 import (
-	"github.com/holipay/gametunnel/internal/netkey"
 	"log"
 	"net"
 	"time"
@@ -33,7 +32,7 @@ func (r *Room) relayLog(format string, args ...any) {
 // session token is validated before updating the mapping.
 // Must NOT be called with r.mu held. Returns the client on success, nil otherwise.
 func (r *Room) tryMigrateAddrMap(from *net.UDPAddr, srcIP net.IP, payload []byte) *Client {
-	vipKey := netkey.IPKey(srcIP)
+	vipKey := netutil.IPKey(srcIP)
 
 	r.mu.RLock()
 	c, ok := r.clients[vipKey]
@@ -69,7 +68,7 @@ func (r *Room) tryMigrateAddrMap(from *net.UDPAddr, srcIP net.IP, payload []byte
 	// Upgrade to write lock for addrMap update.
 	r.mu.Lock()
 	// Re-check — another goroutine may have handled the migration already.
-	if existing := r.addrMap[netkey.AddrToRateKey(from)]; existing != nil {
+	if existing := r.addrMap[netutil.AddrToRateKey(from)]; existing != nil {
 		r.mu.Unlock()
 		return existing
 	}
@@ -81,12 +80,12 @@ func (r *Room) tryMigrateAddrMap(from *net.UDPAddr, srcIP net.IP, payload []byte
 
 	// Remove old addrMap entry.
 	if c.PublicAddr != nil {
-		delete(r.addrMap, netkey.AddrToRateKey(c.PublicAddr))
+		delete(r.addrMap, netutil.AddrToRateKey(c.PublicAddr))
 	}
 	// Update client address.
 	c.PublicAddr = from
 	c.SetLastSeen(time.Now())
-	r.addrMap[netkey.AddrToRateKey(from)] = c
+	r.addrMap[netutil.AddrToRateKey(from)] = c
 	r.relayLog("[relay] addrMap migration: %s (%s) → %s", c.Username, c.VirtualIP, from)
 	r.mu.Unlock()
 	return c
@@ -112,7 +111,7 @@ func (r *Room) handleRelay(payload []byte, from *net.UDPAddr) {
 		dstIP[0], dstIP[1], dstIP[2], dstIP[3], len(payload))
 
 	r.mu.RLock()
-	sender := r.addrMap[netkey.AddrToRateKey(from)]
+	sender := r.addrMap[netutil.AddrToRateKey(from)]
 	if sender == nil {
 		// addrMap miss — NAT rebinding or source port change.
 		// Try to find client by VIP and validate session token.
@@ -172,7 +171,7 @@ func (r *Room) handleRelay(payload []byte, from *net.UDPAddr) {
 			}
 		}
 	} else {
-		if dst, ok := r.clients[netkey.IPKey4(dstIP)]; ok && dst.PublicAddr != nil {
+		if dst, ok := r.clients[netutil.IPKey4(dstIP)]; ok && dst.PublicAddr != nil {
 			targets = append(targets, dst.PublicAddr)
 		}
 	}
@@ -225,8 +224,8 @@ func (r *Room) handleHolePunch(payload []byte, from *net.UDPAddr) {
 	copy(dstIP[:], payload[:4])
 
 	r.mu.RLock()
-	src, ok1 := r.addrMap[netkey.AddrToRateKey(from)]
-	dst, ok2 := r.clients[netkey.IPKey4(dstIP)]
+	src, ok1 := r.addrMap[netutil.AddrToRateKey(from)]
+	dst, ok2 := r.clients[netutil.IPKey4(dstIP)]
 	var dstAddr *net.UDPAddr
 	if ok2 {
 		dstAddr = dst.PublicAddr
@@ -253,7 +252,7 @@ func (r *Room) handleHolePunch(payload []byte, from *net.UDPAddr) {
 
 func (r *Room) handlePeerRequest(from *net.UDPAddr) {
 	r.mu.RLock()
-	c := r.addrMap[netkey.AddrToRateKey(from)]
+	c := r.addrMap[netutil.AddrToRateKey(from)]
 	r.mu.RUnlock()
 	if c == nil {
 		return

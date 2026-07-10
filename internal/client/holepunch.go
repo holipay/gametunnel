@@ -1,7 +1,7 @@
 package client
 
 import (
-	"github.com/holipay/gametunnel/internal/netkey"
+	"github.com/holipay/gametunnel/internal/netutil"
 	"context"
 	"log"
 	"net"
@@ -85,7 +85,7 @@ func (t *Tunnel) startHolePunch(ctx context.Context, peerIP net.IP) {
 
 	// Load peer snapshot without lock (atomic.Value is safe for concurrent reads)
 	peers := t.peerSnapshot.Load().(map[[16]byte]*Peer)
-	peer, ok := peers[netkey.IPKey(peerIP)]
+	peer, ok := peers[netutil.IPKey(peerIP)]
 
 	t.mu.RLock()
 	if !ok || peer.PublicAddr.Load() == nil {
@@ -153,7 +153,7 @@ func (t *Tunnel) handleHolePunchReceived(ctx context.Context, payload []byte) {
 	peerIP := net.IP(append([]byte(nil), payload[:4]...))
 
 	peers := t.peerSnapshot.Load().(map[[16]byte]*Peer)
-	peer, ok := peers[netkey.IPKey(peerIP)]
+	peer, ok := peers[netutil.IPKey(peerIP)]
 
 	t.mu.RLock()
 	if !ok || peer.PublicAddr.Load() == nil {
@@ -179,7 +179,7 @@ func (t *Tunnel) handleHolePunchReceived(ctx context.Context, payload []byte) {
 // hasDirectPeerTraffic checks if we've received direct P2P traffic from a peer.
 func (t *Tunnel) hasDirectPeerTraffic(peerIP net.IP) bool {
 	peers := t.peerSnapshot.Load().(map[[16]byte]*Peer)
-	peer, ok := peers[netkey.IPKey(peerIP)]
+	peer, ok := peers[netutil.IPKey(peerIP)]
 	if !ok {
 		return false
 	}

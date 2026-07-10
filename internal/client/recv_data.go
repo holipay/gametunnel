@@ -8,7 +8,7 @@ import (
 
 	"github.com/holipay/gametunnel/internal/crypto"
 	"github.com/holipay/gametunnel/internal/i18n"
-	"github.com/holipay/gametunnel/internal/netkey"
+	"github.com/holipay/gametunnel/internal/netutil"
 	"github.com/holipay/gametunnel/internal/pool"
 	"github.com/holipay/gametunnel/internal/protocol"
 )
@@ -113,7 +113,7 @@ func (t *Tunnel) handleDirectData(ctx context.Context, from *net.UDPAddr, msg *p
 	p2pCipher := t.crypto.p2pCipher
 
 	// Validate srcIP is a known peer (anti-spoofing)
-	srcKey := netkey.IPKey(dp.SrcIP)
+	srcKey := netutil.IPKey(dp.SrcIP)
 	peers := t.peerSnapshot.Load().(map[[16]byte]*Peer)
 	peer, known := peers[srcKey]
 

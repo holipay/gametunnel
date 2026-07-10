@@ -1,7 +1,6 @@
 package client
 
 import (
-	"encoding/json"
 	"fmt"
 	"net"
 	"os"
@@ -10,7 +9,6 @@ import (
 	"strings"
 
 	"github.com/holipay/gametunnel/internal/i18n"
-	"github.com/holipay/gametunnel/internal/iniconfig"
 	"github.com/holipay/gametunnel/internal/paths"
 	"github.com/holipay/gametunnel/internal/tun"
 )
@@ -67,23 +65,11 @@ func PortableConfigPath() string {
 	return filepath.Join(paths.ExeDir(), "config.ini")
 }
 
-// LegacyConfigPath returns the path to the legacy JSON config file.
-func LegacyConfigPath() string {
-	return filepath.Join(paths.AppDataDir(), "GameTunnel", "config.json")
-}
-
 // LoadConfig loads the config from disk.
-// Priority: config.ini next to exe > AppData/config.json > defaults.
+// Priority: config.ini next to exe > defaults.
 func LoadConfig() *Config {
 	cfg := DefaultConfig()
-
-	// Try portable config.ini first
-	if loadINI(PortableConfigPath(), cfg) {
-		return cfg
-	}
-
-	// Fall back to legacy JSON config
-	loadJSON(LegacyConfigPath(), cfg)
+	loadINI(PortableConfigPath(), cfg)
 	return cfg
 }
 
@@ -184,7 +170,7 @@ func CreateDefaultConfig() string {
 
 // loadINI parses a key=value config file into cfg. Returns true if file exists.
 func loadINI(path string, cfg *Config) bool {
-	m, ok := iniconfig.ParseFile(path)
+	m, ok := parseFile(path)
 	if !ok {
 		return false
 	}
@@ -217,50 +203,48 @@ func loadINI(path string, cfg *Config) bool {
 	if v := m["pprof-addr"]; v != "" {
 		cfg.PprofAddr = v
 	}
-	cfg.ServerAddr = iniconfig.CombinePort(cfg.ServerAddr, m["port"])
+	cfg.ServerAddr = combinePort(cfg.ServerAddr, m["port"])
 	return true
 }
 
-// loadJSON parses the legacy AppData JSON config into cfg.
-func loadJSON(path string, cfg *Config) {
+// parseFile reads an INI file and returns key-value pairs.
+// Returns the map and true if the file exists, nil and false otherwise.
+// Lines starting with # are treated as comments.
+func parseFile(path string) (map[string]string, bool) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return
+		return nil, false
 	}
-	type raw struct {
-		ServerAddr   string `json:"server_addr"`
-		PlayerName   string `json:"player_name"`
-		RoomID       string `json:"room_id"`
-		RoomPassword string `json:"room_password,omitempty"`
-		AutoConnect  *bool  `json:"auto_connect,omitempty"`
-		Lang         string `json:"lang,omitempty"`
-		MTU          int    `json:"mtu,omitempty"`
-		LogFile      string `json:"log_file,omitempty"`
-		Verbose      *bool  `json:"verbose,omitempty"`
+	m := make(map[string]string)
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		parts := strings.SplitN(line, "=", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		key := strings.TrimSpace(parts[0])
+		value := strings.TrimSpace(parts[1])
+		m[key] = value
 	}
-	var r raw
-	if json.Unmarshal(data, &r) == nil {
-		if r.ServerAddr != "" {
-			cfg.ServerAddr = r.ServerAddr
-		}
-		if r.PlayerName != "" {
-			cfg.PlayerName = r.PlayerName
-		}
-		if r.RoomID != "" {
-			cfg.RoomID = r.RoomID
-		}
-		cfg.RoomPassword = r.RoomPassword
-		if r.Lang != "" {
-			cfg.Lang = r.Lang
-		}
-		if r.MTU >= MinMTU && r.MTU <= MaxMTU {
-			cfg.MTU = r.MTU
-		}
-		if r.LogFile != "" {
-			cfg.LogFile = r.LogFile
-		}
-		if r.Verbose != nil {
-			cfg.Verbose = *r.Verbose
-		}
+	return m, true
+}
+
+// combinePort combines an address with a port if the address doesn't already have one.
+// Handles IPv6 addresses with brackets correctly.
+func combinePort(addr, port string) string {
+	if addr == "" || port == "" {
+		return addr
 	}
+	if _, _, err := net.SplitHostPort(addr); err == nil {
+		// Already has a port
+		return addr
+	}
+	// Strip brackets from IPv6 to avoid double-bracketing
+	if strings.HasPrefix(addr, "[") && strings.HasSuffix(addr, "]") {
+		addr = addr[1 : len(addr)-1]
+	}
+	return net.JoinHostPort(addr, port)
 }

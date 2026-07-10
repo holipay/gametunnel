@@ -17,7 +17,6 @@ import (
 
 	"github.com/holipay/gametunnel/internal/netutil"
 	"github.com/holipay/gametunnel/internal/pool"
-	"github.com/holipay/gametunnel/internal/netkey"
 	"github.com/holipay/gametunnel/internal/protocol"
 	"github.com/holipay/gametunnel/internal/i18n"
 )
@@ -55,7 +54,7 @@ type Server struct {
 	// Multi-room support
 	multiRoom   bool
 	rooms       map[string]*Room    // roomID → Room
-	addrToRoom  map[netkey.RateKey]*Room   // client addr → Room (fast routing)
+	addrToRoom  map[netutil.RateKey]*Room   // client addr → Room (fast routing)
 	roomMu      sync.RWMutex        // protects rooms + addrToRoom
 	maxRooms    int                 // max auto-created rooms (0 = unlimited)
 
@@ -204,7 +203,7 @@ func New(cfg Config) (*Server, error) {
 		rateTick:     time.NewTicker(rateInterval),
 		metricsTS:    NewMetricsTimeSeries(),
 		rooms:        make(map[string]*Room),
-		addrToRoom:   make(map[netkey.RateKey]*Room),
+		addrToRoom:   make(map[netutil.RateKey]*Room),
 		multiRoom:    cfg.MultiRoom,
 		maxRooms:     maxRooms,
 		stateDir:     cfg.StateDir,
@@ -217,7 +216,7 @@ func New(cfg Config) (*Server, error) {
 	// Wire TCP bridge routing into the send queue (must happen after s is
 	// created so the closure can reference s.tcpBridges).
 	tcpWrite := func(addr *net.UDPAddr, data []byte) bool {
-		key := netkey.AddrToRateKey(addr)
+		key := netutil.AddrToRateKey(addr)
 		if b, ok := s.tcpBridges.Load(key); ok {
 			if bridge, ok := b.(*netutil.UDPTCPBridge); ok {
 				if err := bridge.Send(data); err != nil {
@@ -468,16 +467,14 @@ func (s *Server) handlePacket(data []byte, from *net.UDPAddr) {
 	// Use the cached encrypted flag (computed once in New()).
 	encrypted := s.cachedEncrypted
 
-	// Decode: use DecodeLenient for encrypted rooms to handle both
-	// CRC32-wrapped (from EncodeChecked clients) and bare (from Encode
-	// clients) packets. This strips CRC32 when present, preventing 4
-	// extra bytes from corrupting the relay payload written to TUN.
+	// Decode: for encrypted rooms, AEAD (ChaCha20-Poly1305) provides integrity,
+	// so CRC is optional. Use Decode (no CRC check) for encrypted packets.
 	// Pre-auth packets (Register, NATProbe, AuthResponse, Rebind) are always
-	// unencrypted — verify their CRC in the encrypted fast path.
+	// unencrypted — verify their CRC.
 	var msg *protocol.Message
 	if encrypted {
 		var err error
-		msg, err = protocol.DecodeLenient(data, true)
+		msg, err = protocol.Decode(data)
 		if msg == nil {
 			if err != nil && !errors.Is(err, protocol.ErrPacketTooShort) {
 				log.Printf("failed to decode encrypted packet: %v", err)
@@ -494,7 +491,7 @@ func (s *Server) handlePacket(data []byte, from *net.UDPAddr) {
 		}
 	} else {
 		var err error
-		msg, err = protocol.DecodeLenient(data, false)
+		msg, err = protocol.DecodeChecked(data)
 		if err != nil {
 			if errors.Is(err, protocol.ErrUnsupportedVersion) {
 				s.sendKickCode(from, protocol.KickCodeVersionMismatch, fmt.Sprintf(
@@ -523,7 +520,7 @@ func (s *Server) handlePacket(data []byte, from *net.UDPAddr) {
 // ── Multi-Room Packet Routing ──────────────────────────────────
 
 func (s *Server) handlePacketMultiRoom(msg *protocol.Message, from *net.UDPAddr) {
-	fromKey := netkey.AddrToRateKey(from)
+	fromKey := netutil.AddrToRateKey(from)
 
 	// For Register, we need to parse roomID first to find/create the room
 	if msg.Type == protocol.TypeRegister {
@@ -609,7 +606,7 @@ func (s *Server) handleRegisterMultiRoom(payload []byte, from *net.UDPAddr) {
 	s.roomMu.Unlock()
 
 	// Register client in the room
-	fromKey := netkey.AddrToRateKey(from)
+	fromKey := netutil.AddrToRateKey(from)
 
 	room.HandlePacket(protocol.TypeRegister, payload, from)
 
@@ -657,7 +654,7 @@ func (s *Server) tcpAcceptLoop(ctx context.Context) {
 		// address is distinct in rateKey/addrMap lookups.
 		// Create bridge first, then atomically register it to avoid TOCTOU.
 		var bridge *netutil.UDPTCPBridge
-		var key netkey.RateKey
+		var key netutil.RateKey
 		var port int
 		const maxPortAttempts = 65536
 		for attempt := 0; attempt < maxPortAttempts; attempt++ {
@@ -669,7 +666,7 @@ func (s *Server) tcpAcceptLoop(ctx context.Context) {
 				IP:   net.IPv4(127, 0, 0, 254),
 				Port: port,
 			}
-			key = netkey.AddrToRateKey(syntheticAddr)
+			key = netutil.AddrToRateKey(syntheticAddr)
 			candidate := netutil.NewUDPTCPBridge(tcp, syntheticAddr)
 			if _, loaded := s.tcpBridges.LoadOrStore(key, candidate); !loaded {
 				bridge = candidate

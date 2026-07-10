@@ -1,7 +1,7 @@
 package client
 
 import (
-	"github.com/holipay/gametunnel/internal/netkey"
+	"github.com/holipay/gametunnel/internal/netutil"
 	"bytes"
 	"context"
 	"net"
@@ -102,13 +102,13 @@ func TestIPv6_IPKeyConsistency(t *testing.T) {
 	// IPv4-mapped IPv6 addresses must produce the same key as raw IPv4.
 	ip4 := net.IPv4(192, 168, 1, 1).To4()
 	ip16 := net.IPv4(192, 168, 1, 1).To16() // ::ffff:192.168.1.1
-	if netkey.IPKey(ip4) != netkey.IPKey(ip16) {
+	if netutil.IPKey(ip4) != netutil.IPKey(ip16) {
 		t.Error("4-byte and IPv4-mapped IPv6 keys should be identical")
 	}
 
 	// Native IPv6 must produce a different key from any IPv4.
 	ip6 := net.ParseIP("2408:abcd::1")
-	if netkey.IPKey(ip6) == netkey.IPKey(ip4) {
+	if netutil.IPKey(ip6) == netutil.IPKey(ip4) {
 		t.Error("native IPv6 key should differ from IPv4 key")
 	}
 }
@@ -123,7 +123,7 @@ func TestIPv6_IPKeyRoundTrip(t *testing.T) {
 	}
 	seen := make(map[[16]byte]net.IP)
 	for _, ip := range ips {
-		key := netkey.IPKey(ip)
+		key := netutil.IPKey(ip)
 		if prev, ok := seen[key]; ok {
 			t.Errorf("collision: %s and %s produce same key", prev, ip)
 		}
@@ -149,7 +149,7 @@ func TestIPv6_PeerInfoWithIPv6PublicAddr(t *testing.T) {
 	tunnel.handlePeerInfo(context.Background(), payload.Marshal())
 
 	tunnel.mu.RLock()
-	peer, ok := tunnel.peers[netkey.IPKey(peerVIP)]
+	peer, ok := tunnel.peers[netutil.IPKey(peerVIP)]
 	tunnel.mu.RUnlock()
 	if !ok {
 		t.Fatal("peer not found after PeerInfo")
@@ -180,7 +180,7 @@ func TestIPv6_PeerInfoAddrChangeResetsDirectReach(t *testing.T) {
 	peer.PublicAddr.Store(oldAddr)
 	peer.DirectReach.Store(true)
 	tunnel.mu.Lock()
-	tunnel.peers[netkey.IPKey(peerVIP)] = peer
+	tunnel.peers[netutil.IPKey(peerVIP)] = peer
 	tunnel.mu.Unlock()
 
 	// Simulate address change via PeerInfo
@@ -192,7 +192,7 @@ func TestIPv6_PeerInfoAddrChangeResetsDirectReach(t *testing.T) {
 	tunnel.handlePeerInfo(context.Background(), payload.Marshal())
 
 	tunnel.mu.RLock()
-	updated := tunnel.peers[netkey.IPKey(peerVIP)]
+	updated := tunnel.peers[netutil.IPKey(peerVIP)]
 	tunnel.mu.RUnlock()
 
 	if updated.DirectReach.Load() {
@@ -217,7 +217,7 @@ func TestIPv6_StartHolePunch_SendsToIPv6Addr(t *testing.T) {
 	peer := &Peer{VirtualIP: peerVIP, Username: "v6peer"}
 	peer.PublicAddr.Store(peerAddr)
 	tunnel.mu.Lock()
-	tunnel.peers[netkey.IPKey(peerVIP)] = peer
+	tunnel.peers[netutil.IPKey(peerVIP)] = peer
 	tunnel.nat.cachedPunchPacket.Store(protocol.EncodeChecked(protocol.TypeHolePunch, net.IPv4(10, 10, 0, 2).To4()))
 	tunnel.mu.Unlock()
 
@@ -267,7 +267,7 @@ func TestIPv6_HandleDirectHolePunch_FromIPv6Addr(t *testing.T) {
 	peer := &Peer{VirtualIP: peerVIP, Username: "v6peer"}
 	peer.PublicAddr.Store(peerAddr)
 	tunnel.mu.Lock()
-	tunnel.peers[netkey.IPKey(peerVIP)] = peer
+	tunnel.peers[netutil.IPKey(peerVIP)] = peer
 	tunnel.nat.cachedPunchPacket.Store(protocol.EncodeChecked(protocol.TypeHolePunch, net.IPv4(10, 10, 0, 2).To4()))
 	tunnel.mu.Unlock()
 
@@ -282,7 +282,7 @@ func TestIPv6_HandleDirectHolePunch_FromIPv6Addr(t *testing.T) {
 
 	// DirectReach should be confirmed
 	tunnel.mu.RLock()
-	updated := tunnel.peers[netkey.IPKey(peerVIP)]
+	updated := tunnel.peers[netutil.IPKey(peerVIP)]
 	tunnel.mu.RUnlock()
 
 	if !updated.DirectReach.Load() {
@@ -300,7 +300,7 @@ func TestIPv6_HandleDirectHolePunch_SpoofedAddrRejected(t *testing.T) {
 	peer := &Peer{VirtualIP: peerVIP, Username: "v6peer"}
 	peer.PublicAddr.Store(correctAddr)
 	tunnel.mu.Lock()
-	tunnel.peers[netkey.IPKey(peerVIP)] = peer
+	tunnel.peers[netutil.IPKey(peerVIP)] = peer
 	tunnel.mu.Unlock()
 
 	// Simulate hole punch from spoofed address
@@ -314,7 +314,7 @@ func TestIPv6_HandleDirectHolePunch_SpoofedAddrRejected(t *testing.T) {
 
 	// DirectReach should NOT be confirmed
 	tunnel.mu.RLock()
-	updated := tunnel.peers[netkey.IPKey(peerVIP)]
+	updated := tunnel.peers[netutil.IPKey(peerVIP)]
 	tunnel.mu.RUnlock()
 
 	if updated.DirectReach.Load() {
@@ -336,7 +336,7 @@ func TestIPv6_HandleDirectData_FromIPv6Peer(t *testing.T) {
 	peer := &Peer{VirtualIP: peerVIP, Username: "v6peer"}
 	peer.PublicAddr.Store(peerAddr)
 	tunnel.mu.Lock()
-	tunnel.peers[netkey.IPKey(peerVIP)] = peer
+	tunnel.peers[netutil.IPKey(peerVIP)] = peer
 	tunnel.mu.Unlock()
 
 	// Build a data packet from the peer
@@ -364,7 +364,7 @@ func TestIPv6_HandleDirectData_FromIPv6Peer(t *testing.T) {
 
 	// DirectReach should be confirmed
 	tunnel.mu.RLock()
-	updated := tunnel.peers[netkey.IPKey(peerVIP)]
+	updated := tunnel.peers[netutil.IPKey(peerVIP)]
 	tunnel.mu.RUnlock()
 	if !updated.DirectReach.Load() {
 		t.Error("DirectReach should be true after receiving direct data from IPv6 peer")
@@ -384,7 +384,7 @@ func TestIPv6_HandleDirectData_WrongIPv6AddrRejected(t *testing.T) {
 	peer := &Peer{VirtualIP: peerVIP, Username: "v6peer"}
 	peer.PublicAddr.Store(correctAddr)
 	tunnel.mu.Lock()
-	tunnel.peers[netkey.IPKey(peerVIP)] = peer
+	tunnel.peers[netutil.IPKey(peerVIP)] = peer
 	tunnel.mu.Unlock()
 
 	dp := &protocol.DataPayload{
@@ -400,7 +400,7 @@ func TestIPv6_HandleDirectData_WrongIPv6AddrRejected(t *testing.T) {
 	if len(mock.writeBuf) != 0 {
 		t.Error("data from wrong IPv6 addr should be rejected")
 	}
-	if tunnel.peers[netkey.IPKey(peerVIP)].DirectReach.Load() {
+	if tunnel.peers[netutil.IPKey(peerVIP)].DirectReach.Load() {
 		t.Error("DirectReach should not be set for wrong address")
 	}
 }
@@ -418,7 +418,7 @@ func TestIPv6_HandleDirectData_WrongPortRejected(t *testing.T) {
 	peer := &Peer{VirtualIP: peerVIP, Username: "v6peer"}
 	peer.PublicAddr.Store(correctAddr)
 	tunnel.mu.Lock()
-	tunnel.peers[netkey.IPKey(peerVIP)] = peer
+	tunnel.peers[netutil.IPKey(peerVIP)] = peer
 	tunnel.mu.Unlock()
 
 	dp := &protocol.DataPayload{
@@ -454,7 +454,7 @@ func TestIPv6_RoutePacket_P2PDirectWithIPv6Peer(t *testing.T) {
 	peer.DirectReach.Store(true)
 
 	tunnel.mu.Lock()
-	tunnel.peers[netkey.IPKey(peerVIP)] = peer
+	tunnel.peers[netutil.IPKey(peerVIP)] = peer
 	tunnel.mu.Unlock()
 
 	// Build a fake IPv4 packet
@@ -495,7 +495,7 @@ func TestIPv6_RoutePacket_FallbackToRelayWithIPv6Server(t *testing.T) {
 	peer := &Peer{VirtualIP: peerVIP, Username: "v6peer"}
 	peer.PublicAddr.Store(&net.UDPAddr{IP: net.IPv6loopback, Port: 5555})
 	tunnel.mu.Lock()
-	tunnel.peers[netkey.IPKey(peerVIP)] = peer
+	tunnel.peers[netutil.IPKey(peerVIP)] = peer
 	tunnel.mu.Unlock()
 
 	pkt := []byte{0x45, 0, 0, 20, 0, 0, 0, 0, 64, 17, 0, 0, 10, 10, 0, 2, 10, 10, 0, 3}
@@ -555,7 +555,7 @@ func TestIPv6_HolePunchFlow_EndToEnd(t *testing.T) {
 
 	// Verify peer was added
 	tunnel.mu.RLock()
-	peer, ok := tunnel.peers[netkey.IPKey(peerVIP)]
+	peer, ok := tunnel.peers[netutil.IPKey(peerVIP)]
 	tunnel.mu.RUnlock()
 	if !ok {
 		t.Fatal("peer not found after PeerInfo")
@@ -599,7 +599,7 @@ func TestIPv6_HolePunchFlow_EndToEnd(t *testing.T) {
 
 	// Check DirectReach
 	tunnel.mu.RLock()
-	peer2, ok2 := tunnel.peers[netkey.IPKey(peerVIP)]
+	peer2, ok2 := tunnel.peers[netutil.IPKey(peerVIP)]
 	tunnel.mu.RUnlock()
 	if !ok2 {
 		t.Fatal("peer disappeared")
@@ -802,7 +802,7 @@ func TestIPv6_P2PKeepalive_SendsToIPv6Peer(t *testing.T) {
 	peer.DirectReach.Store(true)
 
 	tunnel.mu.Lock()
-	tunnel.peers[netkey.IPKey(peerVIP)] = peer
+	tunnel.peers[netutil.IPKey(peerVIP)] = peer
 	tunnel.nat.cachedPunchPacket.Store(protocol.EncodeChecked(protocol.TypeHolePunch, net.IPv4(10, 10, 0, 2).To4()))
 	tunnel.mu.Unlock()
 
@@ -834,7 +834,7 @@ func TestIPv6_P2PKeepalive_SkipsNonDirectPeers(t *testing.T) {
 	// DirectReach is false — keepalive should NOT be sent
 
 	tunnel.mu.Lock()
-	tunnel.peers[netkey.IPKey(peerVIP)] = peer
+	tunnel.peers[netutil.IPKey(peerVIP)] = peer
 	tunnel.nat.cachedPunchPacket.Store(protocol.EncodeChecked(protocol.TypeHolePunch, net.IPv4(10, 10, 0, 2).To4()))
 	tunnel.mu.Unlock()
 
@@ -861,7 +861,7 @@ func TestIPv6_RetryFailedHolePunches_IncludesIPv6Peers(t *testing.T) {
 	// DirectReach is false — should be retried
 
 	tunnel.mu.Lock()
-	tunnel.peers[netkey.IPKey(peerVIP)] = peer
+	tunnel.peers[netutil.IPKey(peerVIP)] = peer
 	tunnel.nat.cachedPunchPacket.Store(protocol.EncodeChecked(protocol.TypeHolePunch, net.IPv4(10, 10, 0, 2).To4()))
 	tunnel.mu.Unlock()
 
@@ -910,8 +910,8 @@ func TestIPv6_Status_WithIPv6Peers(t *testing.T) {
 	peer2 := &Peer{VirtualIP: net.IPv4(10, 10, 0, 4).To4(), Username: "relay_v6"}
 
 	tunnel.mu.Lock()
-	tunnel.peers[netkey.IPKey(peer1.VirtualIP)] = peer1
-	tunnel.peers[netkey.IPKey(peer2.VirtualIP)] = peer2
+	tunnel.peers[netutil.IPKey(peer1.VirtualIP)] = peer1
+	tunnel.peers[netutil.IPKey(peer2.VirtualIP)] = peer2
 	tunnel.mu.Unlock()
 
 	status := tunnel.Status()
@@ -942,7 +942,7 @@ func TestIPv6_IPComparison_IPv4Mapped(t *testing.T) {
 	}
 
 	// But ipKey must also normalize
-	if netkey.IPKey(ip4) != netkey.IPKey(ip16) {
+	if netutil.IPKey(ip4) != netutil.IPKey(ip16) {
 		t.Error("ipKey should normalize IPv4 and IPv4-mapped to same key")
 	}
 }
@@ -958,10 +958,10 @@ func TestIPv6_IPComparison_NativeIPv6(t *testing.T) {
 	if ip1.Equal(ip3) {
 		t.Error("different IPv6 addresses should not be equal")
 	}
-	if netkey.IPKey(ip1) != netkey.IPKey(ip2) {
+	if netutil.IPKey(ip1) != netutil.IPKey(ip2) {
 		t.Error("same IPv6 should produce same key")
 	}
-	if netkey.IPKey(ip1) == netkey.IPKey(ip3) {
+	if netutil.IPKey(ip1) == netutil.IPKey(ip3) {
 		t.Error("different IPv6 should produce different keys")
 	}
 }
@@ -977,7 +977,7 @@ func TestIPv6_HandleHolePunchReceived_ServerRelayed(t *testing.T) {
 	peer := &Peer{VirtualIP: peerVIP, Username: "v6peer"}
 	peer.PublicAddr.Store(peerAddr)
 	tunnel.mu.Lock()
-	tunnel.peers[netkey.IPKey(peerVIP)] = peer
+	tunnel.peers[netutil.IPKey(peerVIP)] = peer
 	tunnel.nat.cachedPunchPacket.Store(protocol.EncodeChecked(protocol.TypeHolePunch, net.IPv4(10, 10, 0, 2).To4()))
 	tunnel.mu.Unlock()
 
@@ -990,7 +990,7 @@ func TestIPv6_HandleHolePunchReceived_ServerRelayed(t *testing.T) {
 
 	// Verify peer still exists
 	tunnel.mu.RLock()
-	_, ok := tunnel.peers[netkey.IPKey(peerVIP)]
+	_, ok := tunnel.peers[netutil.IPKey(peerVIP)]
 	tunnel.mu.RUnlock()
 	if !ok {
 		t.Error("peer should still exist after server-relayed hole punch")
@@ -1070,7 +1070,7 @@ func TestIPv6_IPKey_GlobalUnicast(t *testing.T) {
 		t.Fatal("failed to parse IPv6 address")
 	}
 
-	key := netkey.IPKey(ip)
+	key := netutil.IPKey(ip)
 	// Verify it's a valid 16-byte key with the correct first bytes
 	if key[0] != 0x24 || key[1] != 0x0d {
 		t.Errorf("key[0:2]: got %x %x, want 24 0d", key[0], key[1])
@@ -1078,7 +1078,7 @@ func TestIPv6_IPKey_GlobalUnicast(t *testing.T) {
 
 	// Same address should produce same key
 	ip2 := net.ParseIP("240d:c000:f07f:8e00:3ab0:2dee:7c06:0")
-	if netkey.IPKey(ip) != netkey.IPKey(ip2) {
+	if netutil.IPKey(ip) != netutil.IPKey(ip2) {
 		t.Error("same address should produce same key")
 	}
 }
@@ -1121,7 +1121,7 @@ func TestIPv6_PeerInfo_GlobalUnicastAddr(t *testing.T) {
 	tunnel.handlePeerInfo(context.Background(), data)
 
 	tunnel.mu.RLock()
-	peer, ok := tunnel.peers[netkey.IPKey(peerVIP)]
+	peer, ok := tunnel.peers[netutil.IPKey(peerVIP)]
 	tunnel.mu.RUnlock()
 	if !ok {
 		t.Fatal("peer not found")
@@ -1146,7 +1146,7 @@ func TestIPv6_HolePunch_GlobalUnicastPeer(t *testing.T) {
 	tunnel.mu.Lock()
 	gPeer := &Peer{VirtualIP: peerVIP, Username: "real_peer"}
 	gPeer.PublicAddr.Store(peerAddr)
-	tunnel.peers[netkey.IPKey(peerVIP)] = gPeer
+	tunnel.peers[netutil.IPKey(peerVIP)] = gPeer
 	tunnel.nat.cachedPunchPacket.Store(protocol.EncodeChecked(protocol.TypeHolePunch, tunnel.session.virtualIP.To4()))
 	tunnel.mu.Unlock()
 
@@ -1203,7 +1203,7 @@ func TestIPv6_HolePunch_GlobalUnicastPeer(t *testing.T) {
 
 	// Verify DirectReach confirmed
 	tunnel.mu.RLock()
-	peer := tunnel.peers[netkey.IPKey(peerVIP)]
+	peer := tunnel.peers[netutil.IPKey(peerVIP)]
 	tunnel.mu.RUnlock()
 	if !peer.DirectReach.Load() {
 		t.Error("DirectReach should be true after receiving data from IPv6 peer")

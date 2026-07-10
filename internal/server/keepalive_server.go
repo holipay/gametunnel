@@ -1,7 +1,7 @@
 package server
 
 import (
-	"github.com/holipay/gametunnel/internal/netkey"
+	"github.com/holipay/gametunnel/internal/netutil"
 	"context"
 	"crypto/hmac"
 	"log"
@@ -50,7 +50,7 @@ func (s *Server) cleanupStaleClients() {
 // cleanupStaleAddrToRoom removes addrToRoom entries for clients that
 // disconnected (room removed from addrMap but addrToRoom was not updated).
 func (s *Server) cleanupStaleAddrToRoom() {
-	var stale []netkey.RateKey
+	var stale []netutil.RateKey
 
 	// Single pass: scan addrToRoom and check each entry against room.addrMap.
 	s.roomMu.RLock()
@@ -150,7 +150,7 @@ func (s *Server) handleRebind(payload []byte, from *net.UDPAddr) {
 		return
 	}
 
-	vipKey := netkey.IPKey(req.VirtualIP)
+	vipKey := netutil.IPKey(req.VirtualIP)
 
 	// Search all rooms for the client with this virtual IP
 	var foundRoom *Room
@@ -210,7 +210,7 @@ func (s *Server) handleRebind(payload []byte, from *net.UDPAddr) {
 	}
 
 	// Migration valid — update the client's address
-	newKey := netkey.AddrToRateKey(from)
+	newKey := netutil.AddrToRateKey(from)
 
 	foundRoom.mu.Lock()
 	// Re-check that the client is still present (TOCTOU guard).
@@ -222,7 +222,7 @@ func (s *Server) handleRebind(payload []byte, from *net.UDPAddr) {
 	// Remove old addrMap entry if client had a prior address (may be nil
 	// for restored/persisted clients that never completed registration).
 	if clientPublicAddr != nil {
-		delete(foundRoom.addrMap, netkey.AddrToRateKey(clientPublicAddr))
+		delete(foundRoom.addrMap, netutil.AddrToRateKey(clientPublicAddr))
 	}
 	// Update client address
 	foundClient.PublicAddr = from
@@ -235,7 +235,7 @@ func (s *Server) handleRebind(payload []byte, from *net.UDPAddr) {
 	if s.multiRoom {
 		s.roomMu.Lock()
 		if clientPublicAddr != nil {
-			delete(s.addrToRoom, netkey.AddrToRateKey(clientPublicAddr))
+			delete(s.addrToRoom, netutil.AddrToRateKey(clientPublicAddr))
 		}
 		s.addrToRoom[newKey] = foundRoom
 		s.roomMu.Unlock()

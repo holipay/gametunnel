@@ -2,7 +2,7 @@ package client
 
 import (
 	"github.com/holipay/gametunnel/internal/crypto"
-	"github.com/holipay/gametunnel/internal/netkey"
+	"github.com/holipay/gametunnel/internal/netutil"
 	"bytes"
 	"context"
 	"net"
@@ -16,7 +16,7 @@ import (
 
 // ipKeyPtr is a test helper that returns a pointer to a [16]byte IP key.
 func ipKeyPtr(ip net.IP) *[16]byte {
-	k := netkey.IPKey(ip)
+	k := netutil.IPKey(ip)
 	return &k
 }
 
@@ -124,7 +124,7 @@ func readUDPWithTimeout(conn *net.UDPConn, timeout time.Duration) []byte {
 
 func TestIpKey_NormalIPv4(t *testing.T) {
 	ip := net.IPv4(192, 168, 1, 1).To4()
-	key := netkey.IPKey(ip)
+	key := netutil.IPKey(ip)
 	// IPv4 is mapped to v4-in-v6 format
 	expected := [16]byte{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff, 192, 168, 1, 1}
 	if key != expected {
@@ -135,7 +135,7 @@ func TestIpKey_NormalIPv4(t *testing.T) {
 func TestIpKey_IPv4Mapped(t *testing.T) {
 	// 16-byte IPv4-mapped address: ::ffff:192.168.1.1
 	ip16 := net.IP{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff, 192, 168, 1, 1}
-	key := netkey.IPKey(ip16)
+	key := netutil.IPKey(ip16)
 	expected := [16]byte{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff, 192, 168, 1, 1}
 	if key != expected {
 		t.Errorf("expected %v, got %v", expected, key)
@@ -146,7 +146,7 @@ func TestIpKey_Consistency(t *testing.T) {
 	// Both 4-byte and 16-byte representations of the same IP must produce the same key
 	ip4 := net.IPv4(10, 0, 0, 1).To4()
 	ip16 := net.IP{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff, 10, 0, 0, 1}
-	if netkey.IPKey(ip4) != netkey.IPKey(ip16) {
+	if netutil.IPKey(ip4) != netutil.IPKey(ip16) {
 		t.Error("4-byte and 16-byte IPv4-mapped should produce the same key")
 	}
 }
@@ -251,7 +251,7 @@ func TestRoutePacket_PeerP2P(t *testing.T) {
 	peer.PublicAddr.Store(peerAddr)
 	peer.DirectReach.Store(true)
 	tunnel.peers = map[[16]byte]*Peer{
-		netkey.IPKey(peerIP): peer,
+		netutil.IPKey(peerIP): peer,
 	}
 	tunnel.peerSnapshot.Store(tunnel.peers)
 
@@ -313,7 +313,7 @@ func TestRoutePacket_PeerNilAddr(t *testing.T) {
 		Username:   "peer1",
 	}
 	tunnel.peers = map[[16]byte]*Peer{
-		netkey.IPKey(peerIP): peer,
+		netutil.IPKey(peerIP): peer,
 	}
 	tunnel.peerSnapshot.Store(tunnel.peers)
 
@@ -406,7 +406,7 @@ func TestHandlePeerInfo_NewPlayer(t *testing.T) {
 	tunnel.handlePeerInfo(context.Background(), payload.Marshal())
 
 	tunnel.mu.RLock()
-	peer, ok := tunnel.peers[netkey.IPKey(peerIP)]
+	peer, ok := tunnel.peers[netutil.IPKey(peerIP)]
 	tunnel.mu.RUnlock()
 
 	if !ok {
@@ -440,7 +440,7 @@ func TestHandlePeerInfo_UpdatePlayer(t *testing.T) {
 	}
 	existingPeer.PublicAddr.Store(oldAddr)
 	tunnel.peers = map[[16]byte]*Peer{
-		netkey.IPKey(peerIP): existingPeer,
+		netutil.IPKey(peerIP): existingPeer,
 	}
 	tunnel.peerSnapshot.Store(tunnel.peers)
 
@@ -457,7 +457,7 @@ func TestHandlePeerInfo_UpdatePlayer(t *testing.T) {
 	tunnel.handlePeerInfo(context.Background(), payload.Marshal())
 
 	tunnel.mu.RLock()
-	peer, ok := tunnel.peers[netkey.IPKey(peerIP)]
+	peer, ok := tunnel.peers[netutil.IPKey(peerIP)]
 	tunnel.mu.RUnlock()
 
 	if !ok {
@@ -489,8 +489,8 @@ func TestHandlePeerInfo_PlayerLeaving(t *testing.T) {
 	}
 	player2.PublicAddr.Store(&net.UDPAddr{IP: net.IPv4(5, 6, 7, 8), Port: 2000})
 	tunnel.peers = map[[16]byte]*Peer{
-		netkey.IPKey(peer1IP): player1,
-		netkey.IPKey(peer2IP): player2,
+		netutil.IPKey(peer1IP): player1,
+		netutil.IPKey(peer2IP): player2,
 	}
 	tunnel.peerSnapshot.Store(tunnel.peers)
 
@@ -508,8 +508,8 @@ func TestHandlePeerInfo_PlayerLeaving(t *testing.T) {
 	tunnel.handlePeerInfo(context.Background(), payload.Marshal())
 
 	tunnel.mu.RLock()
-	_, hasPeer1 := tunnel.peers[netkey.IPKey(peer1IP)]
-	_, hasPeer2 := tunnel.peers[netkey.IPKey(peer2IP)]
+	_, hasPeer1 := tunnel.peers[netutil.IPKey(peer1IP)]
+	_, hasPeer2 := tunnel.peers[netutil.IPKey(peer2IP)]
 	tunnel.mu.RUnlock()
 
 	if hasPeer1 {
@@ -530,7 +530,7 @@ func TestHandlePeerInfo_EmptyList(t *testing.T) {
 	}
 	player.PublicAddr.Store(&net.UDPAddr{IP: net.IPv4(1, 2, 3, 4), Port: 1000})
 	tunnel.peers = map[[16]byte]*Peer{
-		netkey.IPKey(peerIP): player,
+		netutil.IPKey(peerIP): player,
 	}
 	tunnel.peerSnapshot.Store(tunnel.peers)
 
@@ -713,136 +713,6 @@ func TestLoadINI_ServerWithPortIgnoresSeparatePort(t *testing.T) {
 	}
 }
 
-func TestLoadJSON(t *testing.T) {
-	tmpDir := t.TempDir()
-	jsonPath := filepath.Join(tmpDir, "config.json")
-
-	content := `{
-		"server_addr": "5.6.7.8:4700",
-		"player_name": "JSONPlayer",
-		"room_id": "jsonroom",
-		"room_password": "jsonpass"
-	}`
-	if err := os.WriteFile(jsonPath, []byte(content), 0644); err != nil {
-		t.Fatalf("failed to write JSON file: %v", err)
-	}
-
-	cfg := &Config{PlayerName: "default", RoomID: "default"}
-	loadJSON(jsonPath, cfg)
-
-	if cfg.ServerAddr != "5.6.7.8:4700" {
-		t.Errorf("expected ServerAddr '5.6.7.8:4700', got '%s'", cfg.ServerAddr)
-	}
-	if cfg.PlayerName != "JSONPlayer" {
-		t.Errorf("expected PlayerName 'JSONPlayer', got '%s'", cfg.PlayerName)
-	}
-	if cfg.RoomID != "jsonroom" {
-		t.Errorf("expected RoomID 'jsonroom', got '%s'", cfg.RoomID)
-	}
-	if cfg.RoomPassword != "jsonpass" {
-		t.Errorf("expected RoomPassword 'jsonpass', got '%s'", cfg.RoomPassword)
-	}
-}
-
-func TestLoadJSON_NotFound(t *testing.T) {
-	cfg := &Config{PlayerName: "default", RoomID: "default"}
-	loadJSON("/nonexistent/path/config.json", cfg)
-	// Should not panic; cfg should remain unchanged
-	if cfg.PlayerName != "default" {
-		t.Errorf("expected PlayerName 'default', got '%s'", cfg.PlayerName)
-	}
-	if cfg.RoomID != "default" {
-		t.Errorf("expected RoomID 'default', got '%s'", cfg.RoomID)
-	}
-}
-
-func TestLoadJSON_EmptyFieldsPreserveDefaults(t *testing.T) {
-	tmpDir := t.TempDir()
-	jsonPath := filepath.Join(tmpDir, "config.json")
-
-	content := `{
-		"server_addr": "5.6.7.8:4700",
-		"player_name": "",
-		"room_id": ""
-	}`
-	if err := os.WriteFile(jsonPath, []byte(content), 0644); err != nil {
-		t.Fatalf("failed to write JSON file: %v", err)
-	}
-
-	cfg := &Config{PlayerName: "defaultName", RoomID: "defaultRoom"}
-	loadJSON(jsonPath, cfg)
-
-	// Empty fields should not overwrite defaults (except password which can be empty)
-	if cfg.PlayerName != "defaultName" {
-		t.Errorf("expected PlayerName 'defaultName', got '%s'", cfg.PlayerName)
-	}
-	if cfg.RoomID != "defaultRoom" {
-		t.Errorf("expected RoomID 'defaultRoom', got '%s'", cfg.RoomID)
-	}
-}
-
-func TestLoadConfig_INITakesPrecedence(t *testing.T) {
-	// Simulate the LoadConfig priority logic: config.ini > config.json
-	tmpDir := t.TempDir()
-
-	iniPath := filepath.Join(tmpDir, "config.ini")
-	jsonPath := filepath.Join(tmpDir, "config.json")
-
-	iniContent := "server=ini-server:4700\nname=INIPlayer\nroom=iniroom\n"
-	jsonContent := `{"server_addr":"json-server:4700","player_name":"JSONPlayer","room_id":"jsonroom"}`
-
-	if err := os.WriteFile(iniPath, []byte(iniContent), 0644); err != nil {
-		t.Fatalf("failed to write INI file: %v", err)
-	}
-	if err := os.WriteFile(jsonPath, []byte(jsonContent), 0644); err != nil {
-		t.Fatalf("failed to write JSON file: %v", err)
-	}
-
-	cfg := &Config{PlayerName: "default", RoomID: "default"}
-	if !loadINI(iniPath, cfg) {
-		loadJSON(jsonPath, cfg)
-	}
-
-	// INI values should win
-	if cfg.ServerAddr != "ini-server:4700" {
-		t.Errorf("expected ServerAddr from INI 'ini-server:4700', got '%s'", cfg.ServerAddr)
-	}
-	if cfg.PlayerName != "INIPlayer" {
-		t.Errorf("expected PlayerName from INI 'INIPlayer', got '%s'", cfg.PlayerName)
-	}
-	if cfg.RoomID != "iniroom" {
-		t.Errorf("expected RoomID from INI 'iniroom', got '%s'", cfg.RoomID)
-	}
-}
-
-func TestLoadConfig_FallbackToJSON(t *testing.T) {
-	// When INI doesn't exist, JSON should be used
-	tmpDir := t.TempDir()
-
-	iniPath := filepath.Join(tmpDir, "nonexistent.ini")
-	jsonPath := filepath.Join(tmpDir, "config.json")
-
-	jsonContent := `{"server_addr":"json-server:4700","player_name":"JSONPlayer","room_id":"jsonroom"}`
-	if err := os.WriteFile(jsonPath, []byte(jsonContent), 0644); err != nil {
-		t.Fatalf("failed to write JSON file: %v", err)
-	}
-
-	cfg := &Config{PlayerName: "default", RoomID: "default"}
-	if !loadINI(iniPath, cfg) {
-		loadJSON(jsonPath, cfg)
-	}
-
-	if cfg.ServerAddr != "json-server:4700" {
-		t.Errorf("expected ServerAddr from JSON 'json-server:4700', got '%s'", cfg.ServerAddr)
-	}
-	if cfg.PlayerName != "JSONPlayer" {
-		t.Errorf("expected PlayerName from JSON 'JSONPlayer', got '%s'", cfg.PlayerName)
-	}
-	if cfg.RoomID != "jsonroom" {
-		t.Errorf("expected RoomID from JSON 'jsonroom', got '%s'", cfg.RoomID)
-	}
-}
-
 // ── Bonus: handleDataFromServer with mock TunDevice ────────────
 
 func TestHandleDataFromServer(t *testing.T) {
@@ -909,7 +779,7 @@ func TestHandleDataFromServer_NilTunDev(t *testing.T) {
 
 func TestIpKey_NativeIPv6(t *testing.T) {
 	ip := net.ParseIP("2408:abcd::1")
-	key := netkey.IPKey(ip)
+	key := netutil.IPKey(ip)
 	expected := [16]byte{0x24, 0x08, 0xab, 0xcd, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1}
 	if key != expected {
 		t.Errorf("expected %v, got %v", expected, key)
@@ -918,7 +788,7 @@ func TestIpKey_NativeIPv6(t *testing.T) {
 
 func TestIpKey_IPv6Loopback(t *testing.T) {
 	ip := net.IPv6loopback
-	key := netkey.IPKey(ip)
+	key := netutil.IPKey(ip)
 	expected := [16]byte{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1}
 	if key != expected {
 		t.Errorf("expected %v, got %v", expected, key)
@@ -963,7 +833,7 @@ func TestHandlePeerInfo_IPv6PublicAddr(t *testing.T) {
 	tunnel.handlePeerInfo(context.Background(), payload.Marshal())
 
 	tunnel.mu.RLock()
-	peer, ok := tunnel.peers[netkey.IPKey(peerIP)]
+	peer, ok := tunnel.peers[netutil.IPKey(peerIP)]
 	tunnel.mu.RUnlock()
 
 	if !ok {
@@ -1018,7 +888,7 @@ func TestHandleHolePunchReceived(t *testing.T) {
 	tunnel.mu.Lock()
 	hpPeer := &Peer{VirtualIP: peerIP, Username: "peer1"}
 	hpPeer.PublicAddr.Store(peerAddr)
-	tunnel.peers[netkey.IPKey(peerIP)] = hpPeer
+	tunnel.peers[netutil.IPKey(peerIP)] = hpPeer
 	tunnel.peerSnapshot.Store(tunnel.peers)
 	tunnel.mu.Unlock()
 
@@ -1031,7 +901,7 @@ func TestHandleHolePunchReceived(t *testing.T) {
 
 	// Verify peer still exists
 	tunnel.mu.RLock()
-	_, ok := tunnel.peers[netkey.IPKey(peerIP)]
+	_, ok := tunnel.peers[netutil.IPKey(peerIP)]
 	tunnel.mu.RUnlock()
 	if !ok {
 		t.Error("peer should still exist after hole punch")
@@ -1066,14 +936,14 @@ func TestCleanStalePeers(t *testing.T) {
 	peer.lastSeen.Store(oldTime.UnixNano())
 
 	tunnel.mu.Lock()
-	tunnel.peers[netkey.IPKey(peerIP)] = peer
+	tunnel.peers[netutil.IPKey(peerIP)] = peer
 	tunnel.peerSnapshot.Store(tunnel.peers)
 	tunnel.mu.Unlock()
 
 	tunnel.cleanStalePeers()
 
 	tunnel.mu.RLock()
-	_, ok := tunnel.peers[netkey.IPKey(peerIP)]
+	_, ok := tunnel.peers[netutil.IPKey(peerIP)]
 	tunnel.mu.RUnlock()
 
 	if ok {
@@ -1094,14 +964,14 @@ func TestCleanStalePeers_KeepsRecent(t *testing.T) {
 	peer.lastSeen.Store(recentTime.UnixNano())
 
 	tunnel.mu.Lock()
-	tunnel.peers[netkey.IPKey(peerIP)] = peer
+	tunnel.peers[netutil.IPKey(peerIP)] = peer
 	tunnel.peerSnapshot.Store(tunnel.peers)
 	tunnel.mu.Unlock()
 
 	tunnel.cleanStalePeers()
 
 	tunnel.mu.RLock()
-	_, ok := tunnel.peers[netkey.IPKey(peerIP)]
+	_, ok := tunnel.peers[netutil.IPKey(peerIP)]
 	tunnel.mu.RUnlock()
 
 	if !ok {
@@ -1187,7 +1057,7 @@ func TestHandleDirectData_WrongAddress(t *testing.T) {
 	tunnel.mu.Lock()
 	wdPeer := &Peer{VirtualIP: peerIP, Username: "peer1"}
 	wdPeer.PublicAddr.Store(correctAddr)
-	tunnel.peers[netkey.IPKey(peerIP)] = wdPeer
+	tunnel.peers[netutil.IPKey(peerIP)] = wdPeer
 	tunnel.peerSnapshot.Store(tunnel.peers)
 	tunnel.mu.Unlock()
 
@@ -1303,7 +1173,7 @@ func TestHasDirectPeerTraffic_DirectReach(t *testing.T) {
 	peer.DirectReach.Store(true)
 
 	tunnel.mu.Lock()
-	tunnel.peers[netkey.IPKey(peerIP)] = peer
+	tunnel.peers[netutil.IPKey(peerIP)] = peer
 	tunnel.peerSnapshot.Store(tunnel.peers)
 	tunnel.mu.Unlock()
 
@@ -1323,7 +1193,7 @@ func TestHasDirectPeerTraffic_NoDirectReach(t *testing.T) {
 	peer.PublicAddr.Store(&net.UDPAddr{IP: net.IPv4(1, 2, 3, 4), Port: 12345})
 
 	tunnel.mu.Lock()
-	tunnel.peers[netkey.IPKey(peerIP)] = peer
+	tunnel.peers[netutil.IPKey(peerIP)] = peer
 	tunnel.peerSnapshot.Store(tunnel.peers)
 	tunnel.mu.Unlock()
 
@@ -1365,7 +1235,7 @@ func TestSendP2PKeepalives_WithDirectPeers(t *testing.T) {
 	peer.DirectReach.Store(true)
 
 	tunnel.mu.Lock()
-	tunnel.peers[netkey.IPKey(peerIP)] = peer
+	tunnel.peers[netutil.IPKey(peerIP)] = peer
 	tunnel.peerSnapshot.Store(tunnel.peers)
 	tunnel.nat.cachedPunchPacket.Store(protocol.EncodeChecked(protocol.TypeHolePunch, tunnel.session.virtualIP.To4()))
 	tunnel.mu.Unlock()
@@ -1423,8 +1293,8 @@ func TestTunnelStatus_WithPeers(t *testing.T) {
 	peer2 := &Peer{VirtualIP: peer2IP, Username: "relay"}
 
 	tunnel.mu.Lock()
-	tunnel.peers[netkey.IPKey(peer1IP)] = peer1
-	tunnel.peers[netkey.IPKey(peer2IP)] = peer2
+	tunnel.peers[netutil.IPKey(peer1IP)] = peer1
+	tunnel.peers[netutil.IPKey(peer2IP)] = peer2
 	tunnel.mu.Unlock()
 
 	status := tunnel.Status()
@@ -1546,7 +1416,7 @@ func TestDisconnect(t *testing.T) {
 	tunnel.Disconnect()
 }
 
-// ── loadINI / loadJSON Tests ───────────────────────────────────
+// ── loadINI Tests ──────────────────────────────────────────────
 
 func TestLoadINI_AllFields(t *testing.T) {
 	dir := t.TempDir()
@@ -1606,43 +1476,6 @@ func TestLoadINI_MtuOutOfRange(t *testing.T) {
 	loadINI(path, cfg)
 	if cfg.MTU != 1400 {
 		t.Errorf("MTU should be unchanged for out-of-range value, got %d", cfg.MTU)
-	}
-}
-
-func TestLoadJSON_AllFields(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "config.json")
-
-	content := `{
-		"server_addr": "5.6.7.8:4700",
-		"player_name": "JSONPlayer",
-		"room_id": "jsonroom",
-		"room_password": "jsonpass",
-		"lang": "en",
-		"mtu": 1300
-	}`
-	os.WriteFile(path, []byte(content), 0644)
-
-	cfg := &Config{MTU: 1400}
-	loadJSON(path, cfg)
-
-	if cfg.ServerAddr != "5.6.7.8:4700" {
-		t.Errorf("ServerAddr: got %q", cfg.ServerAddr)
-	}
-	if cfg.PlayerName != "JSONPlayer" {
-		t.Errorf("PlayerName: got %q", cfg.PlayerName)
-	}
-	if cfg.RoomID != "jsonroom" {
-		t.Errorf("RoomID: got %q", cfg.RoomID)
-	}
-	if cfg.RoomPassword != "jsonpass" {
-		t.Errorf("RoomPassword: got %q", cfg.RoomPassword)
-	}
-	if cfg.Lang != "en" {
-		t.Errorf("Lang: got %q", cfg.Lang)
-	}
-	if cfg.MTU != 1300 {
-		t.Errorf("MTU: got %d", cfg.MTU)
 	}
 }
 
@@ -1804,7 +1637,7 @@ func TestHandleDirectData_TokenValidation_OldFormat(t *testing.T) {
 	tunnel.session.sessionToken = [16]byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16}
 	wdPeer := &Peer{VirtualIP: peerIP, Username: "peer1"}
 	wdPeer.PublicAddr.Store(fromAddr)
-	tunnel.peers[netkey.IPKey(peerIP)] = wdPeer
+	tunnel.peers[netutil.IPKey(peerIP)] = wdPeer
 	tunnel.peerSnapshot.Store(tunnel.peers)
 	tunnel.mu.Unlock()
 
@@ -1837,7 +1670,7 @@ func TestHandleDirectData_TokenValidation_NewFormat(t *testing.T) {
 	tunnel.session.sessionToken = [16]byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16}
 	wdPeer := &Peer{VirtualIP: peerIP, Username: "peer1"}
 	wdPeer.PublicAddr.Store(fromAddr)
-	tunnel.peers[netkey.IPKey(peerIP)] = wdPeer
+	tunnel.peers[netutil.IPKey(peerIP)] = wdPeer
 	tunnel.peerSnapshot.Store(tunnel.peers)
 	tunnel.mu.Unlock()
 
@@ -1871,7 +1704,7 @@ func TestHandleDirectData_TokenValidation_WrongToken(t *testing.T) {
 	tunnel.session.sessionToken = [16]byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16}
 	wdPeer := &Peer{VirtualIP: peerIP, Username: "peer1"}
 	wdPeer.PublicAddr.Store(fromAddr)
-	tunnel.peers[netkey.IPKey(peerIP)] = wdPeer
+	tunnel.peers[netutil.IPKey(peerIP)] = wdPeer
 	tunnel.peerSnapshot.Store(tunnel.peers)
 	tunnel.mu.Unlock()
 
@@ -2016,7 +1849,7 @@ func TestStartHolePunch_ContextCancel(t *testing.T) {
 	peer.PublicAddr.Store(&net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 12345})
 
 	tunnel.mu.Lock()
-	tunnel.peers[netkey.IPKey(peerIP)] = peer
+	tunnel.peers[netutil.IPKey(peerIP)] = peer
 	tunnel.peerSnapshot.Store(tunnel.peers)
 	tunnel.nat.cachedPunchPacket.Store(protocol.EncodeChecked(protocol.TypeHolePunch, tunnel.session.virtualIP.To4()))
 	tunnel.mu.Unlock()
@@ -2063,7 +1896,7 @@ func TestRetryFailedHolePunches_WithPeers(t *testing.T) {
 	// DirectReach is false by default
 
 	tunnel.mu.Lock()
-	tunnel.peers[netkey.IPKey(peerIP)] = peer
+	tunnel.peers[netutil.IPKey(peerIP)] = peer
 	tunnel.peerSnapshot.Store(tunnel.peers)
 	tunnel.nat.cachedPunchPacket.Store(protocol.EncodeChecked(protocol.TypeHolePunch, tunnel.session.virtualIP.To4()))
 	tunnel.mu.Unlock()
@@ -2161,7 +1994,7 @@ func TestRoutePacket_PeerFallbackToRelay(t *testing.T) {
 	// DirectReach is false
 
 	tunnel.mu.Lock()
-	tunnel.peers[netkey.IPKey(peerIP)] = peer
+	tunnel.peers[netutil.IPKey(peerIP)] = peer
 	tunnel.peerSnapshot.Store(tunnel.peers)
 	tunnel.mu.Unlock()
 

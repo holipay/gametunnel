@@ -1,7 +1,7 @@
 package server
 
 import (
-	"github.com/holipay/gametunnel/internal/netkey"
+	"github.com/holipay/gametunnel/internal/netutil"
 	"context"
 	"net"
 	"time"
@@ -93,7 +93,7 @@ func (r *Room) handlePong(payload []byte, from *net.UDPAddr) {
 		return
 	}
 	r.mu.Lock()
-	if c := r.addrMap[netkey.AddrToRateKey(from)]; c != nil {
+	if c := r.addrMap[netutil.AddrToRateKey(from)]; c != nil {
 		c.RTT = rtt
 		c.pingHistory[c.pingIdx%pingHistorySize] = rtt
 		c.pingIdx++
