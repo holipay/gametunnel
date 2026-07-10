@@ -1,6 +1,6 @@
-// Package netkey provides shared network key functions for
+// Package netutil provides shared network key functions for
 // both client and server packages to avoid code duplication.
-package netkey
+package netutil
 
 import "net"
 

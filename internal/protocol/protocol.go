@@ -24,20 +24,12 @@ const AppVersion uint16 = 0x0110
 // MinTokenVersion is the minimum server version that supports session tokens.
 const MinTokenVersion uint16 = 0x0107
 
-// MinRelayNoCRCVersion is the minimum server version that does NOT append
-// a redundant CRC32 to relayed TypeData packets for encrypted rooms.
-// AEAD (ChaCha20-Poly1305) already provides integrity, making the CRC
-// unnecessary. Older servers still append it for backward compatibility.
-// The client uses this constant to decide whether to strip the trailing CRC.
-const MinRelayNoCRCVersion uint16 = 0x0108
-
 // Client feature versions — minimum client version that supports a feature.
 // Used for status page display and server-side client capability detection.
 // Values mirror the server constants today but the separation makes the
 // client contract explicit and prevents future drift if features diverge.
 const (
-	MinClientTokenVersion  uint16 = 0x0107 // client sends session token in relay packets
-	MinClientNoCRCVersion  uint16 = 0x0108 // client strips trailing CRC from encrypted relay
+	MinClientTokenVersion uint16 = 0x0107 // client sends session token in relay packets
 )
 
 // HeaderLen is the fixed header size: version(1) + type(1).
@@ -147,30 +139,6 @@ func DecodeChecked(data []byte) (*Message, error) {
 	return Decode(body)
 }
 
-// DecodeLenient tries DecodeChecked first. If allowCRCFallback is true
-// and the CRC32 check fails, it falls back to Decode (skipping checksum
-// verification). This supports encrypted packets that omit CRC32 since
-// ChaCha20-Poly1305 AEAD already provides integrity. Old packets with
-// CRC32 still work transparently.
-//
-// For unencrypted rooms, pass allowCRCFallback=false to reject corrupted packets.
-func DecodeLenient(data []byte, allowCRCFallback bool) (*Message, error) {
-	msg, err := DecodeChecked(data)
-	if err == nil {
-		return msg, nil
-	}
-	if allowCRCFallback && errors.Is(err, ErrChecksumMismatch) {
-		return Decode(data)
-	}
-	return nil, err
-}
-
-// DecodeSkipCRC decodes a packet without CRC32 verification.
-// Use only when AEAD encryption provides integrity (roomPass != "").
-func DecodeSkipCRC(data []byte) (*Message, error) {
-	return Decode(data)
-}
-
 // EncodeChecked is a convenience: Encode + AppendChecksum.
 // Combines into a single allocation to reduce GC pressure on the hot path.
 func EncodeChecked(typ byte, payload []byte) []byte {
@@ -208,24 +176,16 @@ func VersionMajor(v uint16) uint16 { return v >> 8 }
 // VersionMinor returns the minor version from an encoded version number.
 func VersionMinor(v uint16) uint16 { return v & 0xFF }
 
-// versionECDHFlag is a legacy flag embedded in the AssignIP Version field
-// by old servers (v1.7-v1.13) that negotiated ECDH key exchange. The flag
-// must be stripped before version comparison for backward compatibility.
-const versionECDHFlag uint16 = 0x8000
-
 // IsCompatible checks if two application versions are compatible.
 // Rules:
 //   - Major version must match (breaking wire-format change)
 //   - Client minor version must be ≤ server minor version (server supports older clients)
 //   - Version 0 means "unknown" (old client/server without version field) — always compatible
-//   - The ECDH flag (0x8000) is stripped before comparison — it is not a version component.
 func IsCompatible(clientVer, serverVer uint16) bool {
 	// Old clients/servers that don't send version are always allowed
 	if clientVer == 0 || serverVer == 0 {
 		return true
 	}
-	clientVer &^= versionECDHFlag
-	serverVer &^= versionECDHFlag
 	if VersionMajor(clientVer) != VersionMajor(serverVer) {
 		return false
 	}

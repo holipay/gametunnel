@@ -1,7 +1,7 @@
 package server
 
 import (
-	"github.com/holipay/gametunnel/internal/netkey"
+	"github.com/holipay/gametunnel/internal/netutil"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -133,7 +133,7 @@ func (s *Server) loadState() error {
 			authRoomID: "default", // single-room mode uses "default" roomID
 		}
 		c.SetLastSeen(entry.LastSeen)
-		room.clients[netkey.IPKey(ip)] = c
+		room.clients[netutil.IPKey(ip)] = c
 		// NOTE: do NOT add to addrMap yet — no PublicAddr until reconnect
 		restored++
 	}

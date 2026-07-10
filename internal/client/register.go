@@ -10,7 +10,7 @@ import (
 	"github.com/holipay/gametunnel/internal/auth"
 	"github.com/holipay/gametunnel/internal/crypto"
 	"github.com/holipay/gametunnel/internal/i18n"
-	"github.com/holipay/gametunnel/internal/netkey"
+	"github.com/holipay/gametunnel/internal/netutil"
 	"github.com/holipay/gametunnel/internal/protocol"
 )
 
@@ -246,7 +246,7 @@ func (t *Tunnel) handleAssignIP(payload []byte) error {
 		IP:   assign.VirtualIP.Mask(net.IPMask(assign.SubnetMask)),
 		Mask: net.IPMask(assign.SubnetMask),
 	}
-	serverIPKey := netkey.IPKey(assign.ServerIP)
+	serverIPKey := netutil.IPKey(assign.ServerIP)
 
 	// Cache the hole punch packet once — reused by startHolePunch,
 	// handleHolePunchReceived, and sendP2PKeepalives.

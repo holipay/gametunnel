@@ -66,7 +66,7 @@ func (t *Tunnel) receiveFromServer(ctx context.Context, conn *net.UDPConn, serve
 		encrypted := t.crypto.decAvailable.Load()
 		var msg *protocol.Message
 		if encrypted {
-			msg, err = protocol.DecodeSkipCRC(buf[:n])
+			msg, err = protocol.Decode(buf[:n])
 		} else {
 			msg, err = protocol.DecodeChecked(buf[:n])
 		}
@@ -104,16 +104,6 @@ func (t *Tunnel) receiveFromServer(ctx context.Context, conn *net.UDPConn, serve
 		if !fromServer && from != nil && serverAddr != nil &&
 			from.Port == serverAddr.Port && from.IP.IsLoopback() {
 			fromServer = true
-		}
-
-		// Strip trailing CRC for encrypted relay data from older servers
-		// that still append the redundant CRC. New servers (v1.8+) omit
-		// it because AEAD already provides integrity. The version check
-		// avoids depending on fromServer being correct.
-		if encrypted && msg.Type == protocol.TypeData && len(msg.Payload) >= protocol.ChecksumLen {
-			if t.session.serverVersion.Load() < uint32(protocol.MinRelayNoCRCVersion) {
-				msg.Payload = msg.Payload[:len(msg.Payload)-protocol.ChecksumLen]
-			}
 		}
 
 		if fromServer {

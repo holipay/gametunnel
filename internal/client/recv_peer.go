@@ -1,7 +1,7 @@
 package client
 
 import (
-	"github.com/holipay/gametunnel/internal/netkey"
+	"github.com/holipay/gametunnel/internal/netutil"
 	"context"
 	"log"
 	"net"
@@ -22,7 +22,7 @@ func (t *Tunnel) handleDirectHolePunch(ctx context.Context, from *net.UDPAddr, m
 	peerIP := net.IP(peerIPBuf[:])
 
 	peers := t.peerSnapshot.Load().(map[[16]byte]*Peer)
-	peer, ok := peers[netkey.IPKey(peerIP)]
+	peer, ok := peers[netutil.IPKey(peerIP)]
 
 	t.mu.RLock()
 	if !ok || peer.PublicAddr.Load() == nil {
@@ -90,7 +90,7 @@ func (t *Tunnel) handlePeerInfo(ctx context.Context, payload []byte) {
 		if entry.VirtualIP.Equal(t.session.virtualIP) {
 			continue
 		}
-		key := netkey.IPKey(entry.VirtualIP)
+		key := netutil.IPKey(entry.VirtualIP)
 		pubAddr := entry.PublicAddr
 		if pubAddr != nil {
 			if ip16 := pubAddr.IP.To16(); ip16 != nil {

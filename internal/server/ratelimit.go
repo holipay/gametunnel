@@ -1,7 +1,7 @@
 package server
 
 import (
-	"github.com/holipay/gametunnel/internal/netkey"
+	"github.com/holipay/gametunnel/internal/netutil"
 	"context"
 	"net"
 	"sync"
@@ -23,7 +23,7 @@ const (
 // rateShard holds one shard of the rate limiter with its own mutex.
 type rateShard struct {
 	mu  sync.Mutex
-	buf [2]map[netkey.RateKey]int // double-buffer: [0]=active, [1]=stale
+	buf [2]map[netutil.RateKey]int // double-buffer: [0]=active, [1]=stale
 }
 
 // rateShardsArray is the global array of rate limiter shards.
@@ -34,7 +34,7 @@ func newRateShardsArray() *rateShardsArray {
 	var arr rateShardsArray
 	for i := range arr {
 		arr[i] = &rateShard{
-			buf: [2]map[netkey.RateKey]int{make(map[netkey.RateKey]int), make(map[netkey.RateKey]int)},
+			buf: [2]map[netutil.RateKey]int{make(map[netutil.RateKey]int), make(map[netutil.RateKey]int)},
 		}
 	}
 	return &arr
@@ -42,7 +42,7 @@ func newRateShardsArray() *rateShardsArray {
 
 // shard returns the shard index for a given rateKey.
 // Uses FNV-1a hash over all 16 IP bytes for even distribution across IPv4/IPv6.
-func (r *rateShardsArray) shard(key netkey.RateKey) *rateShard {
+func (r *rateShardsArray) shard(key netutil.RateKey) *rateShard {
 	// FNV-1a hash (offset basis + prime per byte)
 	h := uint32(2166136261)
 	for _, b := range key.IP {
@@ -54,7 +54,7 @@ func (r *rateShardsArray) shard(key netkey.RateKey) *rateShard {
 
 // checkRate returns true if the address has not exceeded the packet rate limit.
 func (s *Server) checkRate(addr *net.UDPAddr) bool {
-	key := netkey.AddrToRateKey(addr)
+	key := netutil.AddrToRateKey(addr)
 	shard := s.rateShards.shard(key)
 	shard.mu.Lock()
 	shard.buf[0][key]++

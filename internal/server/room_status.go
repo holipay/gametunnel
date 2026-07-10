@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/holipay/gametunnel/internal/i18n"
-	"github.com/holipay/gametunnel/internal/netkey"
+	"github.com/holipay/gametunnel/internal/netutil"
 	"github.com/holipay/gametunnel/internal/protocol"
 )
 
@@ -116,9 +116,6 @@ func (r *Room) BuildRoomStatus() RoomStatusInfo {
 			if s.clientVersion >= protocol.MinClientTokenVersion {
 				features = append(features, "Token")
 			}
-			if s.clientVersion >= protocol.MinClientNoCRCVersion {
-				features = append(features, "NoCRC")
-			}
 			if len(features) > 0 {
 				versionStr = fmt.Sprintf("v%d.%d [%s]", major, minor, strings.Join(features, ", "))
 			} else {
@@ -210,7 +207,7 @@ func (r *Room) resolveRestoredClient(username string, roomID string, from *net.U
 			// Attach the real address
 			c.PublicAddr = from
 			c.SetLastSeen(time.Now())
-			r.addrMap[netkey.AddrToRateKey(from)] = c
+			r.addrMap[netutil.AddrToRateKey(from)] = c
 
 			return c
 		}

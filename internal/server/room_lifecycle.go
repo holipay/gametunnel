@@ -1,7 +1,7 @@
 package server
 
 import (
-	"github.com/holipay/gametunnel/internal/netkey"
+	"github.com/holipay/gametunnel/internal/netutil"
 	"log"
 	"net"
 	"time"
@@ -16,7 +16,7 @@ import (
 // Old clients send empty keepalive (nil payload), which is handled gracefully.
 func (r *Room) handleKeepAliveWithPayload(payload []byte, from *net.UDPAddr) {
 	r.mu.RLock()
-	c := r.addrMap[netkey.AddrToRateKey(from)]
+	c := r.addrMap[netutil.AddrToRateKey(from)]
 	r.mu.RUnlock()
 		if c != nil {
 			c.SetLastSeen(time.Now())
@@ -27,7 +27,7 @@ func (r *Room) handleKeepAliveWithPayload(payload []byte, from *net.UDPAddr) {
 }
 
 func (r *Room) handleDisconnect(from *net.UDPAddr) {
-	fromKey := netkey.AddrToRateKey(from)
+	fromKey := netutil.AddrToRateKey(from)
 	r.mu.Lock()
 	c := r.addrMap[fromKey]
 	if c == nil {
@@ -45,7 +45,7 @@ func (r *Room) handleDisconnect(from *net.UDPAddr) {
 		}
 	} else {
 		r.markIPFree(c.VirtualIP)
-		delete(r.clients, netkey.IPKey(c.VirtualIP))
+		delete(r.clients, netutil.IPKey(c.VirtualIP))
 		if c.PublicAddr != nil {
 			r.decrementIPConnCount(addrToConnIPKey(c.PublicAddr))
 		}
@@ -70,12 +70,12 @@ func (r *Room) CleanupStale() bool {
 	r.mu.RLock()
 	type staleClient struct {
 		key    [16]byte
-		aKey   netkey.RateKey
+		aKey   netutil.RateKey
 		connKey connIPKey
 		c      *Client
 	}
 	type staleAuth struct {
-		key     netkey.RateKey
+		key     netutil.RateKey
 		connKey connIPKey
 		c       *Client
 	}
@@ -87,7 +87,7 @@ func (r *Room) CleanupStale() bool {
 		if now.Sub(c.GetLastSeen()) > 30*time.Second {
 			sc := staleClient{key: key, c: c}
 			if c.PublicAddr != nil {
-				sc.aKey = netkey.AddrToRateKey(c.PublicAddr)
+				sc.aKey = netutil.AddrToRateKey(c.PublicAddr)
 				sc.connKey = addrToConnIPKey(c.PublicAddr)
 			}
 			staleClients = append(staleClients, sc)
