@@ -212,9 +212,12 @@ func (d *Device) addRouteRouteCmd(dest net.IP, mask net.IPMask, nextHop net.IP, 
 func (d *Device) repairRoutes() {
 	zeroMask := net.IPMask(net.CIDRMask(32, 32))
 
+	// route.exe add is idempotent — it replaces existing routes, so no
+	// deleteRoute is needed here. This avoids DeleteIpForwardEntry2 failures
+	// for routes that were added via route.exe (different routing table entry).
+
 	// Step 1: Global broadcast 255.255.255.255
-	deleteRoute(d.luid, net.IPv4(255, 255, 255, 255), zeroMask, nil)
-	d.addRouteWithFallback(net.IPv4(255, 255, 255, 255), zeroMask, d.virtualIP, 1, "route repair: global broadcast")
+	d.addRouteRouteCmd(net.IPv4(255, 255, 255, 255), zeroMask, d.virtualIP, 1)
 
 	// Step 2: Subnet broadcast (e.g. 10.10.0.255/24)
 	// Windows IP Helper API rejects broadcast addresses as route destinations
