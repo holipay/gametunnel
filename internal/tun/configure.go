@@ -85,17 +85,25 @@ func (d *Device) configure() error {
 	d.addRouteWithFallback(bcast, zeroMask, d.virtualIP, 1, "broadcast route")
 
 	// ── Step 7: 子网广播（如 10.10.0.255）──
+	// Windows IP Helper API rejects broadcast addresses as route destinations.
+	// Use route.exe directly which handles this correctly.
 	subnetBroadcast := net.IP(make([]byte, 4))
 	subnet := d.virtualIP.Mask(d.subnetMask)
 	for i := 0; i < 4; i++ {
 		subnetBroadcast[i] = subnet[i] | byte(^d.subnetMask[i])
 	}
 	deleteRoute(luid, subnetBroadcast, d.subnetMask, nil)
-	d.addRouteWithFallback(subnetBroadcast, d.subnetMask, d.virtualIP, 1, "subnet broadcast route")
+	if err := d.addRouteRouteCmd(subnetBroadcast, d.subnetMask, d.virtualIP, 1); err != nil {
+		log.Printf("[tun] subnet broadcast route: %v", err)
+	}
 
 	// ── Step 8: mDNS 组播 224.0.0.251 ──
+	// CreateIpForwardEntry2 returns ERROR_NOT_FOUND for multicast routes.
+	// Use route.exe directly.
 	mdns := net.IPv4(224, 0, 0, 251)
-	d.addRouteWithFallback(mdns, zeroMask, d.virtualIP, 1, "mDNS route")
+	if err := d.addRouteRouteCmd(mdns, zeroMask, d.virtualIP, 1); err != nil {
+		log.Printf("[tun] mDNS route: %v", err)
+	}
 
 	// ── Step 9: 隧道服务器排除路由 ──
 	// 隧道服务器必须走物理网卡，否则 UDP 封装的隧道流量会回环进 TUN。
@@ -190,17 +198,25 @@ func (d *Device) ReconfigureRoutes() {
 	d.addRouteWithFallback(bcast, zeroMask, d.virtualIP, 1, "ReconfigureRoutes: broadcast route")
 
 	// Subnet broadcast
+	// Windows IP Helper API rejects broadcast addresses as route destinations.
+	// Use route.exe directly which handles this correctly.
 	subnet := d.virtualIP.Mask(d.subnetMask)
 	subnetBroadcast := net.IP(make([]byte, 4))
 	for i := 0; i < 4; i++ {
 		subnetBroadcast[i] = subnet[i] | byte(^d.subnetMask[i])
 	}
 	deleteRoute(d.luid, subnetBroadcast, d.subnetMask, nil)
-	d.addRouteWithFallback(subnetBroadcast, d.subnetMask, d.virtualIP, 1, "ReconfigureRoutes: subnet broadcast route")
+	if err := d.addRouteRouteCmd(subnetBroadcast, d.subnetMask, d.virtualIP, 1); err != nil {
+		log.Printf("[tun] ReconfigureRoutes: subnet broadcast route: %v", err)
+	}
 
 	// mDNS multicast
+	// CreateIpForwardEntry2 returns ERROR_NOT_FOUND for multicast routes.
+	// Use route.exe directly.
 	mdns := net.IPv4(224, 0, 0, 251)
-	d.addRouteWithFallback(mdns, zeroMask, d.virtualIP, 1, "ReconfigureRoutes: mDNS route")
+	if err := d.addRouteRouteCmd(mdns, zeroMask, d.virtualIP, 1); err != nil {
+		log.Printf("[tun] ReconfigureRoutes: mDNS route: %v", err)
+	}
 
 	// Server exclusion route
 	if d.serverPublicIP != nil {

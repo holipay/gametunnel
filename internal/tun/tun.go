@@ -212,19 +212,25 @@ func (d *Device) addRouteRouteCmd(dest net.IP, mask net.IPMask, nextHop net.IP, 
 func (d *Device) repairRoutes() {
 	zeroMask := net.IPMask(net.CIDRMask(32, 32))
 
-	// Step 1: Global broadcast 255.255.255.255
-	deleteRoute(d.luid, net.IPv4(255, 255, 255, 255), zeroMask, nil)
-	d.addRouteWithFallback(net.IPv4(255, 255, 255, 255), zeroMask, d.virtualIP, 1, "route repair: global broadcast")
+	// route.exe add is idempotent — it replaces existing routes, so no
+	// deleteRoute is needed here. This avoids DeleteIpForwardEntry2 failures
+	// for routes that were added via route.exe (different routing table entry).
 
-	// Step 2: Subnet broadcast
+	// Step 1: Global broadcast 255.255.255.255
+	d.addRouteRouteCmd(net.IPv4(255, 255, 255, 255), zeroMask, d.virtualIP, 1)
+
+	// Step 2: Subnet broadcast (e.g. 10.10.0.255/24)
+	// Windows IP Helper API rejects broadcast addresses as route destinations
+	// (ERROR_INVALID_PARAMETER). Use route.exe directly which handles this.
 	subnet := d.virtualIP.Mask(d.subnetMask)
 	subnetBroadcast := net.IP(make([]byte, 4))
 	for i := 0; i < 4; i++ {
 		subnetBroadcast[i] = subnet[i] | byte(^d.subnetMask[i])
 	}
-	deleteRoute(d.luid, subnetBroadcast, d.subnetMask, nil)
-	d.addRouteWithFallback(subnetBroadcast, d.subnetMask, d.virtualIP, 1, "route repair: subnet broadcast")
+	d.addRouteRouteCmd(subnetBroadcast, d.subnetMask, d.virtualIP, 1)
 
-	// Step 3: mDNS multicast
-	d.addRouteWithFallback(net.IPv4(224, 0, 0, 251), zeroMask, d.virtualIP, 1, "route repair: mDNS")
+	// Step 3: mDNS multicast (224.0.0.251/32)
+	// CreateIpForwardEntry2 returns ERROR_NOT_FOUND for multicast routes on
+	// some Windows versions. Use route.exe directly.
+	d.addRouteRouteCmd(net.IPv4(224, 0, 0, 251), zeroMask, d.virtualIP, 1)
 }
